@@ -84,6 +84,9 @@ Add a row before a new concept gets a name in code.
 - A test of a property of the entire build, such as parity with ES modules, is one file named
   `<property>.test.js`. A helper that several test files share sits in `tests/support/`.
 - A test of a rule holds one script that breaks the rule and one that passes it.
+- The command runs on Windows, Linux and macOS, and `npm test` runs on one of them at a time. A branch for
+  one platform carries a test that runs on that platform and is skipped with its reason on the others. A
+  check on a path says in a comment which platform's rules it applies and who wrote the path.
 - Every fact about the runtime that the code relies on carries the Claude Code version it was measured on.
   The runtime is partly undocumented and changes between releases.
 
