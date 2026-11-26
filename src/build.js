@@ -1,7 +1,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { compileScript } from './compile-script.js';
-import { formatForwardSlashes } from './display-path.js';
+import { formatForwardSlashes, isFolderPath } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
 import { findDifferentLine } from './find-different-line.js';
 import { joinModules } from './join-modules.js';
@@ -37,7 +37,7 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
 
 /**
  * @typedef {object} BuildResult
- * @property {boolean} ok True when the build found nothing.
+ * @property {boolean} ok True when the build found nothing and, with check, the file at out is the built script.
  * @property {'written' | 'built' | 'fresh' | 'stale' | 'missing' | 'failed'} status `failed` when the build
  *   has a finding. Otherwise `written`, `built` with `write: false`, or with `check` one of `fresh` (the file
  *   at `out` is the built script), `stale` (it differs) or `missing` (no file is there).
@@ -63,8 +63,9 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
  * Builds one workflow script from an entry, its parts, and the modules, text files and JSON files it
  * imports. Prints nothing.
  * Rejects with a UsageError for options that are not an object, an unknown or wrong option, `check` with
- * `write: true`, a missing entry, an `out` that names a source, a folder or a path inside a file, and an
- * `out` on another drive than the entry when the banner is on.
+ * `write: true`, a missing entry, an entry or `out` that ends in a path separator or a `.` or `..` segment, an
+ * `out` that names a source, a folder or a path inside a file, and an `out` on another drive than the entry
+ * when the banner is on.
  * @param {BuildOptions} options
  * @returns {Promise<BuildResult>}
  */
@@ -89,6 +90,7 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   if (typeof write !== 'boolean') throw new UsageError('build() takes write as a boolean');
   if (typeof check !== 'boolean') throw new UsageError('build() takes check as a boolean');
   if (check && write) throw new UsageError('build() writes nothing with check, so it takes no write: true');
+  if (isFolderPath(out)) throw new UsageError(`The out path ${out} names a folder. Name the built script's file in it`);
 
   const entryFile = await findEntryFile(entry);
   const outFile = resolve(out);
@@ -128,7 +130,7 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   compileBuiltScript(script, metaEnd);
   if (check) {
     const comparison = await compareOutFile(outFile, script, lineOrigins, formatSourcePath);
-    return { result: { ok: true, ...comparison, script, sources: sourcePaths, findings: [] }, findSourcePosition, metaEnd };
+    return { result: { ok: comparison.status === 'fresh', ...comparison, script, sources: sourcePaths, findings: [] }, findSourcePosition, metaEnd };
   }
   if (write) await writeScript(outFile, script);
 
@@ -189,7 +191,7 @@ async function findEntryFile(entry) {
     if (MISSING_FILE_CODES.has(error.code)) throw new UsageError(`The entry file ${entry} does not exist`);
     throw error;
   }
-  if (!(await stat(entryFile)).isFile()) throw new UsageError(`The entry ${entry} is not a file`);
+  if (isFolderPath(entry) || !(await stat(entryFile)).isFile()) throw new UsageError(`The entry ${entry} is not a file`);
 
   return entryFile;
 }

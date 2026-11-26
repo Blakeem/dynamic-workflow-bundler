@@ -5,7 +5,7 @@ import { createFinding } from './finding.js';
 /** @typedef {import('./load-sources.js').LoadedSource} LoadedSource */
 
 // A module with one of these findings has exports the analysis could not read.
-const UNKNOWN_EXPORT_RULES = new Set(['syntax-error', 'export-from']);
+const UNKNOWN_EXPORT_RULES = new Set(['syntax-error', 'source-too-deep', 'export-from']);
 
 /**
  * Orders the sources as ES modules evaluate: depth first in import order, each source after the files
@@ -113,7 +113,7 @@ function findMissingExports(sources, entryFile, formatSourcePath) {
       if (hasUnknownExports) continue;
 
       for (const binding of record.bindings) {
-        if (binding.imported === '*' || exportedNames.has(binding.imported)) continue;
+        if (binding.imported === null || exportedNames.has(binding.imported)) continue;
         const message = `${formatSourcePath(target)} has no export named ${binding.imported}`;
         findings.push(createFinding('import-not-exported', message, source.file, source.text, binding.offset));
       }

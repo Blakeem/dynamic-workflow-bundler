@@ -1,4 +1,5 @@
 import { dirname, resolve } from 'node:path';
+import { isFolderPath } from './display-path.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
@@ -19,7 +20,8 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner']);
 /**
  * Checks the default export of a config file and resolves each path against the config file's folder.
  * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
- * a missing or wrong-typed field, and two workflows whose out paths resolve to one path or differ only in letter case.
+ * a missing or wrong-typed field, an entry or out that ends in a path separator or a `.` or `..` segment, and
+ * two workflows whose out paths resolve to one path or differ only in letter case.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -60,6 +62,8 @@ function checkWorkflow(row, rowLabel, configFolder) {
   if (typeof entry !== 'string' || entry === '') throw new UsageError(`${rowLabel} needs entry, the path of an entry file`);
   if (typeof out !== 'string' || out === '') throw new UsageError(`${rowLabel} needs out, the path of the built script`);
   if (typeof banner !== 'boolean') throw new UsageError(`${rowLabel} takes banner as a boolean`);
+  if (isFolderPath(entry)) throw new UsageError(`${rowLabel} gives the entry ${entry}, which is not a file`);
+  if (isFolderPath(out)) throw new UsageError(`${rowLabel} gives the out path ${out}, which names a folder`);
 
   return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner };
 }

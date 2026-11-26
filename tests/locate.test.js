@@ -284,6 +284,8 @@ describe('locate', () => {
     const rejections = [
       [{ script: join(folder, 'missing.js'), line: 1 }, /The script file .*missing\.js does not exist/],
       [{ script: folder, line: 1 }, /is not a file/],
+      [{ script: `${script}/`, line: 1 }, /^The script .*\/ is not a file$/],
+      [{ script: `${script}/.`, line: 1 }, /^The script .*\/\. is not a file$/],
       [{ script, line: 0 }, /The line 0 is not a whole number of 1 or more/],
       [{ script, line: 1.5 }, /The line 1\.5 is not a whole number of 1 or more/],
       [{ script, line: '1' }, /locate\(\) needs line as a number/],

@@ -15,4 +15,11 @@ describe('build-command', () => {
     assert.equal(formatCommandPath('out(1).js'), '"out(1).js"');
     assert.equal(formatCommandPath('dist/w-1.js'), 'dist/w-1.js');
   });
+
+  it('puts ./ before a path that starts with -, which the command would read as an option', () => {
+    assert.equal(formatCommandPath('-e.js'), './-e.js');
+    assert.equal(formatCommandPath('./-e.js'), './-e.js');
+    assert.equal(formatCommandPath('-my file.js'), '"./-my file.js"');
+    assert.equal(formatBuildCommand('-e.js', { out: '-o.js' }), 'dwfb build ./-e.js --out ./-o.js');
+  });
 });

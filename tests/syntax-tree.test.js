@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listTopLevelNames, listVarNames } from '../src/syntax-tree.js';
+import { findDeepestNode, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listTopLevelNames, listVarNames } from '../src/syntax-tree.js';
 
 /** @param {string} text */
 function parseBody(text) {
@@ -12,6 +12,15 @@ describe('syntax-tree', () => {
   it('lists the children of a node in source order', () => {
     const [statement] = parseBody('a = b;');
     assert.deepEqual(listChildNodes(statement.expression).map((node) => node.name), ['a', 'b']);
+  });
+
+  it('finds the first node in source order at the greatest depth, and the node itself when it has no child', () => {
+    const [shallow, deep, tied] = parseBody('a;\nb.c.d;\ne(f);\n');
+    const program = parse(`x;\ny${'.z'.repeat(20000)};\n`, { ecmaVersion: 'latest', sourceType: 'module' });
+    assert.equal(findDeepestNode(deep).name, 'b');
+    assert.equal(findDeepestNode(tied).name, 'e');
+    assert.equal(findDeepestNode(shallow.expression), shallow.expression);
+    assert.equal(findDeepestNode(program).name, 'y');
   });
 
   it('lists the identifiers of a pattern, and none for a member target', () => {

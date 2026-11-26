@@ -477,12 +477,16 @@ describe('dwfb build with a config file', () => {
     assert.ok((await readdir(folder)).includes('review.js'));
   });
 
-  it('exits 2 for an entry that no workflow of the config file has, and for a --config file that does not exist', async () => {
+  it('exits 2 for an entry that no workflow of the config file has or that names a folder, and for a --config file that does not exist or names a folder', async () => {
     const folder = await copyProjectFixture();
 
     const noWorkflow = runCommand(['build', join('workflows', 'review', 'prompts.js')], folder);
     const noConfig = runCommand(['build', '--config', 'other.config.js'], folder);
+    const trailingSeparator = runCommand(['build', 'workflows/review/entry.js/'], folder);
+    const configFolderPath = runCommand(['build', '--config', 'dwfb.config.js/.'], folder);
 
+    assert.deepEqual(trailingSeparator, { status: 2, stdout: '', stderr: 'dwfb build: The config file dwfb.config.js has no workflow whose entry is workflows/review/entry.js/.\n' });
+    assert.deepEqual(configFolderPath, { status: 2, stdout: '', stderr: 'dwfb build: The config file dwfb.config.js/. is not a file.\n' });
     assert.deepEqual(noWorkflow, {
       status: 2,
       stdout: '',

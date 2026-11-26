@@ -287,8 +287,8 @@ function formatBindings(dependencies, sourceNames) {
   for (const { record, target } of dependencies) {
     const sourceName = sourceNames.get(target);
     const isModule = record.kind === 'module';
-    const named = record.bindings.filter((binding) => isModule && binding.imported !== '*');
-    const entireValues = record.bindings.filter((binding) => !isModule || binding.imported === '*');
+    const named = record.bindings.filter((binding) => isModule && binding.imported !== null);
+    const entireValues = record.bindings.filter((binding) => !isModule || binding.imported === null);
     if (named.length > 0) {
       declarations.push(`const { ${named.map((binding) => formatProperty(binding.imported, binding.local)).join(', ')} } = ${sourceName};`);
     }

@@ -57,6 +57,15 @@ describe('checkConfig', () => {
     assertUsageError({ workflows: [first, { entry: 'b.js', out: 'b.out.js', banner: 'no' }] }, `${label} takes banner as a boolean`);
   });
 
+  it('names an entry or out path that ends in a path separator, . or .., which resolve() would drop or fold', () => {
+    const label = 'Workflow 1 of the config file dwfb.config.js';
+
+    assertUsageError({ workflows: [{ entry: 'a.js/', out: 'a.out.js' }] }, `${label} gives the entry a.js/, which is not a file`);
+    assertUsageError({ workflows: [{ entry: 'a.js', out: 'dist/' }] }, `${label} gives the out path dist/, which names a folder`);
+    assertUsageError({ workflows: [{ entry: 'a.js/.', out: 'a.out.js' }] }, `${label} gives the entry a.js/., which is not a file`);
+    assertUsageError({ workflows: [{ entry: 'a.js', out: 'dist/deeper/..' }] }, `${label} gives the out path dist/deeper/.., which names a folder`);
+  });
+
   it('names two workflows that write one out file by any spelling of its path', () => {
     assertUsageError(
       { workflows: [{ entry: 'a.js', out: 'dist/out.js' }, { entry: 'b.js', out: 'dist/b.js' }, { entry: 'c.js', out: './dist/../dist/out.js' }] },

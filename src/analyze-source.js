@@ -1,10 +1,11 @@
+import { posix } from 'node:path';
 import { parse, tokenizer, tokTypes } from 'acorn';
 import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
-import { formatSyntaxErrorReason, PARSE_OPTIONS } from './parse-source.js';
-import { isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
+import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE } from './parse-source.js';
+import { findDeepestNode, isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
 
 /** @typedef {import('./expand-parts.js').IncludedPart} IncludedPart */
 /** @typedef {import('./finding.js').Finding} Finding */
@@ -13,7 +14,7 @@ import { isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, li
 
 /**
  * @typedef {object} ImportBinding
- * @property {string} imported An export name, or `*` for a namespace import.
+ * @property {string | null} imported An export name, or null for a namespace import.
  * @property {string} local
  * @property {number} offset The offset of the imported name.
  */
@@ -81,8 +82,8 @@ const HASHBANG = '#!';
 // Acorn reads `<!--` in a module as code, where Node.js 24.22.1 refuses the module and a script reads a comment.
 const HTML_OPEN_COMMENT = '<!--';
 const RELATIVE_PREFIXES = ['./', '../'];
-// Any folder URL works, since a relative specifier's own segments decide whether its path ends in `/`.
-const FOLDER_SPECIFIER_BASE = 'file:///folder/';
+// Any folder URL works, since a relative specifier's own segments decide its path's ending and whether it ends in `/`.
+const SPECIFIER_BASE_URL = 'file:///folder/';
 const MODULE_ENDINGS = ['.js', '.mjs'];
 const JSON_ENDING = '.json';
 // Node.js 24.22.1 imports each ending as code or JSON and refuses it in another letter case, so none gives a string.
@@ -92,6 +93,10 @@ const EXPORT_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaratio
 // A class field value and a static block take the class or instance as `this`.
 const THIS_BINDING_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'PropertyDefinition', 'StaticBlock']);
 const DECLARATION_TYPES = new Set(['FunctionDeclaration', 'ClassDeclaration']);
+// Node.js 24.22.1 gives a RangeError of this message when a recursive call overflows the stack.
+const STACK_OVERFLOW_MESSAGE = 'Maximum call stack size exceeded';
+/** The message of the source-too-deep finding for a source that acorn parses and a tree walk overflows on. */
+const TREE_DEPTH_MESSAGE = 'The file nests code deeper than the build can read';
 
 /**
  * Parses one source file and reads its imports, its exports, the edits that turn its import and export
@@ -118,43 +123,50 @@ export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
     program = parse(text, { ...PARSE_OPTIONS, onComment: comments, onToken });
   } catch (error) {
     if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') throw error;
-    addFinding('syntax-error', formatSyntaxErrorReason(error), error.pos);
+    if (isStackSpaceError(error)) addFinding('source-too-deep', PARSER_DEPTH_MESSAGE, error.pos);
+    else addFinding('syntax-error', formatSyntaxErrorReason(error), error.pos);
     return analysis;
   }
 
-  for (const offset of htmlCommentOffsets) addFinding('syntax-error', `The file holds ${HTML_OPEN_COMMENT}, which an ES module does not allow`, offset);
-  if (isEntry) analysis.metaEnd = checkMeta(program, text, comments, hasBanner, addFinding);
-  if (isEntry && analysis.metaEnd !== null) checkMetaImports(program, addFinding);
-  if (isEntry) analysis.buildGlobalDeclarations = listBuildGlobalDeclarations(program);
-  if (isEntry) checkPartBoundaries(program, includes, addFinding);
-  // The runtime compiles only the text after the meta statement (Claude Code 2.1.332), so its body binds no meta.
-  if (isEntry) analysis.topLevelNames = listTopLevelNames(analysis.metaEnd === null ? program.body : program.body.slice(1));
-  if (!isEntry) analysis.freeNames = findFreeNames(program).map((identifier) => ({ name: identifier.name, offset: identifier.start }));
-  if (!isEntry && text.startsWith(HASHBANG)) {
-    addFinding('syntax-error', 'The module starts with a #! line, which is legal only at the start of a script', 0);
-  }
-  if (!isEntry) {
-    for (const comment of comments.filter(isIncludeComment)) {
-      addFinding('include-misplaced', 'The module holds a // @include comment, which only the entry may hold', comment.start);
+  try {
+    for (const offset of htmlCommentOffsets) addFinding('syntax-error', `The file holds ${HTML_OPEN_COMMENT}, which an ES module does not allow`, offset);
+    if (isEntry) analysis.metaEnd = checkMeta(program, text, comments, hasBanner, addFinding);
+    if (isEntry && analysis.metaEnd !== null) checkMetaImports(program, addFinding);
+    if (isEntry) analysis.buildGlobalDeclarations = listBuildGlobalDeclarations(program);
+    if (isEntry) checkPartBoundaries(program, includes, addFinding);
+    // The runtime compiles only the text after the meta statement (Claude Code 2.1.332), so its body binds no meta.
+    if (isEntry) analysis.topLevelNames = listTopLevelNames(analysis.metaEnd === null ? program.body : program.body.slice(1));
+    if (!isEntry) analysis.freeNames = findFreeNames(program).map((identifier) => ({ name: identifier.name, offset: identifier.start }));
+    if (!isEntry && text.startsWith(HASHBANG)) {
+      addFinding('syntax-error', 'The module starts with a #! line, which is legal only at the start of a script', 0);
     }
-  }
-
-  for (const statement of program.body) {
-    if (statement.type === 'ImportDeclaration') {
-      readImport(statement, text, analysis, addFinding);
-    } else if (EXPORT_TYPES.has(statement.type) && isEntry) {
-      // A second statement that exports meta is a syntax error, so a statement that exports meta alone is the meta statement.
-      const exportedNames = statement.source ? [] : listExportedNames(statement);
-      const isMetaExport = exportedNames.length === 1 && exportedNames[0] === 'meta';
-      if (!isMetaExport) addFinding('entry-export', 'The entry holds an export other than meta', statement.start);
-    } else if (EXPORT_TYPES.has(statement.type)) {
-      readExport(statement, text, analysis, liveLocals, addFinding);
+    if (!isEntry) {
+      for (const comment of comments.filter(isIncludeComment)) {
+        addFinding('include-misplaced', 'The module holds a // @include comment, which only the entry may hold', comment.start);
+      }
     }
-  }
 
-  checkNodes(program, isEntry, addFinding);
-  for (const identifier of findExportAssignments(program, liveLocals)) {
-    addFinding('export-not-constant', `The module assigns to its export ${identifier.name}`, identifier.start);
+    for (const statement of program.body) {
+      if (statement.type === 'ImportDeclaration') {
+        readImport(statement, text, analysis, addFinding);
+      } else if (EXPORT_TYPES.has(statement.type) && isEntry) {
+        // A second statement that exports meta is a syntax error, so a statement that exports meta alone is the meta statement.
+        const exportedNames = statement.source ? [] : listExportedNames(statement);
+        const isMetaExport = exportedNames.length === 1 && exportedNames[0] === 'meta';
+        if (!isMetaExport) addFinding('entry-export', 'The entry holds an export other than meta', statement.start);
+      } else if (EXPORT_TYPES.has(statement.type)) {
+        readExport(statement, text, analysis, liveLocals, addFinding);
+      }
+    }
+
+    checkNodes(program, isEntry, addFinding);
+    for (const identifier of findExportAssignments(program, liveLocals)) {
+      addFinding('export-not-constant', `The module assigns to its export ${identifier.name}`, identifier.start);
+    }
+  } catch (error) {
+    // Acorn parses a member or call chain in a loop, so a chain too deep for the recursive tree walks still parses.
+    if (!isStackOverflowError(error)) throw error;
+    addFinding('source-too-deep', TREE_DEPTH_MESSAGE, findDeepestNode(program).start);
   }
 
   analysis.findings.sort((first, second) => first.line - second.line || first.column - second.column);
@@ -304,20 +316,24 @@ function readImport(statement, text, analysis, addFinding) {
  *   names a folder and no file.
  */
 function isFolderSpecifier(specifier) {
-  return new URL(specifier, FOLDER_SPECIFIER_BASE).pathname.endsWith('/');
+  return new URL(specifier, SPECIFIER_BASE_URL).pathname.endsWith('/');
 }
 
 /**
- * Reads what an import names. Its `type` attribute decides when it holds one, and else the specifier's
- * ending: `.js` and `.mjs` name a module, `.json` a JSON file and every other ending a text file, except
- * an ending that an ES runtime reads as code or JSON, such as `.cjs`, `.ts` or `.JSON`.
+ * Reads what an import names. Its `type` attribute decides when it holds one, and else the ending of the
+ * specifier's path after percent decoding: `.js` and `.mjs` name a module, `.json` a JSON file and every
+ * other ending a text file, except no ending and an ending that an ES runtime reads as code or JSON, such as
+ * `.cjs`, `.ts` or `.JSON`.
  * @param {SyntaxNode} statement An ImportDeclaration.
  * @param {string} specifier
  * @returns {{ kind: SourceKind } | { rule: string, message: string, offset: number }} The second form for an
  *   attribute that is not `type`, a type that is not `text` or `json`, or an ending that is refused.
  */
 function readImportKind(statement, specifier) {
-  const lowerCaseSpecifier = specifier.toLowerCase();
+  // resolveImport in load-sources.js decodes percent escapes, so the ending is read from the decoded path.
+  const endingPath = decodeSpecifierPath(specifier);
+  const lowerCaseEndingPath = endingPath.toLowerCase();
+  const quotedSpecifier = JSON.stringify(specifier);
   let type = null;
 
   for (const attribute of statement.attributes ?? []) {
@@ -331,22 +347,42 @@ function readImportKind(statement, specifier) {
   }
 
   if (type !== null) return { kind: type };
-  if (MODULE_ENDINGS.some((ending) => specifier.endsWith(ending))) return { kind: 'module' };
-  if (specifier.endsWith(JSON_ENDING)) return { kind: 'json' };
-  if (RUNTIME_CODE_ENDINGS.some((ending) => lowerCaseSpecifier.endsWith(ending))) {
-    const message = `The specifier ${JSON.stringify(specifier)} has an ending that an ES runtime reads as code or JSON, which the build would read as a text file`;
+  if (MODULE_ENDINGS.some((ending) => endingPath.endsWith(ending))) return { kind: 'module' };
+  if (endingPath.endsWith(JSON_ENDING)) return { kind: 'json' };
+  // Node.js 24.22.1 imports a file with no ending as code.
+  if (posix.extname(endingPath) === '') {
+    const message = `The specifier ${quotedSpecifier} has no ending, which an ES runtime reads as code and the build would read as a text file`;
+    return { rule: 'import-ending-unknown', message, offset: statement.source.start };
+  }
+  if (RUNTIME_CODE_ENDINGS.some((ending) => lowerCaseEndingPath.endsWith(ending))) {
+    const message = `The specifier ${quotedSpecifier} has an ending that an ES runtime reads as code or JSON, which the build would read as a text file`;
     return { rule: 'import-ending-unknown', message, offset: statement.source.start };
   }
   return { kind: 'text' };
 }
 
 /**
+ * @param {string} specifier
+ * @returns {string} The specifier's URL path with its percent escapes decoded, or the specifier itself when
+ *   an escape is malformed, as in `./100%.md`, which the loader reports as naming no file path, or when it is
+ *   no URL, as in `http://[`, which import-not-relative reports.
+ */
+function decodeSpecifierPath(specifier) {
+  try {
+    return decodeURIComponent(new URL(specifier, SPECIFIER_BASE_URL).pathname);
+  } catch (error) {
+    if (!(error instanceof URIError) && error.code !== 'ERR_INVALID_URL') throw error;
+    return specifier;
+  }
+}
+
+/**
  * @param {SyntaxNode} specifierNode
- * @returns {string}
+ * @returns {string | null} Null for a namespace import, since `import { "*" as a }` names an export `*`.
  */
 function readImportedName(specifierNode) {
   if (specifierNode.type === 'ImportDefaultSpecifier') return 'default';
-  if (specifierNode.type === 'ImportNamespaceSpecifier') return '*';
+  if (specifierNode.type === 'ImportNamespaceSpecifier') return null;
   return readModuleName(specifierNode.imported);
 }
 
@@ -489,7 +525,7 @@ function checkNodes(program, isEntry, addFinding) {
     } else if (isTopLevelOfModule && isAwait) {
       addFinding('module-top-level-await', 'The module uses await outside every function', node.start);
     } else if (isTopLevelOfModule && node.type === 'ReturnStatement') {
-      addFinding('module-top-level-await', 'The module uses return outside every function', node.start);
+      addFinding('module-top-level-return', 'The module uses return outside every function', node.start);
     } else if (!isEntry && !hasOwnThis && node.type === 'ThisExpression') {
       addFinding('module-top-level-this', 'The module uses this outside every function', node.start);
     } else if (!isEntry && isDirectEval(node)) {
@@ -513,4 +549,12 @@ function checkNodes(program, isEntry, addFinding) {
  */
 function isDirectEval(node) {
   return node.type === 'CallExpression' && !node.optional && node.callee.type === 'Identifier' && node.callee.name === 'eval';
+}
+
+/**
+ * @param {unknown} error
+ * @returns {boolean} True for the error of a call stack overflow.
+ */
+export function isStackOverflowError(error) {
+  return error instanceof RangeError && error.message === STACK_OVERFLOW_MESSAGE;
 }

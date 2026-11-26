@@ -15,6 +15,13 @@ describe('checkPart', () => {
     assert.deepEqual(listFindings('const done = await agent("x");\nif (!done) return null;\n'), []);
   });
 
+  it('reports source-too-deep for valid code nested past the parser stack', () => {
+    const depth = 1200;
+    const findings = listFindings(`const v = ${'{ a: '.repeat(depth)}1${' }'.repeat(depth)};\n`);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0], /^source-too-deep 1:\d+ The file nests code deeper than the parser can read$/);
+  });
+
   it('reports part-not-plain in place of syntax-error for a part that does not parse on its own', () => {
     assert.deepEqual(listFindings('const = 1;\n'), ['part-not-plain 1:7 Unexpected token']);
     assert.deepEqual(listFindings('#!/usr/bin/env node\nlog(1);\n'), ["part-not-plain 1:2 Unexpected character '!'"]);

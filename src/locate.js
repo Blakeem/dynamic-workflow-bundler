@@ -5,7 +5,7 @@ import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
 import { formatBuildCommand } from './build-command.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
-import { formatDisplayPath } from './display-path.js';
+import { formatDisplayPath, isFolderPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
@@ -53,10 +53,10 @@ const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entr
 /**
  * Maps a line of a built script to its source file, line and column. Builds the script in memory from its
  * entry, and writes and prints nothing.
- * Rejects with a UsageError for options of another shape, a script that does not exist, a line or column
- * that is not a whole number of 1 or more or lies past the script's text, with `runtime` a line that the
- * runtime's numbering cannot convert, an entry it cannot find, two config files in the working directory
- * when it needs one, and every usage error of the build.
+ * Rejects with a UsageError for options of another shape, a script that does not exist or is not a file, a
+ * line or column that is not a whole number of 1 or more or lies past the script's text, with `runtime` a
+ * line that the runtime's numbering cannot convert, an entry it cannot find, two config files in the working
+ * directory when it needs one, and every usage error of the build.
  * @param {LocateOptions} options
  * @returns {Promise<LocateResult>}
  */
@@ -111,7 +111,7 @@ async function readScript(script) {
     if (MISSING_FILE_CODES.has(error.code)) throw new UsageError(`The script file ${script} does not exist`);
     throw error;
   }
-  if (!scriptStats.isFile()) throw new UsageError(`The script ${script} is not a file`);
+  if (isFolderPath(script) || !scriptStats.isFile()) throw new UsageError(`The script ${script} is not a file`);
 
   return readFile(resolve(script), 'utf8');
 }

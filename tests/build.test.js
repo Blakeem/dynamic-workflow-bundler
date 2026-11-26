@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, parse as parsePath, relative } from 'node:path';
+import { join, parse as parsePath, relative, sep } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'acorn';
@@ -113,6 +113,7 @@ describe('build of the modules fixture', async () => {
 describe('build findings', () => {
   const cases = [
     { rule: 'syntax-error', file: 'broken.js', line: 2 },
+    { rule: 'source-too-deep', file: 'deep.js', line: 1 },
     { rule: 'meta-not-first', file: 'entry.js', line: 1 },
     { rule: 'meta-not-alone', file: 'entry.js', line: 1 },
     { rule: 'meta-reads-import', file: 'entry.js', line: 2 },
@@ -125,6 +126,7 @@ describe('build findings', () => {
     { rule: 'import-attribute-unknown', file: 'entry.js', line: 3 },
     { rule: 'import-ending-unknown', file: 'entry.js', line: 2 },
     { rule: 'import-ending-unknown', file: 'entry.js', line: 3 },
+    { rule: 'import-ending-unknown', file: 'entry.js', line: 4 },
     { rule: 'import-not-found', file: 'entry.js', line: 2 },
     { rule: 'import-kind-conflict', file: 'entry.js', line: 3 },
     { rule: 'source-encoding-invalid', file: 'entry.js', line: 2 },
@@ -150,7 +152,7 @@ describe('build findings', () => {
     { rule: 'export-not-constant', file: 'state.js', line: 6 },
     { rule: 'export-from', file: 'barrel.js', line: 1 },
     { rule: 'module-top-level-await', file: 'ready.js', line: 1 },
-    { rule: 'module-top-level-await', file: 'ready.js', line: 3 },
+    { rule: 'module-top-level-return', file: 'ready.js', line: 2 },
     { rule: 'module-top-level-this', file: 'context.js', line: 1 },
     { rule: 'module-top-level-this', file: 'context.js', line: 2 },
     { rule: 'module-top-level-this', file: 'context.js', line: 11 },
@@ -365,6 +367,16 @@ describe('build of text files, JSON files and parts', () => {
     ]);
   });
 
+  it('reports source-too-deep in a part at the deep code\'s line in the part', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./part.js\nreturn v;\n');
+    await writeFile(join(folder, 'part.js'), `const a = { b: 1 };\nconst v = typeof a${'.b'.repeat(20000)};\n`);
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings.map((finding) => `${finding.rule} ${finding.file.split('/').at(-1)}:${finding.line}:${finding.column}`), ['source-too-deep part.js:2:18']);
+  });
+
   it('reports an import that reads a text file of this build as a module', async () => {
     const folder = await makeTemporaryFolder();
     await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport source from './a.js' with { type: 'text' };\nimport { a } from './a.js';\nreturn [a, source];\n");
@@ -418,6 +430,17 @@ describe('build edge forms', () => {
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
     assert.deepEqual((await runBuiltScript(result.script, {})).value, ['f', 'default', 'v', 'v']);
+  });
+
+  it('binds an import of the string export name "*" to that export, and a namespace import to the namespace', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { '*' as star } from './star.js';\nimport * as all from './star.js';\nreturn [star, Object.keys(all)];\n");
+    await writeFile(join(folder, 'star.js'), "const a = 1;\nexport { a as '*' };\nexport const other = 2;\n");
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual((await runBuiltScript(result.script, {})).value, [1, ['*', 'other']]);
   });
 
   it('exports a parenthesized default value, and keeps a parenthesized class expression out of the module scope', async () => {
@@ -608,7 +631,7 @@ describe('build output and usage errors', () => {
     assert.deepEqual(await readdir(folder), ['entry.js']);
   });
 
-  it('rejects a missing entry, a missing out, an out that is a source, a folder or inside a file, and options of another shape', async () => {
+  it('rejects a missing entry, a missing out, an out that is a source, a folder or inside a file, a path that ends in a separator, . or .., and options of another shape', async () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'dist'));
     await writeFile(join(folder, 'notes.txt'), 'notes\n');
@@ -623,6 +646,13 @@ describe('build output and usage errors', () => {
     await assert.rejects(build({ entry, out: entry }), isUsageError(/is a source/));
     await assert.rejects(build({ entry, out: join(folder, 'a.js') }), isUsageError(/is a source/));
     await assert.rejects(build({ entry, out: join(folder, 'dist') }), isUsageError(/is not a file/));
+    await assert.rejects(build({ entry, out: join(folder, 'dist') + sep }), isUsageError(/names a folder\. Name the built script's file in it$/));
+    await assert.rejects(build({ entry, out: join(folder, 'new') + sep }), isUsageError(/names a folder\. Name the built script's file in it$/));
+    await assert.rejects(build({ entry, out: `${folder}/new/` }), isUsageError(/names a folder\. Name the built script's file in it$/));
+    await assert.rejects(build({ entry: entry + sep, out: join(folder, 'out.js') }), isUsageError(/is not a file$/));
+    await assert.rejects(build({ entry, out: `${folder}/new/.` }), isUsageError(/names a folder\. Name the built script's file in it$/));
+    await assert.rejects(build({ entry, out: `${folder}/new/deeper/..` }), isUsageError(/names a folder\. Name the built script's file in it$/));
+    await assert.rejects(build({ entry: `${entry}/.`, out: join(folder, 'out.js') }), isUsageError(/is not a file$/));
     await assert.rejects(build({ entry, out: join(folder, 'notes.txt', 'out.js') }), isUsageError(/is inside a file/));
     await assert.rejects(build({ entry, out: join(folder, 'notes.txt', 'deeper', 'out.js'), write: false }), isUsageError(/is inside a file/));
     await assert.rejects(build({ entry, out: join(folder, 'out.js'), banner: 'no' }), isUsageError(/banner/));
@@ -667,6 +697,24 @@ describe('build output and usage errors', () => {
 
     assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line]), [['include-not-found', 2]]);
     assert.match(result.findings[0].message, /another drive than the entry/);
+  });
+
+  it('names a module behind a linked folder by its real path in the path comment', async (context) => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'project'));
+    await mkdir(join(folder, 'shared'));
+    await writeFile(join(folder, 'shared', 'm.js'), 'export const m = 1;\n');
+    await writeFile(join(folder, 'project', 'entry.js'), "export const meta = {};\nimport { m } from './lib/m.js';\nreturn m;\n");
+    try {
+      await symlink(join(folder, 'shared'), join(folder, 'project', 'lib'), 'junction');
+    } catch (error) {
+      return context.skip(`the test process cannot create a link: ${error.code}`);
+    }
+
+    const result = await build({ entry: join(folder, 'project', 'entry.js'), out: join(folder, 'project', 'out.js'), write: false });
+
+    assert.ok(result.script.split('\n').includes('// ../shared/m.js'));
+    assert.equal(result.script.includes('// lib/m.js'), false);
   });
 
   it('evaluates a module that two different specifiers reach once', async () => {
@@ -753,7 +801,7 @@ describe('build check', () => {
       await writeFile(join(folder, name), original);
 
       assert.equal(result.status, 'stale', name);
-      assert.equal(result.ok, true, name);
+      assert.equal(result.ok, false, name);
       assert.deepEqual(result.firstDifference, { line: builtLines.indexOf(text.split('\n')[sourceLine - 1]) + 1, file: formatPath(realFolder, name), sourceLine }, name);
     }
   });
@@ -789,7 +837,8 @@ describe('build check', () => {
 
     assert.equal(crlf.firstDifference.line, 1);
     assert.deepEqual(longer.firstDifference, { line: lastLine, file: formatPath(await realpath(folder), 'entry.js'), sourceLine: 7 });
-    assert.deepEqual({ status: missing.status, firstDifference: missing.firstDifference }, { status: 'missing', firstDifference: undefined });
+    assert.deepEqual({ ok: missing.ok, status: missing.status, firstDifference: missing.firstDifference }, { ok: false, status: 'missing', firstDifference: undefined });
+    assert.equal(crlf.ok, false);
     assert.equal((await readdir(folder)).includes('out.js'), false);
   });
 

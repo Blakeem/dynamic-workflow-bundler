@@ -21,11 +21,14 @@ export function formatBuildCommand(entry, values) {
 
 /**
  * @param {string} path
- * @returns {string} The path relative to the working directory, in double quotes when it holds a character
- *   outside SHELL_SAFE_PATH_PATTERN. cmd, PowerShell and POSIX shells read the quoted path as one argument,
- *   unless it holds `"`, `$`, `` ` ``, `%` or `!`, which a shell still reads inside double quotes.
+ * @returns {string} The path relative to the working directory, with `./` before a path that starts with `-`,
+ *   in double quotes when it holds a character outside SHELL_SAFE_PATH_PATTERN. cmd, PowerShell and POSIX
+ *   shells read the quoted path as one argument, unless it holds `"`, `$`, `` ` ``, `%` or `!`, which a shell
+ *   still reads inside double quotes.
  */
 export function formatCommandPath(path) {
   const displayPath = formatDisplayPath(path);
-  return SHELL_SAFE_PATH_PATTERN.test(displayPath) ? displayPath : `"${displayPath}"`;
+  // parseArgs reads an argument that starts with `-` as an option.
+  const argumentPath = displayPath.startsWith('-') ? `./${displayPath}` : displayPath;
+  return SHELL_SAFE_PATH_PATTERN.test(argumentPath) ? argumentPath : `"${argumentPath}"`;
 }

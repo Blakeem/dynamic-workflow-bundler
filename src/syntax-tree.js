@@ -35,6 +35,26 @@ export function listChildNodes(node) {
 }
 
 /**
+ * Finds the first node, in source order, at the greatest depth below a node.
+ * It keeps its own stack, so it reads a tree that a recursive walk overflows on.
+ * @param {SyntaxNode} node
+ * @returns {SyntaxNode}
+ */
+export function findDeepestNode(node) {
+  const pending = [{ node, depth: 0 }];
+  let deepest = pending[0];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const children = listChildNodes(current.node);
+    if (current.depth > deepest.depth) deepest = current;
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], depth: current.depth + 1 });
+  }
+
+  return deepest.node;
+}
+
+/**
  * Lists the identifiers directly below a node that name a property, a label, an import or an export,
  * and that bind and reference no variable.
  * Acorn gives `import { a }` and `export { a }` one node for both names, and that node is the variable's.

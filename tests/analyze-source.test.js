@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { analyzeSource, DEFAULT_EXPORT_LOCAL } from '../src/analyze-source.js';
+import { analyzeSource, DEFAULT_EXPORT_LOCAL, isStackOverflowError } from '../src/analyze-source.js';
 
 const META = 'export const meta = {};\n';
 
@@ -20,13 +20,14 @@ const RULE_CASES = [
   { rule: 'entry-export', isEntry: true, breaking: `${META}export const other = 1;\n`, passing: `${META}const other = 1;\n` },
   { rule: 'entry-export', isEntry: true, breaking: `${META}export {};\n`, passing: `${META}({});\n` },
   { rule: 'import-not-relative', isEntry: false, breaking: "import 'lib/a.js';\n", passing: "import './lib/a.js';\n" },
+  { rule: 'import-not-relative', isEntry: false, breaking: "import 'http://[';\n", passing: "import './http/a.js';\n" },
   { rule: 'import-not-found', isEntry: false, breaking: "import './lib/';\n", passing: "import './lib/a.js';\n" },
   { rule: 'import-not-found', isEntry: false, breaking: "import a from './..' with { type: 'text' };\n", passing: "import a from '../a.md';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import { a } from './a.md';\n", passing: "import a from './a.md';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import * as a from './a.json';\n", passing: "import a from './a.json';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import { default as a } from './a.json';\n", passing: "import a from './a.json';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import a, { b } from './a.js' with { type: 'text' };\n", passing: "import a, { b } from './a.js';\n" },
-  { rule: 'import-not-default', isEntry: false, breaking: "import './setup';\n", passing: "import './setup.js';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import './setup.md';\n", passing: "import './setup.js';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import './a.json';\n", passing: "import a from './a.json';\n" },
   { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.JSON';\n", passing: "import a from './a.json';\n" },
   { rule: 'import-ending-unknown', isEntry: false, breaking: "import { a } from './a.JS';\n", passing: "import { a } from './a.js';\n" },
@@ -34,6 +35,9 @@ const RULE_CASES = [
   { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.ts';\n", passing: "import a from './a.ts' with { type: 'text' };\n" },
   { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.mts';\n", passing: "import a from './a.mts.md';\n" },
   { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.wasm';\n", passing: "import a from './a.wasm' with { type: 'text' };\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import e from './e';\n", passing: "import e from './e' with { type: 'text' };\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './.env';\n", passing: "import a from './.env.md';\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import m from './m.%63js';\n", passing: "import m from './m.%63js' with { type: 'text' };\n" },
   { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.md' with { type: 'css' };\n", passing: "import a from './a.md' with { type: 'text' };\n" },
   { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.json' with { mode: 'json' };\n", passing: "import a from './a.json' with { 'type': 'json' };\n" },
   { rule: 'include-misplaced', isEntry: false, breaking: '// @include ./a.js\n', passing: '// @included by ./a.js\n' },
@@ -43,7 +47,7 @@ const RULE_CASES = [
   { rule: 'export-not-constant', isEntry: false, breaking: 'export const count = 0;\nfunction raise() { count += 1; }\n', passing: 'export const count = 0;\nfunction raise(count) { count += 1; }\n' },
   { rule: 'export-from', isEntry: false, breaking: "export * from './a.js';\n", passing: "import * as a from './a.js';\nexport { a };\n" },
   { rule: 'module-top-level-await', isEntry: false, breaking: 'await 1;\n', passing: 'export async function wait() { await 1; }\n' },
-  { rule: 'module-top-level-await', isEntry: false, breaking: 'return;\n', passing: 'export function stop() { return; }\n' },
+  { rule: 'module-top-level-return', isEntry: false, breaking: 'return;\n', passing: 'export function stop() { return; }\n' },
   { rule: 'module-top-level-await', isEntry: false, breaking: 'await using x = null;\n', passing: 'export async function hold() { await using x = null; }\n' },
   { rule: 'module-top-level-await', isEntry: false, breaking: 'for (await using x of []);\n', passing: 'for (using x of []);\n' },
   { rule: 'module-top-level-this', isEntry: false, breaking: 'export const self = this;\n', passing: 'export function self() { return this; }\n' },
@@ -80,6 +84,18 @@ describe('analyzeSource rules', () => {
     assert.deepEqual(listRules('const __dwfb_x = 1;\nexport { __dwfb_x };\n', false), ['reserved-name', 'reserved-name']);
   });
 
+  it('reports source-too-deep for a member or call chain that acorn parses and the tree walks cannot read', () => {
+    const depth = 20000;
+    const listDeepFindings = (text, isEntry) => analyzeSource(text, '/work/file.js', isEntry, true).findings.map((finding) => `${finding.rule} ${finding.line}:${finding.column} ${finding.message}`);
+    const message = 'The file nests code deeper than the build can read';
+
+    assert.deepEqual(listDeepFindings(`export const v = typeof a${'.b'.repeat(depth)};\n`, false), [`source-too-deep 1:25 ${message}`]);
+    assert.deepEqual(listDeepFindings(`export const v = f${'(1)'.repeat(depth)};\n`, false), [`source-too-deep 1:18 ${message}`]);
+    assert.deepEqual(listDeepFindings(`const x = 1;\n\nexport const v = typeof a${'.b'.repeat(depth)};\n`, false), [`source-too-deep 3:25 ${message}`]);
+    assert.deepEqual(listDeepFindings(`${META}const v = typeof a${'.b'.repeat(depth)};\n`, true), [`source-too-deep 2:18 ${message}`]);
+    assert.deepEqual(listRules(`export const v = typeof a${'.b'.repeat(100)};\n`, false), []);
+  });
+
   it('reports statement-crosses-part for a statement that runs on across the start of a part, and not for one a semicolon ends', () => {
     const listPartRules = (text) => {
       const start = text.indexOf('(a)');
@@ -107,28 +123,36 @@ describe('analyzeSource reads', () => {
 
     assert.deepEqual(analysis.imports.map((record) => [record.specifier, record.bindings.map((binding) => `${binding.imported}:${binding.local}`)]), [
       ['./a.js', ['default:a', 'b:c']],
-      ['./d.js', ['*:d']],
+      ['./d.js', ['null:d']],
     ]);
     assert.deepEqual(analysis.exports.map((record) => `${record.exported}:${record.local}`), ['e:e', 'f:f', 'g:e', `default:${DEFAULT_EXPORT_LOCAL}`]);
   });
 
-  it('reads what each import names from its type attribute, or else from the ending of its specifier', () => {
+  it('reads an import of the string export name "*" as a named import', () => {
+    const analysis = analyzeSource("import { '*' as star } from './a.js';\n", '/work/file.js', false);
+    assert.deepEqual(analysis.imports[0].bindings.map((binding) => binding.imported), ['*']);
+  });
+
+  it('reads what each import names from its type attribute, or else from the decoded ending of its specifier', () => {
     const text = [
       "import a from './a.js';",
       "import b from './b.mjs';",
       "import c from './c.json';",
       "import d from './d.md';",
-      "import e from './e';",
+      "import e from './e' with { type: 'text' };",
       "import f from './f.js' with { type: 'text' };",
       "import g from './g.txt' with { type: 'json' };",
       "import h from './h.CJS' with { type: 'text' };",
       "import i from './i.jsx';",
+      "import j from './m%2Ejs';",
+      "import k from './d.jso%6E';",
+      "import l from './100%.md';",
       '',
     ].join('\n');
     const { imports, findings } = analyzeSource(text, '/work/file.js', false);
 
     assert.deepEqual(findings, []);
-    assert.deepEqual(imports.map((record) => record.kind), ['module', 'module', 'json', 'text', 'text', 'text', 'json', 'text', 'text']);
+    assert.deepEqual(imports.map((record) => record.kind), ['module', 'module', 'json', 'text', 'text', 'text', 'json', 'text', 'text', 'module', 'json', 'text']);
   });
 
   it('keeps the parentheses of a default value inside the rewritten statement', () => {
@@ -161,5 +185,21 @@ describe('analyzeSource reads', () => {
     ]);
     assert.deepEqual(entry.findings, []);
     assert.deepEqual(module.buildGlobalDeclarations, []);
+  });
+});
+
+describe('isStackOverflowError', () => {
+  it('is true for the error of a recursion that overflows the stack, and false for another RangeError', () => {
+    const recurse = () => recurse();
+    let overflowError = null;
+    try {
+      recurse();
+    } catch (error) {
+      overflowError = error;
+    }
+
+    assert.equal(isStackOverflowError(overflowError), true);
+    assert.equal(isStackOverflowError(new RangeError('Invalid array length')), false);
+    assert.equal(isStackOverflowError(new Error('Maximum call stack size exceeded')), false);
   });
 });

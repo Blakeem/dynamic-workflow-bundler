@@ -79,8 +79,6 @@ const LOCATE_OPTIONS = Object.freeze({
   help: { type: 'boolean' },
 });
 
-const SUCCESS_STATUSES = new Set(['written', 'fresh']);
-
 process.exitCode = await runCommand(process.argv.slice(2));
 
 /**
@@ -161,7 +159,7 @@ async function runBuild(args) {
     if (!values.json) process.stdout.write(formatBuildText(builtWorkflow.out, builtWorkflow.result, buildCommand));
   }
 
-  const isSuccess = builtWorkflows.every(({ result }) => SUCCESS_STATUSES.has(result.status));
+  const isSuccess = builtWorkflows.every(({ result }) => result.ok);
   const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
   if (values.json) return printResult(`${JSON.stringify(formatBuildJson(builtWorkflows, isSuccess), null, 2)}\n`, exitCode);
   return exitCode;

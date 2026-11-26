@@ -71,7 +71,7 @@ A namespace import, such as `import * as a from './a.js'`, gives a frozen object
 
 ### Text files and JSON files
 
-A specifier that ends in `.json` names a JSON file, and any other ending names a text file. An ending that an ES runtime reads as code or JSON, such as `.cjs`, `.ts` or `.JSON`, stops the build with a finding. A `type` attribute of `text` or `json` decides in place of the ending. A text file and a JSON file take a default import only.
+A specifier that ends in `.json` names a JSON file, and any other ending names a text file. An ending that an ES runtime reads as code or JSON, such as `.cjs`, `.ts` or `.JSON`, stops the build with a finding. So does a specifier with no ending, such as `./prompt`, since an ES runtime reads that file as code. A `type` attribute of `text` or `json` decides in place of the ending. A text file and a JSON file take a default import only.
 
 ```js
 import reviewPrompt from './review-prompt.md';
@@ -114,6 +114,8 @@ export default {
 ### Check
 
 `dwfb build --check` builds each workflow in memory and compares the result with the file at `out`, and it writes nothing. The command exits 0 when every file matches. It exits 1 when a file differs or is missing, or a workflow has a finding. For a file that differs, it prints the file's first differing line and the source file and line that this line comes from. This way a commit hook or a CI job can stop a built script that no longer matches its source.
+
+The build reads each source through its real path, as Node does. So a path in the built script, such as the banner path or a module's path comment, follows a symbolic link or a junction to where its target sits. Two machines build the same bytes when each link's target sits at the same place relative to the entry. A link that git stores with a relative target gives that.
 
 ## dwfb locate
 

@@ -14,6 +14,7 @@ import { findPosition } from './source-position.js';
 /** How to fix the finding of each rule that a source breaks. */
 export const FIXES = Object.freeze({
   'syntax-error': 'Correct the syntax',
+  'source-too-deep': 'Split the nested code into named constants or functions',
   'meta-not-first': 'Make export const meta = { ... } the first statement of the entry',
   'meta-not-alone': 'Start it on the next line',
   'meta-reads-import': 'Write the value into the meta statement, since the built script declares imported names after it',
@@ -38,6 +39,7 @@ export const FIXES = Object.freeze({
   'export-not-constant': 'Export a const, and keep state that changes in an exported object or function',
   'export-from': 'Import the names, then export them',
   'module-top-level-await': 'Move it into a function, or into the entry',
+  'module-top-level-return': 'Move it into a function, or into the entry',
   'module-top-level-this': 'Use undefined in its place, or move it into a function',
   'module-direct-eval': 'Replace the eval call with code, since in the built script it can read the entry\'s names',
   'module-reads-entry-name': 'Rename the entry\'s declaration, since an ES module would read the global of that name',

@@ -60,6 +60,20 @@ describe('linkModules', () => {
     assert.deepEqual(listFindings({ 'entry.js': "export const meta = {};\nimport { a } from './a.js';\n", 'a.js': module }), []);
   });
 
+  it('reports import-not-exported for the string export name "*" that the module does not export, and not for a namespace import', () => {
+    const entry = "export const meta = {};\nimport { '*' as star } from './a.js';\nimport * as all from './a.js';\n";
+
+    assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': 'export const a = 1;\n' }), ['import-not-exported entry.js:2']);
+    assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': "const a = 1;\nexport { a as '*' };\n" }), []);
+  });
+
+  it('reports no import-not-exported for a module whose exports the parser could not read', () => {
+    const depth = 1200;
+    const deepModule = `export const a = ${'{ a: '.repeat(depth)}1${' }'.repeat(depth)};\n`;
+
+    assert.deepEqual(listFindings({ 'entry.js': "export const meta = {};\nimport { a } from './a.js';\n", 'a.js': deepModule }), []);
+  });
+
   it('reports module-reads-entry-name for a free name that the entry declares, and not for a global', () => {
     const entry = "export const meta = {};\nimport { read } from './a.js';\nconst phaseName = 1;\n";
 

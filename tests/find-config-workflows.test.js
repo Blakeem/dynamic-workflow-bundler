@@ -22,4 +22,15 @@ describe('findConfigWorkflows', () => {
     assert.deepEqual(await findConfigWorkflows(workflows, 'out', join(folder, 'dist', 'summary.js')), [summary]);
     assert.deepEqual(await findConfigWorkflows(workflows, 'out', join(folder, 'dist', 'missing.js')), []);
   });
+
+  it('finds no workflow for a path that names a folder, which its real path would drop', async () => {
+    const entry = join(folder, 'folder-path', 'entry.js');
+    await mkdir(join(folder, 'folder-path'));
+    await writeFile(entry, '');
+    const workflows = [{ entry, out: join(folder, 'folder-path', 'out.js') }];
+
+    assert.deepEqual(await findConfigWorkflows(workflows, 'entry', entry), workflows);
+    assert.deepEqual(await findConfigWorkflows(workflows, 'entry', `${entry}/`), []);
+    assert.deepEqual(await findConfigWorkflows(workflows, 'entry', `${entry}/.`), []);
+  });
 });

@@ -199,9 +199,12 @@ describe('loadConfig', () => {
     }
   });
 
-  it('rejects a missing file, a folder and a path that is not a string', async () => {
+  it('rejects a missing file, a folder, a path that names a folder and a path that is not a string', async () => {
+    const configFile = join(CONFIG_FIXTURES, 'project', 'dwfb.config.js');
+
     await assert.rejects(loadConfig(join(CONFIG_FIXTURES, 'none.config.js')), isUsageError(/^The config file .*none\.config\.js does not exist$/));
     await assert.rejects(loadConfig(CONFIG_FIXTURES), isUsageError(/is not a file$/));
+    for (const path of [`${configFile}/`, `${configFile}/.`]) await assert.rejects(loadConfig(path), isUsageError(/^The config file .*dwfb\.config\.js\/\.? is not a file$/));
     for (const path of [undefined, '', 1]) await assert.rejects(loadConfig(path), isUsageError(/^loadConfig\(\) needs path, the path of a config file$/));
   });
 });

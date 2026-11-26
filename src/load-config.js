@@ -4,7 +4,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkConfig } from './check-config.js';
 import { checkModuleSyntax, hasModuleSyntax } from './check-module-syntax.js';
-import { formatDisplayPath } from './display-path.js';
+import { formatDisplayPath, isFolderPath } from './display-path.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 import { normalizeSourceText } from './normalize-source-text.js';
 import { UsageError } from './usage-error.js';
@@ -64,8 +64,9 @@ function findConfigFile() {
 /**
  * Loads a config file as an ES module and checks its default export. Node keeps each module it loads, so
  * a later call in the same process reads the file as the first call loaded it.
- * Rejects with a UsageError for a path that is not a string, a missing file, a folder, a file that fails
- * to load, a default export that throws as checkConfig reads it, and every problem that checkConfig names.
+ * Rejects with a UsageError for a path that is not a string, a missing file, a folder or a path that ends in a
+ * path separator or a `.` or `..` segment, a file that fails to load, a default export that throws as
+ * checkConfig reads it, and every problem that checkConfig names.
  * @param {string} path The config file, relative to the working directory or absolute.
  * @returns {Promise<Config>} Every path absolute.
  */
@@ -92,7 +93,7 @@ async function readConfig(path, isFoundFile) {
     if (MISSING_FILE_CODES.has(error.code)) throw new UsageError(`The config file ${path} does not exist`);
     throw error;
   }
-  if (!configStats.isFile()) throw new UsageError(`The config file ${path} is not a file`);
+  if (isFolderPath(path) || !configStats.isFile()) throw new UsageError(`The config file ${path} is not a file`);
   try {
     configModule = await import(pathToFileURL(configFile).href);
   } catch (error) {
