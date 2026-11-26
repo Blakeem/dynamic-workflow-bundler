@@ -9,7 +9,7 @@ import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, li
 
 /** @typedef {import('./finding.js').Finding} Finding */
 /** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */
-/** @typedef {(rule: string, message: string, offset: number) => void} AddFinding */
+/** @typedef {(rule: string, message: string, offset: number, name?: string) => void} AddFinding `name` is the name the finding reports, for a rule whose fix depends on it. */
 /** @typedef {{ start: number, end: number }} DefinedRange The offsets that a reference starts at or after and ends at or before. */
 
 const SCRIPT_PARSER_DEPTH_MESSAGE = 'The script nests code deeper than the parser can read';
@@ -44,9 +44,9 @@ export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'u
   const markLength = text.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK.length : 0;
   // The parser reads the raw text. A finding is placed as an editor shows it, with no byte order mark and a lone CR as a line break.
   const positionText = text.slice(markLength).replace(LONE_CR_PATTERN, '\n');
-  const placeFinding = (rule, message, offset) => createFinding(rule, message, file, positionText, Math.max(0, offset - markLength));
+  const placeFinding = (rule, message, offset, name = null) => createFinding(rule, message, file, positionText, Math.max(0, offset - markLength), name);
   const addFinding = (rule, message, offset) => findings.push(placeFinding(rule, message, offset));
-  const addTreeFinding = (rule, message, offset) => treeFindings.push(placeFinding(rule, message, offset));
+  const addTreeFinding = (rule, message, offset, name) => treeFindings.push(placeFinding(rule, message, offset, name));
   let program = null;
 
   findings.push(...checkScriptSize(byteCount, file));
@@ -317,7 +317,7 @@ function checkUndefinedNames(freeReferences, referenceFacts, addFinding) {
     if (reportedNames.has(identifier.name)) continue;
     reportedNames.add(identifier.name);
     const verb = referenceFacts.assignedNodes.has(identifier) ? 'assigns' : 'reads';
-    addFinding('global-undefined', formatUndefinedNameMessage(identifier.name, verb), identifier.start);
+    addFinding('global-undefined', formatUndefinedNameMessage(identifier.name, verb), identifier.start, identifier.name);
   }
 }
 

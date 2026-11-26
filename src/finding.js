@@ -14,7 +14,11 @@ import { findPosition } from './source-position.js';
 // A source larger than dwfb reads would also build a script larger than the runtime reads.
 const SCRIPT_SIZE_FIX = 'Pass long text through args, or move part of the work into a workflow that the script runs with workflow()';
 
-/** How to fix the finding of each rule that a source or a workflow script breaks. */
+/**
+ * How to fix the finding of each rule that a source or a workflow script breaks. A rule whose fix depends on
+ * the name its finding reports maps each such name to its fix, and every other name to `default`.
+ * @type {Readonly<Record<string, string | Readonly<Record<string, string>>>>}
+ */
 export const FIXES = Object.freeze({
   'syntax-error': 'Correct the syntax',
   'source-too-deep': 'Split the nested code into named constants or functions',
@@ -60,7 +64,11 @@ export const FIXES = Object.freeze({
   'clock-unavailable': 'Pass the time through args, or stamp the result after the workflow returns',
   'random-unavailable': 'Pass random values through args, or derive them from a value in args',
   'eval-unavailable': 'Write the code into the script in place of the string',
-  'global-undefined': 'Declare the name or pass the value through args, copy the values of meta into a constant of another name, and read arguments only inside a function that is not an arrow function',
+  'global-undefined': Object.freeze({
+    meta: 'Copy the values the body needs into a constant of another name',
+    arguments: 'Read it only inside a function that is not an arrow function',
+    default: 'Declare the name, or pass the value through args',
+  }),
 });
 
 /**
@@ -69,9 +77,23 @@ export const FIXES = Object.freeze({
  * @param {string} file
  * @param {string} text The text of `file` as an editor shows its lines, which the offset indexes.
  * @param {number} offset
+ * @param {string | null} [name] The name the finding reports, for a rule whose fix depends on it.
  * @returns {Finding}
  */
-export function createFinding(rule, message, file, text, offset) {
+export function createFinding(rule, message, file, text, offset, name = null) {
   const { line, column } = findPosition(text, offset);
-  return { rule, message, fix: FIXES[rule], file, line, column };
+  return { rule, message, fix: readFix(rule, name), file, line, column };
+}
+
+/**
+ * @param {string} rule
+ * @param {string | null} name
+ * @returns {string}
+ */
+function readFix(rule, name) {
+  const ruleFix = Object.hasOwn(FIXES, rule) ? FIXES[rule] : undefined;
+  if (ruleFix === undefined) throw new Error(`FIXES holds no fix for the rule ${rule}`);
+  if (typeof ruleFix === 'string') return ruleFix;
+  // Object.hasOwn keeps a name such as constructor from reading a property of Object.prototype.
+  return name !== null && Object.hasOwn(ruleFix, name) ? ruleFix[name] : ruleFix.default;
 }
