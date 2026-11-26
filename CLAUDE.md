@@ -40,8 +40,8 @@ Add a row before a new concept gets a name in code.
 
 ## Names
 
-- **Package:** `dynamic-workflow-bundler`. **Command:** `dwfb`. **Config file:** `dwfb.config.js`, or `dwfb.config.mjs`
-  when that file does not exist.
+- **Package:** `dynamic-workflow-bundler`. **Command:** `dwfb`. **Config file:** `dwfb.config.js` or
+  `dwfb.config.mjs`. A command that needs the config file stops when both exist.
 - **No Anthropic mark in a name.** Never put "Claude", "Claude Code" or "Anthropic" in a package, command,
   file, export or option name. Say "Claude Code" only in plain descriptive text.
 - **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`. A new command takes
