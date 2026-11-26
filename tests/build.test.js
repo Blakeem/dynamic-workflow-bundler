@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse as parsePath, relative } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -708,6 +708,125 @@ describe('build output and usage errors', () => {
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
     assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line]), [['entry-export', 2]]);
+  });
+});
+
+describe('build check', () => {
+  /**
+   * Writes an entry with a part, a module, a text file and a JSON file, builds it, and returns its paths.
+   * @returns {Promise<{ folder: string, entry: string, out: string }>}
+   */
+  async function writeBuiltProject() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n");
+    await writeFile(join(folder, 'part.js'), 'const p = 1;\nconst q = 2;\n');
+    await writeFile(join(folder, 'a.js'), 'export const a = 1;\nconst b = 2;\n');
+    await writeFile(join(folder, 'notes.md'), 'first\nsecond\n');
+    await writeFile(join(folder, 'settings.json'), '{ "s": 1 }\n');
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    await build({ entry, out });
+    return { folder, entry, out };
+  }
+
+  /**
+   * @param {string} folder
+   * @param {string} name
+   * @returns {string} The path as a build reports it.
+   */
+  function formatPath(folder, name) {
+    return formatForwardSlashes(relative(process.cwd(), join(folder, name)));
+  }
+
+  it('finds a fresh script and writes nothing', async () => {
+    const { folder, entry, out } = await writeBuiltProject();
+    const before = await readFile(out);
+
+    const result = await build({ entry, out, check: true });
+
+    assert.equal(result.status, 'fresh');
+    assert.equal(result.ok, true);
+    assert.equal(result.firstDifference, undefined);
+    assert.ok((await readFile(out)).equals(before));
+    assert.deepEqual((await readdir(folder)).sort(), ['a.js', 'entry.js', 'notes.md', 'out.js', 'part.js', 'settings.json']);
+  });
+
+  it('maps the first differing line to the edited source and line, for each kind of source', async () => {
+    const { folder, entry, out } = await writeBuiltProject();
+    const realFolder = await realpath(folder);
+    const edits = [
+      { name: 'part.js', text: 'const p = 1;\nconst q = 3;\n', sourceLine: 2 },
+      { name: 'a.js', text: 'export const a = 1;\nconst b = 3;\n', sourceLine: 2 },
+      { name: 'notes.md', text: 'first\nsecond line\n', sourceLine: 2 },
+      { name: 'settings.json', text: '{ "s": 2 }\n', sourceLine: 1 },
+      { name: 'entry.js', text: "export const meta = { name: 'x' };\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n", sourceLine: 1 },
+    ];
+
+    for (const { name, text, sourceLine } of edits) {
+      const original = await readFile(join(folder, name), 'utf8');
+      await writeFile(join(folder, name), text);
+      const result = await build({ entry, out, check: true });
+      const builtLines = result.script.split('\n');
+      await writeFile(join(folder, name), original);
+
+      assert.equal(result.status, 'stale', name);
+      assert.equal(result.ok, true, name);
+      assert.deepEqual(result.firstDifference, { line: builtLines.indexOf(text.split('\n')[sourceLine - 1]) + 1, file: formatPath(realFolder, name), sourceLine }, name);
+    }
+  });
+
+  it('gives no source line for a line the build adds, and the source of its constant or scope', async () => {
+    const { folder, entry, out } = await writeBuiltProject();
+    const realFolder = await realpath(folder);
+    const script = await readFile(out, 'utf8');
+    const lines = script.split('\n');
+    const scopeLine = lines.findIndex((line) => line.startsWith('return { __proto__: null'));
+    const bannerLine = lines.findIndex((line) => line.startsWith('// Built by dynamic-workflow-bundler'));
+
+    await writeFile(out, lines.map((line, index) => (index === scopeLine ? `${line} ` : line)).join('\n'));
+    const scopeResult = await build({ entry, out, check: true });
+    await writeFile(out, lines.map((line, index) => (index === bannerLine ? `${line} ` : line)).join('\n'));
+    const bannerResult = await build({ entry, out, check: true });
+
+    assert.deepEqual(scopeResult.firstDifference, { line: scopeLine + 1, file: formatPath(realFolder, 'a.js'), sourceLine: null });
+    assert.deepEqual(bannerResult.firstDifference, { line: bannerLine + 1, file: null, sourceLine: null });
+  });
+
+  it('finds a script with other line endings or extra lines stale, and a missing script missing', async () => {
+    const { folder, entry, out } = await writeBuiltProject();
+    const script = await readFile(out, 'utf8');
+    const lastLine = script.split('\n').length;
+
+    await writeFile(out, script.replaceAll('\n', '\r\n'));
+    const crlf = await build({ entry, out, check: true });
+    await writeFile(out, `${script}// more\n`);
+    const longer = await build({ entry, out, check: true });
+    await rm(out);
+    const missing = await build({ entry, out, check: true });
+
+    assert.equal(crlf.firstDifference.line, 1);
+    assert.deepEqual(longer.firstDifference, { line: lastLine, file: formatPath(await realpath(folder), 'entry.js'), sourceLine: 7 });
+    assert.deepEqual({ status: missing.status, firstDifference: missing.firstDifference }, { status: 'missing', firstDifference: undefined });
+    assert.equal((await readdir(folder)).includes('out.js'), false);
+  });
+
+  it('gives failed for a source with a finding, written or built otherwise', async () => {
+    const { folder, entry, out } = await writeBuiltProject();
+
+    assert.equal((await build({ entry, out })).status, 'written');
+    assert.equal((await build({ entry, out, write: false })).status, 'built');
+    await writeFile(join(folder, 'a.js'), 'export let a = 1;\n');
+    assert.equal((await build({ entry, out, check: true })).status, 'failed');
+    assert.equal((await build({ entry, out })).status, 'failed');
+  });
+
+  it('rejects check that is not a boolean, and check with write: true', async () => {
+    const { entry, out } = await writeBuiltProject();
+    const isUsageError = (pattern) => (error) => error.name === 'UsageError' && pattern.test(error.message);
+
+    await assert.rejects(build({ entry, out, check: 'yes' }), isUsageError(/^build\(\) takes check as a boolean$/));
+    await assert.rejects(build({ entry, out, check: true, write: true }), isUsageError(/^build\(\) writes nothing with check, so it takes no write: true$/));
+    assert.equal((await build({ entry, out, check: true, write: false })).status, 'fresh');
   });
 });
 

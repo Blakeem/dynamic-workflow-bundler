@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { RESERVED_PREFIX } from './analyze-source.js';
+import { findLineOrigin } from './expand-parts.js';
 import { countLineBreaks } from './source-position.js';
 
 /** @typedef {import('./analyze-source.js').Edit} Edit */
@@ -20,6 +21,26 @@ const TEMPLATE_SPECIAL_TEXT = /\\|`|\$\{|\r/g;
 const TEMPLATE_ESCAPES = Object.freeze({ '\\': '\\\\', '`': '\\`', '${': '\\${', '\r': '\\r' });
 
 /**
+ * @typedef {object} LineOrigin
+ * @property {string | null} file The real path of the source that the line comes from. For a line the build
+ *   adds, the source whose constant, scope or imported names the line holds, or null for the banner.
+ * @property {number | null} line The source's 1-based line, or null for a line the build adds.
+ */
+
+/**
+ * @typedef {object} ScriptPiece
+ * @property {string} text
+ * @property {(line: number) => LineOrigin} findOrigin Maps a 1-based line of `text` to its origin.
+ */
+
+/**
+ * @typedef {object} JoinedScript
+ * @property {string} script
+ * @property {LineOrigin[]} lineOrigins One per line of the script, as `script.split('\n')` gives the lines,
+ *   so index 0 holds line 1.
+ */
+
+/**
  * Writes the built script: the entry's meta statement, the banner line, one constant per text file and
  * JSON file, one scope per module and the rest of the entry. Every source line keeps its order and line count.
  * Each scope wraps the form `const <name> = (() => { ...; return { ... }; })();` in a freeze. A probe
@@ -31,7 +52,7 @@ const TEMPLATE_ESCAPES = Object.freeze({ '\\': '\\\\', '`': '\\`', '${': '\\${',
  * @param {LoadedSource} input.entry An entry with no finding.
  * @param {JoinedSource[]} input.sources The sources other than the entry, in evaluation order.
  * @param {string | null} input.bannerPath The entry's path relative to the built script's folder, or null for no banner.
- * @returns {string}
+ * @returns {JoinedScript}
  */
 export function joinModules({ entry, sources, bannerPath }) {
   const sourceNames = new Map(sources.map((source) => [source.file, nameSource(source.path)]));
@@ -40,19 +61,66 @@ export function joinModules({ entry, sources, bannerPath }) {
   const splitOffset = findOffsetAfterLine(entryText, metaLastLine);
   const head = entryText.slice(0, splitOffset);
   const entryBindings = formatBindings(entry.dependencies, sourceNames);
-  const pieces = [head];
+  const findEntryOrigin = (line) => {
+    const origin = findLineOrigin(entry.includes, line);
+    return { file: origin.file ?? entry.file, line: origin.line };
+  };
+  const pieces = [{ text: head, findOrigin: findEntryOrigin }];
 
   if (bannerPath !== null) {
     const separator = head.endsWith('\n') ? '' : '\n';
-    pieces.push(`${separator}// Built by dynamic-workflow-bundler from ${formatCommentText(bannerPath)}. Edit the source, not this file.\n`);
+    pieces.push(addedPiece(`${separator}// Built by dynamic-workflow-bundler from ${formatCommentText(bannerPath)}. Edit the source, not this file.\n`, null));
   }
-  for (const source of sources.filter((each) => each.kind === 'text')) pieces.push(formatTextFile(source, sourceNames));
-  for (const source of sources.filter((each) => each.kind === 'json')) pieces.push(formatJsonFile(source, sourceNames));
-  for (const source of sources.filter((each) => each.kind === 'module')) pieces.push(formatScope(source, sourceNames));
-  if (entryBindings !== '') pieces.push(`${entryBindings}\n`);
-  pieces.push(entryText.slice(splitOffset));
+  for (const source of sources.filter((each) => each.kind === 'text')) pieces.push(...formatTextFile(source, sourceNames));
+  for (const source of sources.filter((each) => each.kind === 'json')) pieces.push(...formatJsonFile(source, sourceNames));
+  for (const source of sources.filter((each) => each.kind === 'module')) pieces.push(...formatScope(source, sourceNames));
+  if (entryBindings !== '') pieces.push(addedPiece(`${entryBindings}\n`, entry.file));
+  pieces.push({ text: entryText.slice(splitOffset), findOrigin: (line) => findEntryOrigin(metaLastLine + line) });
 
-  return pieces.join('');
+  return { script: pieces.map((piece) => piece.text).join(''), lineOrigins: mapLineOrigins(pieces) };
+}
+
+/**
+ * Gives each line of the joined pieces the origin of the piece where the line starts. The line after the
+ * script's last line break takes the origin of the last piece's next line.
+ * @param {ScriptPiece[]} pieces
+ * @returns {LineOrigin[]}
+ */
+function mapLineOrigins(pieces) {
+  const origins = [];
+  let isLineStart = true;
+
+  for (const { text, findOrigin } of pieces) {
+    const lines = text.split('\n');
+    lines.forEach((lineText, index) => {
+      const continuesLine = index === 0 && !isLineStart;
+      const isAfterLastBreak = index === lines.length - 1 && lineText === '';
+      if (!continuesLine && !isAfterLastBreak) origins.push(findOrigin(index + 1));
+    });
+    if (text !== '') isLineStart = text.endsWith('\n');
+  }
+  const lastPiece = pieces[pieces.length - 1];
+  if (isLineStart) origins.push(lastPiece.findOrigin(countLineBreaks(lastPiece.text) + 1));
+
+  return origins;
+}
+
+/**
+ * @param {string} text Lines the build adds.
+ * @param {string | null} file
+ * @returns {ScriptPiece}
+ */
+function addedPiece(text, file) {
+  return { text, findOrigin: () => ({ file, line: null }) };
+}
+
+/**
+ * @param {string} text The source's lines, in their order and count.
+ * @param {JoinedSource} source
+ * @returns {ScriptPiece}
+ */
+function sourcePiece(text, source) {
+  return { text, findOrigin: (line) => ({ file: source.file, line }) };
 }
 
 /**
@@ -74,10 +142,10 @@ export function nameSource(path) {
  * A probe under Claude Code 2.1.332 gave the exact text for an escaped backtick, `${` and backslash.
  * @param {JoinedSource} source
  * @param {Map<string, string>} sourceNames
- * @returns {string}
+ * @returns {ScriptPiece[]}
  */
 function formatTextFile(source, sourceNames) {
-  return `// ${formatCommentText(source.path)}\nconst ${sourceNames.get(source.file)} = ${formatTemplateLiteral(source.text)};\n`;
+  return formatTemplateConstant(source, `const ${sourceNames.get(source.file)} = `, ';');
 }
 
 /**
@@ -85,24 +153,33 @@ function formatTextFile(source, sourceNames) {
  * `__proto__` key as the prototype, where JSON.parse makes it a property.
  * @param {JoinedSource} source
  * @param {Map<string, string>} sourceNames
- * @returns {string}
+ * @returns {ScriptPiece[]}
  */
 function formatJsonFile(source, sourceNames) {
-  return `// ${formatCommentText(source.path)}\nconst ${sourceNames.get(source.file)} = JSON.parse(${formatTemplateLiteral(source.text)});\n`;
+  return formatTemplateConstant(source, `const ${sourceNames.get(source.file)} = JSON.parse(`, ');');
 }
 
 /**
- * @param {string} text
- * @returns {string} A template literal whose value is the text, closed on the text's last line.
+ * Holds a source's text in a template literal closed on the text's last line.
+ * @param {JoinedSource} source
+ * @param {string} before The code between the comment line and the template literal.
+ * @param {string} after The code after the template literal on its closing line.
+ * @returns {ScriptPiece[]}
  */
-function formatTemplateLiteral(text) {
-  return `\`\\\n${text.replace(TEMPLATE_SPECIAL_TEXT, (special) => TEMPLATE_ESCAPES[special])}\``;
+function formatTemplateConstant(source, before, after) {
+  const escapedText = source.text.replace(TEMPLATE_SPECIAL_TEXT, (special) => TEMPLATE_ESCAPES[special]);
+
+  return [
+    addedPiece(`// ${formatCommentText(source.path)}\n${before}\`\\\n`, source.file),
+    sourcePiece(escapedText, source),
+    addedPiece(`\`${after}\n`, source.file),
+  ];
 }
 
 /**
  * @param {JoinedSource} module
  * @param {Map<string, string>} sourceNames
- * @returns {string}
+ * @returns {ScriptPiece[]}
  */
 function formatScope(module, sourceNames) {
   const bindings = formatBindings(module.dependencies, sourceNames);
@@ -113,7 +190,7 @@ function formatScope(module, sourceNames) {
   const opening = `// ${formatCommentText(module.path)}\nconst ${sourceNames.get(module.file)} = Object.freeze(Object.defineProperty((() => {${bindings === '' ? '' : ` ${bindings}`}\n`;
   const closing = `return { __proto__: null${exportNames === '' ? '' : `, ${exportNames}`} }; })(), Symbol.toStringTag, { value: 'Module' }));\n`;
 
-  return `${opening}${closedBody}${closing}`;
+  return [addedPiece(opening, module.file), sourcePiece(closedBody, module), addedPiece(closing, module.file)];
 }
 
 /**

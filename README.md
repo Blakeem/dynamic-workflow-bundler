@@ -11,7 +11,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 
 | Command | Purpose | Status |
 |---|---|---|
-| `dwfb build` | Build one workflow script from an entry, its parts, and the modules, text files and JSON files it imports. | available |
+| `dwfb build` | Build a workflow script from an entry, its parts, and the modules, text files and JSON files it imports, or every workflow of a config file. | available |
 | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
@@ -92,6 +92,25 @@ export const meta = { name: 'review', description: 'Review a change' };
 ```
 
 A part is a list of complete statements with no `import` or `export`. One `// @include` line names it, and no import reads it as a module. A `// @include` line sits alone on its line at the top level of the entry, below `meta`. A part or a `// @include` line that breaks these rules stops the build with a finding. A `// @include` line inside a template literal is text.
+
+### Config file
+
+A project with several workflows lists them in `dwfb.config.js` in the folder the command runs in. The file is an ES module whose default export names the entry and the built script of each workflow. Node loads a `.js` file as an ES module when the nearest `package.json` sets `"type": "module"`, so set it there, or name a `.mjs` config file with `--config`. Each path is relative to the config file's folder.
+
+```js
+export default {
+  workflows: [
+    { entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js' },
+    { entry: 'workflows/summary/entry.js', out: '.claude/workflows/summary.js', banner: false },
+  ],
+};
+```
+
+`dwfb build` with no entry builds every workflow in order, and `dwfb build <entry>` builds each workflow whose entry is that file. A workflow with a finding does not stop the workflows after it. `banner: false` leaves out the banner line of one workflow, and `--no-banner` leaves it out of every workflow. `--config <path>` names another config file. `dwfb build <entry> --out <file>` reads no config file. A config file that does not load, has an unknown key, gives a field of the wrong type or gives two workflows one `out` stops the command before it writes anything. Two `out` paths that differ only in letter case count as one `out`. Two `out` paths that name one file through a link count as one `out` among the workflows the command builds. A missing entry, or an `out` that the build refuses, such as a folder or a source file of a workflow the command builds, stops the command before it writes anything too.
+
+### Check
+
+`dwfb build --check` builds each workflow in memory and compares the result with the file at `out`, and it writes nothing. The command exits 0 when every file matches. It exits 1 when a file differs or is missing, or a workflow has a finding. For a file that differs, it prints the file's first differing line and the source file and line that this line comes from. This way a commit hook or a CI job can stop a built script that no longer matches its source.
 
 ## License
 

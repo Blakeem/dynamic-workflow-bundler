@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import { join, resolve } from 'node:path';
+import { describe, it } from 'node:test';
+import { checkConfig } from '../src/check-config.js';
+
+const CONFIG_FILE = resolve('project', 'dwfb.config.js');
+const PROJECT_FOLDER = resolve('project');
+
+/** @param {unknown} value */
+function check(value) {
+  return checkConfig(value, CONFIG_FILE, 'dwfb.config.js');
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} message
+ */
+function assertUsageError(value, message) {
+  assert.throws(() => check(value), (error) => error.name === 'UsageError' && error.message === message);
+}
+
+describe('checkConfig', () => {
+  it('resolves each path against the config file folder and defaults banner to true', () => {
+    const config = check({ workflows: [{ entry: 'a/entry.js', out: '../dist/a.js' }, { entry: 'b.js', out: 'b.out.js', banner: false }] });
+
+    assert.deepEqual(config, {
+      workflows: [
+        { entry: join(PROJECT_FOLDER, 'a', 'entry.js'), out: resolve(PROJECT_FOLDER, '..', 'dist', 'a.js'), banner: true },
+        { entry: join(PROJECT_FOLDER, 'b.js'), out: join(PROJECT_FOLDER, 'b.out.js'), banner: false },
+      ],
+    });
+  });
+
+  it('accepts an empty workflows list', () => {
+    assert.deepEqual(check({ workflows: [] }), { workflows: [] });
+  });
+
+  it('names a value of another shape, an unknown key and a missing workflows list', () => {
+    const shape = 'The config file dwfb.config.js does not export default an object of the form { workflows: [...] }';
+    for (const value of [undefined, null, 'workflows', [], 1]) assertUsageError(value, shape);
+    assertUsageError({ workflows: [], watch: true }, 'The config file dwfb.config.js has an unknown key watch');
+    assertUsageError({ workflow: [] }, 'The config file dwfb.config.js has an unknown key workflow');
+    assertUsageError({}, 'The config file dwfb.config.js has no workflows list');
+    assertUsageError({ workflows: { entry: 'a.js' } }, 'The config file dwfb.config.js has no workflows list');
+  });
+
+  it('names the workflow of a missing or wrong-typed field, an unknown key and a hole in the list', () => {
+    const label = 'Workflow 2 of the config file dwfb.config.js';
+    const first = { entry: 'a.js', out: 'a.out.js' };
+
+    assertUsageError({ workflows: [first, 'b.js'] }, `${label} is not an object of the form { entry, out, banner }`);
+    assertUsageError({ workflows: [first, , first] }, `${label} is not an object of the form { entry, out, banner }`);
+    assertUsageError({ workflows: [first, { entry: 'b.js', output: 'b.out.js' }] }, `${label} has an unknown key output`);
+    assertUsageError({ workflows: [first, { out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);
+    assertUsageError({ workflows: [first, { entry: '', out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);
+    assertUsageError({ workflows: [first, { entry: 'b.js', out: 1 }] }, `${label} needs out, the path of the built script`);
+    assertUsageError({ workflows: [first, { entry: 'b.js', out: 'b.out.js', banner: 'no' }] }, `${label} takes banner as a boolean`);
+  });
+
+  it('names two workflows that write one out file by any spelling of its path', () => {
+    assertUsageError(
+      { workflows: [{ entry: 'a.js', out: 'dist/out.js' }, { entry: 'b.js', out: 'dist/b.js' }, { entry: 'c.js', out: './dist/../dist/out.js' }] },
+      'Workflows 1 and 3 of the config file dwfb.config.js both write ./dist/../dist/out.js',
+    );
+  });
+
+  it('names two out paths that differ only in letter case, on every platform', () => {
+    assertUsageError(
+      { workflows: [{ entry: 'a.js', out: 'dist/out.js' }, { entry: 'b.js', out: 'DIST/Out.js' }] },
+      'Workflows 1 and 2 of the config file dwfb.config.js write dist/out.js and DIST/Out.js, which name one file where file names ignore letter case',
+    );
+  });
+});

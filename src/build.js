@@ -1,11 +1,13 @@
-import { realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
+import { findDifferentLine } from './find-different-line.js';
 import { joinModules } from './join-modules.js';
 import { linkModules } from './link-modules.js';
 import { loadSources, MISSING_FILE_CODES } from './load-sources.js';
+import { findRealPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
 import { writeScript } from './write-script.js';
 
@@ -13,7 +15,7 @@ import { writeScript } from './write-script.js';
 /** @typedef {import('./load-sources.js').LoadedSource} LoadedSource */
 
 // A misspelled key such as `Write` would otherwise be dropped, and the build would write `out`.
-const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write']);
+const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
 
 /**
  * @typedef {object} BuildOptions
@@ -21,25 +23,38 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write']);
  * @property {string} out The built script's path. Required even with `write: false`, since the banner names
  *   the entry relative to it.
  * @property {boolean} [banner] Writes the banner line. Defaults to true.
- * @property {boolean} [write] Writes the built script. Defaults to true.
+ * @property {boolean} [write] Writes the built script. Defaults to true, and to false with `check`.
+ * @property {boolean} [check] Writes nothing, and compares the built script with the file at `out`.
+ *   Defaults to false.
+ */
+
+/**
+ * @typedef {object} FirstDifference
+ * @property {number} line The 1-based line of the built script where the file at `out` first differs.
+ * @property {string | null} file The source that the line comes from, as LineOrigin gives it.
+ * @property {number | null} sourceLine The source's line, or null for a line the build adds.
  */
 
 /**
  * @typedef {object} BuildResult
  * @property {boolean} ok True when the build found nothing.
+ * @property {'written' | 'built' | 'fresh' | 'stale' | 'missing' | 'failed'} status `failed` when the build
+ *   has a finding. Otherwise `written`, `built` with `write: false`, or with `check` one of `fresh` (the file
+ *   at `out` is the built script), `stale` (it differs) or `missing` (no file is there).
  * @property {string | null} script The built script, or null when the build has a finding.
  * @property {string[]} sources Every source file read, once each: the entry, its parts in directive order,
  *   then each module, text file and JSON file in the order its first import reached it.
  * @property {Finding[]} findings
+ * @property {FirstDifference} [firstDifference] Present when `status` is `stale`.
  * Every path is relative to the real path of the working directory, with forward slashes.
  */
 
 /**
  * Builds one workflow script from an entry, its parts, and the modules, text files and JSON files it
  * imports. Prints nothing.
- * Rejects with a UsageError for options that are not an object, an unknown or wrong option, a missing
- * entry, an `out` that names a source, a folder or a path inside a file, and an `out` on another drive
- * than the entry when the banner is on.
+ * Rejects with a UsageError for options that are not an object, an unknown or wrong option, `check` with
+ * `write: true`, a missing entry, an `out` that names a source, a folder or a path inside a file, and an
+ * `out` on another drive than the entry when the banner is on.
  * @param {BuildOptions} options
  * @returns {Promise<BuildResult>}
  */
@@ -47,11 +62,14 @@ export async function build(options = /** @type {BuildOptions} */ ({})) {
   if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('build() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !BUILD_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`build() takes no option ${unknownKey}`);
-  const { entry, out, banner = true, write = true } = options;
+  const { entry, out, banner = true, check = false } = options;
+  const { write = !check } = options;
   if (typeof entry !== 'string' || entry === '') throw new UsageError('build() needs entry, the path of an entry file');
   if (typeof out !== 'string' || out === '') throw new UsageError('build() needs out, the path of the built script');
   if (typeof banner !== 'boolean') throw new UsageError('build() takes banner as a boolean');
   if (typeof write !== 'boolean') throw new UsageError('build() takes write as a boolean');
+  if (typeof check !== 'boolean') throw new UsageError('build() takes check as a boolean');
+  if (check && write) throw new UsageError('build() writes nothing with check, so it takes no write: true');
 
   const entryFile = await findEntryFile(entry);
   const outFile = resolve(out);
@@ -62,7 +80,7 @@ export async function build(options = /** @type {BuildOptions} */ ({})) {
   const [, ...importedFiles] = sources.keys();
   const sourceFiles = [...new Set([entryFile, ...parts, ...importedFiles])];
   await checkOutFile(outFile, out, sourceFiles);
-  const bannerPath = banner ? formatForwardSlashes(relative(await findRealFolder(dirname(outFile)), entryFile)) : null;
+  const bannerPath = banner ? formatForwardSlashes(relative(await findRealPath(dirname(outFile)), entryFile)) : null;
   if (bannerPath !== null && isAbsolute(bannerPath)) {
     throw new UsageError(`The out file ${out} is on another drive than the entry, so the banner cannot name the entry by a relative path`);
   }
@@ -75,16 +93,46 @@ export async function build(options = /** @type {BuildOptions} */ ({})) {
     ...finding,
     file: formatSourcePath(finding.file),
   }));
-  if (findings.length > 0) return { ok: false, script: null, sources: sourcePaths, findings };
+  if (findings.length > 0) return { ok: false, status: 'failed', script: null, sources: sourcePaths, findings };
 
   const entryFolder = dirname(entryFile);
   const joinedSources = order.map((file) => ({ ...sources.get(file), path: formatForwardSlashes(relative(entryFolder, file)) }));
-  const script = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
+  const { script, lineOrigins } = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
 
   compileBuiltScript(script, entrySource.analysis.metaEnd);
+  if (check) {
+    const comparison = await compareOutFile(outFile, script, lineOrigins, formatSourcePath);
+    return { ok: true, ...comparison, script, sources: sourcePaths, findings: [] };
+  }
   if (write) await writeScript(outFile, script);
 
-  return { ok: true, script, sources: sourcePaths, findings: [] };
+  return { ok: true, status: write ? 'written' : 'built', script, sources: sourcePaths, findings: [] };
+}
+
+/**
+ * @param {string} outFile
+ * @param {string} script
+ * @param {import('./join-modules.js').LineOrigin[]} lineOrigins
+ * @param {(file: string) => string} formatSourcePath
+ * @returns {Promise<{ status: 'fresh' | 'stale' | 'missing', firstDifference?: FirstDifference }>}
+ */
+async function compareOutFile(outFile, script, lineOrigins, formatSourcePath) {
+  let diskBytes = null;
+
+  try {
+    diskBytes = await readFile(outFile);
+  } catch (error) {
+    if (MISSING_FILE_CODES.has(error.code)) return { status: 'missing' };
+    throw error;
+  }
+  const line = findDifferentLine(Buffer.from(script, 'utf8'), diskBytes);
+  if (line === null) return { status: 'fresh' };
+  const origin = lineOrigins[line - 1];
+
+  return {
+    status: 'stale',
+    firstDifference: { line, file: origin.file === null ? null : formatSourcePath(origin.file), sourceLine: origin.line },
+  };
 }
 
 /**
@@ -154,26 +202,6 @@ async function checkOutFolder(outFile, out) {
     folderStats = await statIfExists(folder);
   }
   if (folderStats !== null && !folderStats.isDirectory()) throw new UsageError(`The out path ${out} is inside a file`);
-}
-
-/**
- * @param {string} folder A folder that may not exist yet, below a folder that exists.
- * @returns {Promise<string>} The real path of its nearest existing folder, joined with the rest of the path.
- */
-async function findRealFolder(folder) {
-  let existingFolder = folder;
-  let realFolder = null;
-
-  while (realFolder === null) {
-    try {
-      realFolder = await realpath(existingFolder);
-    } catch (error) {
-      if (!MISSING_FILE_CODES.has(error.code) || dirname(existingFolder) === existingFolder) throw error;
-      existingFolder = dirname(existingFolder);
-    }
-  }
-
-  return join(realFolder, relative(existingFolder, folder));
 }
 
 /**

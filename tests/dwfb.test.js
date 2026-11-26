@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const COMMAND = fileURLToPath(new URL('../bin/dwfb.js', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const MODULES_ENTRY = join(FIXTURES, 'modules', 'entry.js');
+const CONFIG_FIXTURES = join(FIXTURES, 'config');
 const PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
 const temporaryFolders = [];
@@ -54,7 +55,8 @@ describe('dwfb', () => {
     assert.equal(main.status, 0);
     assert.match(main.stdout, /^Usage: dwfb <command>/);
     assert.equal(buildHelp.status, 0);
-    assert.match(buildHelp.stdout, /^Usage: dwfb build <entry> --out <file>/);
+    assert.match(buildHelp.stdout, /^Usage: dwfb build \[<entry>\] \[--out <file>\]/);
+    assert.match(buildHelp.stdout, /--config <path> {3}Read this config file in place of dwfb\.config\.js\./);
   });
 
   it('prints usage to stderr and exits 2 with no command, an unknown command or an unknown option', () => {
@@ -184,12 +186,18 @@ describe('dwfb build', () => {
     );
   });
 
-  it('exits 2 for a missing entry, a missing --out, two entries, an empty entry and an --out that is a source', () => {
+  it('exits 2 for a missing entry, no --out and no config file, two entries, an empty entry, --out or --config, and an --out that is a source', () => {
     const cases = [
       { args: ['build', 'missing.js', '--out', 'out.js'], message: /does not exist/ },
-      { args: ['build', 'entry.js'], message: /--out <file>/ },
+      { args: ['build', 'entry.js'], message: /^dwfb build: No config file dwfb\.config\.js exists here, so name the built script with --out <file>\.\n$/ },
+      { args: ['build'], message: /^dwfb build: No config file dwfb\.config\.js exists here, so name an entry file\.\n$/ },
+      { args: ['build', '--check'], message: /No config file dwfb\.config\.js exists here/ },
       { args: ['build', 'entry.js', 'other.js', '--out', 'out.js'], message: /Name one entry file/ },
       { args: ['build', '', '--out', 'out.js'], message: /Name one entry file/ },
+      { args: ['build', 'entry.js', '--out', ''], message: /Name the built script with --out <file>/ },
+      { args: ['build', '--config', ''], message: /^dwfb build: Name the config file with --config <path>\.\n\nUsage: dwfb build/ },
+      { args: ['build', '--out', 'out.js'], message: /Name the entry file that --out builds/ },
+      { args: ['build', 'entry.js', '--out', 'out.js', '--config', 'dwfb.config.js'], message: /Name --out or --config, not both/ },
       { args: ['build', 'entry.js', '--out', 'lib/counter.js'], message: /is a source/ },
     ];
 
@@ -199,6 +207,24 @@ describe('dwfb build', () => {
       assert.equal(stdout, '');
       assert.match(stderr, message);
     }
+  });
+
+  it('names the command that rewrites a missing or differing script, with the paths and --no-banner of the check', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+
+    const missing = runCommand(['build', 'entry.js', '--out', 'my out.js', '--check', '--json'], folder);
+    const missingText = runCommand(['build', join(folder, 'entry.js'), '--out', 'my out.js', '--check'], folder);
+    const missingParenthesis = runCommand(['build', 'entry.js', '--out', 'out(1).js', '--check'], folder);
+    runCommand(['build', 'entry.js', '--out', 'my out.js'], folder);
+    const stale = runCommand(['build', 'entry.js', '--out', 'my out.js', '--no-banner', '--check'], folder);
+
+    assert.equal(missing.status, 1);
+    assert.equal(JSON.parse(missing.stdout).workflows[0].status, 'missing');
+    assert.deepEqual(missingText, { status: 1, stdout: 'my out.js does not exist. Run dwfb build entry.js --out "my out.js".\n', stderr: '' });
+    assert.equal(missingParenthesis.stdout, 'out(1).js does not exist. Run dwfb build entry.js --out "out(1).js".\n');
+    assert.equal(stale.status, 1);
+    assert.match(stale.stdout, /^my out\.js:2 differs from the script the build gives\. .* Run dwfb build entry\.js --out "my out\.js" --no-banner\.\n$/);
   });
 
   it('names the file and the cause of a file system failure, exits 2 and prints no stack', async (context) => {
@@ -217,6 +243,258 @@ describe('dwfb build', () => {
       assert.deepEqual({ status, stdout, stderr }, { status: 2, stdout: '', stderr: `dwfb build: Could not read or write ${failingFile} ${expected}.\n` });
     } finally {
       await chmod(join(folder, failingFile), 0o644);
+    }
+  });
+
+  it('names the out file and the cause when --check cannot read it, and exits 2', async (context) => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n');
+    await writeFile(join(folder, 'out.js'), '');
+    if (process.platform === 'win32') return context.skip('Windows reads every file that chmod changes');
+    if (process.getuid?.() === 0) return context.skip('root reads every file');
+    await chmod(join(folder, 'out.js'), 0o000);
+
+    try {
+      const { status, stdout, stderr } = runCommand(['build', 'entry.js', '--out', 'out.js', '--check'], folder);
+      assert.deepEqual({ status, stdout, stderr }, { status: 2, stdout: '', stderr: 'dwfb build: Could not read or write out.js (open EACCES).\n' });
+    } finally {
+      await chmod(join(folder, 'out.js'), 0o644);
+    }
+  });
+});
+
+describe('dwfb build with a config file', () => {
+  /**
+   * Copies the config project fixture into a temporary folder, so that its builds write there.
+   * @returns {Promise<string>}
+   */
+  async function copyProjectFixture() {
+    const folder = await makeTemporaryFolder();
+    await cp(join(CONFIG_FIXTURES, 'project'), folder, { recursive: true });
+    return folder;
+  }
+
+  it('builds every workflow of the config file, in order', async () => {
+    const folder = await copyProjectFixture();
+
+    const { status, stdout, stderr } = runCommand(['build'], folder);
+    const review = await readFile(join(folder, 'dist', 'review.js'), 'utf8');
+    const summary = await readFile(join(folder, 'dist', 'summary.js'), 'utf8');
+
+    assert.deepEqual({ status, stderr }, { status: 0, stderr: '' });
+    assert.equal(stdout, `Built dist/review.js from 3 source files, ${Buffer.byteLength(review)} bytes.\nBuilt dist/summary.js from 2 source files, ${Buffer.byteLength(summary)} bytes.\n`);
+    assert.match(review, /^\/\/ Built by dynamic-workflow-bundler from \.\.\/workflows\/review\/entry\.js\./m);
+    assert.doesNotMatch(summary, /Built by dynamic-workflow-bundler/);
+  });
+
+  it('finds a script stale after a source edit, names it and maps its first differing line to the edited source line', async () => {
+    const folder = await copyProjectFixture();
+    runCommand(['build'], folder);
+    const fresh = runCommand(['build', '--check'], folder);
+    const checklist = join(folder, 'workflows', 'review', 'checklist.md');
+    await writeFile(checklist, (await readFile(checklist, 'utf8')).replace('Each message', 'Every message'));
+    const built = (await readFile(join(folder, 'dist', 'review.js'), 'utf8')).split('\n');
+    const builtLine = built.indexOf('- Each message names its cause.') + 1;
+
+    const stale = runCommand(['build', '--check'], folder);
+    const json = runCommand(['build', '--check', '--json'], folder);
+
+    assert.deepEqual(fresh, { status: 0, stdout: 'dist/review.js matches its source.\ndist/summary.js matches its source.\n', stderr: '' });
+    assert.equal(stale.status, 1);
+    assert.equal(
+      stale.stdout,
+      `dist/review.js:${builtLine} differs from the script the build gives. The line comes from workflows/review/checklist.md:2. Run dwfb build.\ndist/summary.js matches its source.\n`,
+    );
+    assert.equal(json.status, 1);
+    assert.deepEqual(
+      JSON.parse(json.stdout).workflows.map(({ out, status, firstDifference }) => ({ out, status, firstDifference })),
+      [
+        { out: 'dist/review.js', status: 'stale', firstDifference: { line: builtLine, file: 'workflows/review/checklist.md', sourceLine: 2 } },
+        { out: 'dist/summary.js', status: 'fresh', firstDifference: undefined },
+      ],
+    );
+    assert.equal(JSON.parse(json.stdout).ok, false);
+    assert.equal(await readFile(join(folder, 'dist', 'review.js'), 'utf8'), built.join('\n'));
+  });
+
+  it('reports a missing script and a workflow with a finding, and builds the workflows after the finding', async () => {
+    const folder = await copyProjectFixture();
+    await writeFile(join(folder, 'workflows', 'review', 'prompts.js'), 'export let reviewPrompt = () => "";\n');
+
+    const checked = runCommand(['build', '--check'], folder);
+    const built = runCommand(['build', '--json'], folder);
+
+    assert.equal(checked.status, 1);
+    assert.equal(
+      checked.stdout,
+      `workflows/review/prompts.js:1:1 export-not-constant The module exports a let binding. Export a const, and keep state that changes in an exported object or function.\ndist/summary.js does not exist. Run dwfb build.\n`,
+    );
+    assert.equal(built.status, 1);
+    assert.deepEqual(JSON.parse(built.stdout).workflows.map(({ status }) => status), ['failed', 'written']);
+    assert.deepEqual(await readdir(join(folder, 'dist')), ['summary.js']);
+  });
+
+  it('names the --config file in the command that rewrites a missing script', async () => {
+    const folder = await copyProjectFixture();
+
+    const { status, stdout } = runCommand(['build', '--config', 'dwfb.config.js', '--check'], folder);
+
+    assert.equal(status, 1);
+    assert.equal(stdout, 'dist/review.js does not exist. Run dwfb build --config dwfb.config.js.\ndist/summary.js does not exist. Run dwfb build --config dwfb.config.js.\n');
+  });
+
+  it('exits 2 and writes nothing when one workflow writes a source of another workflow', async () => {
+    const folder = await makeTemporaryFolder();
+    const library = 'export const a = 1;\n';
+    await mkdir(join(folder, 'w'));
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'w', 'b.js'), "export const meta = {};\nimport { a } from './lib.js';\nreturn a;\n");
+    await writeFile(join(folder, 'w', 'lib.js'), library);
+    await writeFile(join(folder, 'w', 'a.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'w/b.js', out: 'dist/b.js' }, { entry: 'w/a.js', out: 'w/lib.js' }] };\n");
+    const expected = {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb build: The out file w/lib.js of the workflow whose entry is w/a.js is a source of the workflow whose entry is w/b.js.\n',
+    };
+
+    const built = runCommand(['build'], folder);
+    const checked = runCommand(['build', '--check'], folder);
+
+    assert.deepEqual(built, expected);
+    assert.deepEqual(checked, expected);
+    assert.equal(await readFile(join(folder, 'w', 'lib.js'), 'utf8'), library);
+    assert.ok(!(await readdir(folder)).includes('dist'));
+  });
+
+  it('exits 2 and writes nothing when two workflows write one file through a link that the out file is not in yet', async () => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'dist'));
+    await symlink(join(folder, 'dist'), join(folder, 'linked'), 'junction');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'b.js'), 'export const meta = {};\nreturn 2;\n');
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'dist/out.js' }, { entry: 'b.js', out: 'linked/Out.js' }] };\n");
+    const expected = {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb build: The out file linked/Out.js of the workflow whose entry is b.js names the same file as the out file dist/out.js of the workflow whose entry is a.js.\n',
+    };
+
+    const built = runCommand(['build'], folder);
+    const checked = runCommand(['build', '--check'], folder);
+
+    assert.deepEqual(built, expected);
+    assert.deepEqual(checked, expected);
+    assert.deepEqual(await readdir(join(folder, 'dist')), []);
+  });
+
+  it('says that a config file lists no workflow, and exits 0', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'dwfb.config.js'), 'export default { workflows: [] };\n');
+
+    const text = runCommand(['build', '--check'], folder);
+    const json = runCommand(['build', '--json'], folder);
+
+    assert.deepEqual(text, { status: 0, stdout: 'The config file dwfb.config.js lists no workflow.\n', stderr: '' });
+    assert.equal(json.status, 0);
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, workflows: [] });
+  });
+
+  it('builds the workflow of a named entry, and lets --no-banner win over the config file', async () => {
+    const folder = await copyProjectFixture();
+
+    const { status, stdout } = runCommand(['build', join('workflows', 'review', 'entry.js'), '--no-banner'], folder);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Built dist\/review\.js from 3 source files/);
+    assert.deepEqual(await readdir(join(folder, 'dist')), ['review.js']);
+    assert.doesNotMatch(await readFile(join(folder, 'dist', 'review.js'), 'utf8'), /Built by dynamic-workflow-bundler/);
+  });
+
+  it('reads the config file that --config names, with paths relative to its folder', async () => {
+    const folder = await copyProjectFixture();
+    await mkdir(join(folder, 'elsewhere'));
+
+    const { status, stderr } = runCommand(['build', '--config', join('..', 'dwfb.config.js')], join(folder, 'elsewhere'));
+
+    assert.deepEqual({ status, stderr }, { status: 0, stderr: '' });
+    assert.deepEqual((await readdir(join(folder, 'dist'))).sort(), ['review.js', 'summary.js']);
+  });
+
+  it('reads no config file with --out', async () => {
+    const folder = await copyProjectFixture();
+    await writeFile(join(folder, 'dwfb.config.js'), 'export default {\n');
+
+    const { status } = runCommand(['build', join('workflows', 'review', 'entry.js'), '--out', 'review.js'], folder);
+
+    assert.equal(status, 0);
+    assert.ok((await readdir(folder)).includes('review.js'));
+  });
+
+  it('exits 2 for an entry that no workflow of the config file has, and for a --config file that does not exist', async () => {
+    const folder = await copyProjectFixture();
+
+    const noWorkflow = runCommand(['build', join('workflows', 'review', 'prompts.js')], folder);
+    const noConfig = runCommand(['build', '--config', 'other.config.js'], folder);
+
+    assert.deepEqual(noWorkflow, {
+      status: 2,
+      stdout: '',
+      stderr: `dwfb build: The config file dwfb.config.js has no workflow whose entry is ${join('workflows', 'review', 'prompts.js')}.\n`,
+    });
+    assert.deepEqual(noConfig, { status: 2, stdout: '', stderr: 'dwfb build: The config file other.config.js does not exist.\n' });
+  });
+
+  it('names the recovery for a config file that loads as CommonJS, and no absolute path for a missing import', () => {
+    const commonJs = runCommand(['build'], join(CONFIG_FIXTURES, 'commonjs-package'));
+    const importMissing = runCommand(['build'], join(CONFIG_FIXTURES, 'import-missing'));
+
+    assert.equal(commonJs.status, 2);
+    assert.match(
+      commonJs.stderr,
+      /\ndwfb build: The config file dwfb\.config\.js does not load\. Unexpected token 'export'\. If the file is an ES module, set "type": "module" in the nearest package\.json, or name a \.mjs config file with --config\.\n$/,
+    );
+    assert.deepEqual(importMissing, {
+      status: 2,
+      stdout: '',
+      stderr: "dwfb build: The config file dwfb.config.js does not load. Cannot find module 'missing.js' imported from dwfb.config.js.\n",
+    });
+  });
+
+  it('writes no script when a later workflow has a usage error', async () => {
+    const folder = await copyProjectFixture();
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'workflows/review/entry.js', out: 'dist/review.js' }, { entry: 'workflows/missing.js', out: 'dist/missing.js' }] };\n");
+
+    const { status, stdout, stderr } = runCommand(['build', '--json'], folder);
+
+    assert.deepEqual({ status, stdout, stderr }, { status: 2, stdout: '', stderr: 'dwfb build: The entry file workflows/missing.js does not exist.\n' });
+    assert.ok(!(await readdir(folder)).includes('dist'));
+  });
+
+  it('names the working directory as . for a config file entry or out that is the working directory', async () => {
+    const folder = await copyProjectFixture();
+    await writeFile(join(folder, 'out.config.js'), "export default { workflows: [{ entry: 'workflows/review/entry.js', out: '.' }] };\n");
+    await writeFile(join(folder, 'entry.config.js'), "export default { workflows: [{ entry: '.', out: 'dist/review.js' }] };\n");
+
+    const outFolder = runCommand(['build', '--config', 'out.config.js'], folder);
+    const entryFolder = runCommand(['build', '--config', 'entry.config.js'], folder);
+
+    assert.deepEqual(outFolder, { status: 2, stdout: '', stderr: 'dwfb build: The out path . is not a file.\n' });
+    assert.deepEqual(entryFolder, { status: 2, stdout: '', stderr: 'dwfb build: The entry . is not a file.\n' });
+  });
+
+  it('prints what is wrong and exits 2 for each config file fixture of a usage error', async () => {
+    // Node prints its own warning to stderr ahead of the message for a config file that loads as CommonJS.
+    const names = (await readdir(CONFIG_FIXTURES)).filter((name) => name !== 'project' && name !== 'commonjs-package');
+
+    assert.ok(names.length >= 10);
+    for (const name of names) {
+      const { status, stdout, stderr } = runCommand(['build'], join(CONFIG_FIXTURES, name));
+      assert.equal(status, 2, name);
+      assert.equal(stdout, '', name);
+      assert.match(stderr, /^dwfb build: (The config file|Workflows? \d+(?: and \d+)? of the config file) dwfb\.config\.js [^\n]+\.\n$/, name);
     }
   });
 });
