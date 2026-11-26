@@ -21,6 +21,9 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | text file | A file that is not JavaScript, imported as a string. |
 | part | A source file joined into the script as text, in a stated order. |
 | build | To write a workflow script from its source. The result is the built script. |
+| scope | The function scope that holds one module's code in the built script. |
+| banner | The comment line after `meta` that names the entry a built script comes from. |
+| directive | A `// @include <path>` comment line in an entry, which names a part. |
 | contract | The rules the Workflow runtime enforces on a script. |
 | rule | One entry of the contract, with an id and the Claude Code version it was measured on. |
 | finding | One place where a script or a source breaks a rule. |
