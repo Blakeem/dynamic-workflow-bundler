@@ -89,7 +89,8 @@ const LOCATE_OPTIONS = Object.freeze({
 const VALIDATE_USAGE = `Usage: dwfb validate [<script>...] [options]
 
 Reports each rule of the Workflow runtime's contract that a workflow script breaks, as measured on
-Claude Code ${CONTRACT_RUNTIME_VERSION}. With no script, checks the out of every workflow of the config file.
+Claude Code ${CONTRACT_RUNTIME_VERSION}. With no script, checks the out of every workflow of the config file
+that does not set validate: false.
 
 Options:
   --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
@@ -253,7 +254,7 @@ function formatLocateText(result) {
  */
 async function runValidate(args) {
   let parsed = null;
-  let scripts = null;
+  let selection = null;
   const results = [];
 
   try {
@@ -273,16 +274,17 @@ async function runValidate(args) {
 
   // Every script is checked before any result prints, so a usage error in a later script prints no result.
   try {
-    scripts = positionals.length > 0 ? positionals : await findConfigScripts(values.config);
-    for (const script of scripts) results.push(await validate({ script }));
+    selection = positionals.length > 0 ? { scripts: positionals, skipped: [] } : await findConfigScripts(values.config);
+    for (const script of selection.scripts) results.push(await validate({ script }));
   } catch (error) {
     return printCommandFailure('dwfb validate', error);
   }
 
+  const { skipped } = selection;
   const isSuccess = results.every((result) => result.ok);
   const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
-  if (values.json) return printResult(`${JSON.stringify(formatValidateJson(results, isSuccess), null, 2)}\n`, exitCode);
-  return printResult(results.map(formatValidateText).join(''), exitCode);
+  if (values.json) return printResult(`${JSON.stringify(formatValidateJson(results, skipped, isSuccess), null, 2)}\n`, exitCode);
+  return printResult(`${results.map(formatValidateText).join('')}${skipped.map(formatSkippedText).join('')}`, exitCode);
 }
 
 /**
@@ -295,39 +297,56 @@ function formatValidateText(result) {
 }
 
 /**
+ * @param {string} out The out of a skipped workflow, as findConfigScripts gives it.
+ * @returns {string} The line a person reads for one skipped workflow.
+ */
+function formatSkippedText(out) {
+  return `Skipped ${out}, since its workflow sets validate: false.\n`;
+}
+
+/**
  * @param {import('../src/validate.js').ValidateResult[]} results In the order checked.
+ * @param {string[]} skipped The out of each skipped workflow, as findConfigScripts gives it.
  * @param {boolean} isSuccess
  * @returns {object} The `--json` shape, which is part of the public interface.
  */
-function formatValidateJson(results, isSuccess) {
+function formatValidateJson(results, skipped, isSuccess) {
   return {
     ok: isSuccess,
     runtime: CONTRACT_RUNTIME_VERSION,
     scripts: results.map(({ script, findings }) => ({ script, findings })),
+    skipped,
   };
 }
 
 /**
  * Finds the scripts one `dwfb validate` with no script checks: the out of each workflow of the config file,
- * in the order the config file lists them, relative to the working directory.
+ * in the order the config file lists them, relative to the working directory. A workflow with
+ * `validate: false` is skipped, so its out needs no file.
  * @param {string | undefined} configPath
- * @returns {Promise<string[]>}
+ * @returns {Promise<{ scripts: string[], skipped: string[] }>} The out of each checked and each skipped workflow.
+ *   A skipped out is relative to the working directory's real path, as validate() names a checked script.
  */
 async function findConfigScripts(configPath) {
   const commandConfig = await loadCommandConfig(configPath);
   const scripts = [];
+  const skipped = [];
 
   if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name a script, or name a config file with --config <path>`);
   for (const workflow of commandConfig.config.workflows) {
     const entry = formatDisplayPath(workflow.entry);
     const out = formatDisplayPath(workflow.out);
+    if (!workflow.validate) {
+      skipped.push(await formatRealDisplayPath(workflow.out));
+      continue;
+    }
     if (await isMissingFile(out)) {
       throw new UsageError(`The out file ${out} of the workflow whose entry is ${entry} does not exist, so run ${formatBuildCommand(entry, { config: configPath })}`);
     }
     scripts.push(out);
   }
 
-  return scripts;
+  return { scripts, skipped };
 }
 
 /**

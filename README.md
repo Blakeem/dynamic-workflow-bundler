@@ -150,7 +150,7 @@ $ dwfb validate .claude/workflows/review.js
 .claude/workflows/review.js:4:17 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.
 ```
 
-The command takes several scripts. With no script, it checks the `out` of each workflow of the config file, a workflow with `validate: false` included, and `--config <path>` names another config file. A script that breaks no rule gets one line that says so. The command exits 0 when no script breaks a rule and 1 when one does. `--json` prints the result as one JSON object.
+The command takes several scripts. With no script, it checks the `out` of each workflow of the config file, and `--config <path>` names another config file. It skips each workflow with `validate: false` and prints one line for each skipped workflow after the results. A script that the command names gets checked whatever the config file says. A script that breaks no rule gets one line that says so. The command exits 0 when no script breaks a rule and 1 when one does. `--json` prints the result as one JSON object, whose `skipped` lists the `out` of each skipped workflow.
 
 The command reads a script as the runtime does. A byte sequence that is not valid UTF-8 is read as U+FFFD, and the size limit counts the bytes of the file. A script larger than 2,097,152 bytes gets the `script-too-large` finding alone, since a check of its other rules may run out of memory.
 

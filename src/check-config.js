@@ -10,7 +10,8 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate']);
  * @property {string} entry The entry file's absolute path.
  * @property {string} out The built script's absolute path.
  * @property {boolean} banner Defaults to true.
- * @property {boolean} validate Whether the build checks the built script against the contract. Defaults to true.
+ * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
+ *   against the contract. Defaults to true.
  */
 
 /**

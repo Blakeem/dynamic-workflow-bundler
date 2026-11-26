@@ -35,6 +35,7 @@ const VALIDATE_ARGS = ['validate', 'x.js'];
 /** @param {string} rule */
 const validateFinding = (rule) => ({ args: VALIDATE_ARGS, exit: /** @type {const} */ (1), rule });
 const VALIDATED = { args: VALIDATE_ARGS, exit: /** @type {const} */ (0) };
+const SKIPPED_ONLY = /^Skipped out\/built\.js, since its workflow sets validate: false\.\n$/;
 
 /** @returns {Record<string, string>} An entry that imports a chain of modules, each of which imports the next. */
 function createImportChain() {
@@ -193,8 +194,25 @@ export const OUTCOME_CASES = [
     { args: ['validate'], exit: 0, message: /^out\/built\.js breaks no rule/ },
   ),
   createCase(
-    'validate a config file whose workflow with validate: false has an out that reads require',
+    'validate a config file whose every workflow has validate: false, with an out that reads require',
     { 'dwfb.config.js': formatConfig('validate: false'), 'package.json': MODULE_PACKAGE, 'entry.js': REQUIRE_ENTRY, 'out/built.js': REQUIRE_SCRIPT },
-    { args: ['validate'], exit: 1, rule: 'global-undefined' },
+    { args: ['validate'], exit: 0, message: SKIPPED_ONLY },
+  ),
+  createCase(
+    'validate a config file whose workflow with validate: false has no out',
+    { 'dwfb.config.js': formatConfig('validate: false'), 'package.json': MODULE_PACKAGE, 'entry.js': REQUIRE_ENTRY },
+    { args: ['validate'], exit: 0, message: SKIPPED_ONLY },
+  ),
+  createCase(
+    'validate a config file with one skipped and one checked workflow',
+    {
+      'dwfb.config.js': "export default { workflows: [{ entry: 'entry.js', out: 'out/built.js', validate: false }, { entry: 'other.js', out: 'out/other.js' }] };\n",
+      'package.json': MODULE_PACKAGE,
+      'entry.js': REQUIRE_ENTRY,
+      'out/built.js': REQUIRE_SCRIPT,
+      'other.js': META,
+      'out/other.js': META,
+    },
+    { args: ['validate'], exit: 0, message: /^out\/other\.js breaks no rule[^\n]*\nSkipped out\/built\.js, since its workflow sets validate: false\.\n$/ },
   ),
 ];

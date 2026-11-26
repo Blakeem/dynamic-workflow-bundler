@@ -792,9 +792,40 @@ describe('dwfb validate', () => {
           }],
         },
       ],
+      skipped: [],
     });
     assert.deepEqual({ status: config.status, stderr: config.stderr }, { status: 0, stderr: '' });
-    assert.deepEqual(JSON.parse(config.stdout), { ok: true, runtime: '2.1.332', scripts: [{ script: 'dist/review.js', findings: [] }, { script: 'dist/summary.js', findings: [] }] });
+    assert.deepEqual(JSON.parse(config.stdout), { ok: true, runtime: '2.1.332', scripts: [{ script: 'dist/review.js', findings: [] }, { script: 'dist/summary.js', findings: [] }], skipped: [] });
+  });
+
+  it('skips each workflow of the config file with validate: false, and checks a named script whatever the config file says', async () => {
+    const folder = await buildProjectFixture();
+    const skippedLine = 'Skipped dist/summary.js, since its workflow sets validate: false.\n';
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'workflows/review/entry.js', out: 'dist/review.js' }, { entry: 'workflows/summary/entry.js', out: 'dist/summary.js', validate: false }] };\n");
+    await writeFile(join(folder, 'dist', 'summary.js'), CLOCK_SCRIPT);
+
+    const json = runCommand(['validate', '--json'], folder);
+
+    assert.deepEqual(runCommand(['validate'], folder), { status: 0, stdout: `dist/review.js ${PASSED}\n${skippedLine}`, stderr: '' });
+    assert.deepEqual({ status: json.status, stderr: json.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, runtime: '2.1.332', scripts: [{ script: 'dist/review.js', findings: [] }], skipped: ['dist/summary.js'] });
+    assert.equal(runCommand(['validate', 'dist/summary.js'], folder).status, 1);
+  });
+
+  it('names a skipped out through a link as it names a checked script, by the real path', async () => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'target'));
+    await symlink(join(folder, 'target'), join(folder, 'dist'), 'junction');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = { name: "a", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'b.js'), 'export const meta = { name: "b", description: "d" };\nreturn 2;\n');
+    await writeFile(join(folder, 'target', 'a.js'), 'export const meta = { name: "a", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'dist/a.js' }, { entry: 'b.js', out: 'dist/b.js', validate: false }] };\n");
+
+    const json = runCommand(['validate', '--json'], folder);
+
+    assert.deepEqual({ status: json.status, stderr: json.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, runtime: '2.1.332', scripts: [{ script: 'target/a.js', findings: [] }], skipped: ['target/b.js'] });
   });
 
   it('exits 2 and prints no result for each usage error', async () => {
