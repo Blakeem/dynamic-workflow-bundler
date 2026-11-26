@@ -13,7 +13,7 @@ Status is one of `planned`, `building` or `done`.
 
 | Item | Command | Scope | Status |
 |---|---|---|---|
-| Bundle | `dwfb build`, `dwfb locate` | Build one workflow script from an entry, modules, text files and parts. `--check` reports a built script that no longer matches its source. `locate` maps a line of the built script to its source line. | planned |
+| Bundle | `dwfb build`, `dwfb locate` | Build one workflow script from an entry, modules, text files and parts. `--check` reports a built script that no longer matches its source. `locate` maps a line of the built script to its source line. | building |
 | Contract check | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
 | Simulator | `dwfb simulate` | Run a script against a scenario with no model call, under the same limits as the runtime. | planned |
 | Trace and inspector | `dwfb inspect` | Record every call of a simulation. Show one call's prompt, schema and return, and step through the calls in order. | planned |

@@ -7,14 +7,14 @@ is one long script, and two workflows cannot share code. This tool removes that 
 
 **Status:** in development and not yet on npm. The [roadmap](docs/roadmap.md) lists what is built.
 
-## Planned commands
+## Commands
 
-| Command | Purpose |
-|---|---|
-| `dwfb build` | Build one workflow script from an entry, modules and text files. |
-| `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. |
-| `dwfb simulate` | Run a script against scripted agent returns, with no model call. |
-| `dwfb inspect` | Show what each agent of a simulation received and returned. |
+| Command | Purpose | Status |
+|---|---|---|
+| `dwfb build` | Build one workflow script from an entry, modules and text files. | planned |
+| `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
+| `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
+| `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
 
 ## License
 

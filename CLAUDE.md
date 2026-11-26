@@ -39,7 +39,7 @@ Add a row before a new concept gets a name in code.
   file, export or option name. Say "Claude Code" only in plain descriptive text.
 - **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`. A new command takes
   a verb that no existing command could be mistaken for.
-- **The library exports the same verbs** as functions: `build()`, `validate()`, `simulate()`.
+- **The library exports each command's verb** as a function, such as `build()` and `locate()`.
 - **Options are full words in kebab-case:** `--out`, `--check`, `--json`. A one-letter alias exists only for
   an option typed in most invocations.
 - **Files are kebab-case `.js`.** One job per file. A file is named for the thing it holds, such as
