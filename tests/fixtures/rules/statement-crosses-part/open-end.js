@@ -1,0 +1,1 @@
+const logged = log

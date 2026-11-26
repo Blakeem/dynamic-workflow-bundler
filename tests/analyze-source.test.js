@@ -20,7 +20,21 @@ const RULE_CASES = [
   { rule: 'entry-export', isEntry: true, breaking: `${META}export const other = 1;\n`, passing: `${META}const other = 1;\n` },
   { rule: 'entry-export', isEntry: true, breaking: `${META}export {};\n`, passing: `${META}({});\n` },
   { rule: 'import-not-relative', isEntry: false, breaking: "import 'lib/a.js';\n", passing: "import './lib/a.js';\n" },
-  { rule: 'import-not-module', isEntry: false, breaking: "import './a.json';\n", passing: "import './a.mjs';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import { a } from './a.md';\n", passing: "import a from './a.md';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import * as a from './a.json';\n", passing: "import a from './a.json';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import { default as a } from './a.json';\n", passing: "import a from './a.json';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import a, { b } from './a.js' with { type: 'text' };\n", passing: "import a, { b } from './a.js';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import './setup';\n", passing: "import './setup.js';\n" },
+  { rule: 'import-not-default', isEntry: false, breaking: "import './a.json';\n", passing: "import a from './a.json';\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.JSON';\n", passing: "import a from './a.json';\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import { a } from './a.JS';\n", passing: "import { a } from './a.js';\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.cjs';\n", passing: "import a from './a.cjs' with { type: 'text' };\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.ts';\n", passing: "import a from './a.ts' with { type: 'text' };\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.mts';\n", passing: "import a from './a.mts.md';\n" },
+  { rule: 'import-ending-unknown', isEntry: false, breaking: "import a from './a.wasm';\n", passing: "import a from './a.wasm' with { type: 'text' };\n" },
+  { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.md' with { type: 'css' };\n", passing: "import a from './a.md' with { type: 'text' };\n" },
+  { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.json' with { mode: 'json' };\n", passing: "import a from './a.json' with { 'type': 'json' };\n" },
+  { rule: 'include-misplaced', isEntry: false, breaking: '// @include ./a.js\n', passing: '// @included by ./a.js\n' },
   { rule: 'import-dynamic', isEntry: false, breaking: "export const load = () => import('./a.js');\n", passing: "export const load = () => 'import(./a.js)';\n" },
   { rule: 'import-meta', isEntry: false, breaking: 'export const url = import.meta.url;\n', passing: 'export const url = null;\n' },
   { rule: 'export-not-constant', isEntry: false, breaking: 'export let count = 0;\n', passing: 'export const count = 0;\n' },
@@ -39,8 +53,6 @@ const RULE_CASES = [
   { rule: 'reserved-name', isEntry: false, breaking: 'export const o = __dwfb_x.y;\n', passing: 'export const o = x.__dwfb_y;\n' },
   { rule: 'reserved-name', isEntry: false, breaking: "import { __dwfb_x } from './a.js';\n", passing: "import { __dwfb_x as x } from './a.js';\nexport { x as __dwfb_y };\n" },
   { rule: 'reserved-name', isEntry: false, breaking: 'const { __dwfb_x } = o;\n', passing: '__dwfb_x: for (const { __dwfb_y: y } of []) break __dwfb_x;\n' },
-  { rule: 'reserved-name', isEntry: true, breaking: `${META}import './a.js';\nconst Object = 1;\n`, passing: `${META}const Object = 1;\n` },
-  { rule: 'reserved-name', isEntry: true, breaking: `${META}import './a.js';\nclass Symbol {}\n`, passing: `${META}class Symbol {}\n` },
 ];
 
 /**
@@ -66,6 +78,17 @@ describe('analyzeSource rules', () => {
     assert.deepEqual(listRules('const __dwfb_x = 1;\nexport { __dwfb_x };\n', false), ['reserved-name', 'reserved-name']);
   });
 
+  it('reports statement-crosses-part for a statement that runs on across the start of a part, and not for one a semicolon ends', () => {
+    const listPartRules = (text) => {
+      const start = text.indexOf('(a)');
+      const part = { file: '/work/part.js', start, end: start + 4, firstLine: 3, lineCount: 1, directiveStart: start, directiveEnd: start + 4 };
+      return analyzeSource(text, '/work/entry.js', true, true, [part]).findings.map((finding) => `${finding.rule} ${finding.line}`);
+    };
+
+    assert.deepEqual(listPartRules(`${META}const a = 1\n(a)\n`), ['statement-crosses-part 3']);
+    assert.deepEqual(listPartRules(`${META}const a = 1;\n(a)\n`), []);
+  });
+
   it('allows code on the meta line of an entry that imports nothing', () => {
     assert.deepEqual(listRules('export const meta = {}; log(1);\n', true), []);
   });
@@ -87,6 +110,25 @@ describe('analyzeSource reads', () => {
     assert.deepEqual(analysis.exports.map((record) => `${record.exported}:${record.local}`), ['e:e', 'f:f', 'g:e', `default:${DEFAULT_EXPORT_LOCAL}`]);
   });
 
+  it('reads what each import names from its type attribute, or else from the ending of its specifier', () => {
+    const text = [
+      "import a from './a.js';",
+      "import b from './b.mjs';",
+      "import c from './c.json';",
+      "import d from './d.md';",
+      "import e from './e';",
+      "import f from './f.js' with { type: 'text' };",
+      "import g from './g.txt' with { type: 'json' };",
+      "import h from './h.CJS' with { type: 'text' };",
+      "import i from './i.jsx';",
+      '',
+    ].join('\n');
+    const { imports, findings } = analyzeSource(text, '/work/file.js', false);
+
+    assert.deepEqual(findings, []);
+    assert.deepEqual(imports.map((record) => record.kind), ['module', 'module', 'json', 'text', 'text', 'text', 'json', 'text', 'text']);
+  });
+
   it('keeps the parentheses of a default value inside the rewritten statement', () => {
     const text = 'export default ({ a: 1 });\n';
     const { edits } = analyzeSource(text, '/work/file.js', false);
@@ -99,9 +141,23 @@ describe('analyzeSource reads', () => {
     const entry = analyzeSource(`${META}import { a } from './a.js';\nlet b;\nif (true) { var c; let d; }\n`, '/work/entry.js', true, true);
     const module = analyzeSource('const a = 1;\nexport function f(b) { return a + b + c + log; }\n', '/work/module.js', false);
 
-    assert.deepEqual(entry.topLevelNames.sort(), ['a', 'b', 'c', 'meta']);
+    assert.deepEqual(entry.topLevelNames.sort(), ['a', 'b', 'c']);
     assert.deepEqual(entry.freeNames, []);
     assert.deepEqual(module.freeNames.map((freeName) => freeName.name), ['c', 'log']);
     assert.deepEqual(module.topLevelNames, []);
+  });
+
+  it('lists each top-level declaration of a global that the code the build adds reads, in an entry only', () => {
+    const text = `${META}const Object = 1;\nif (true) { var JSON; let Symbol; }\nclass Symbol {}\n{ const JSON = 1; }\n`;
+    const entry = analyzeSource(text, '/work/entry.js', true, true);
+    const module = analyzeSource('const Object = 1;\n', '/work/module.js', false);
+
+    assert.deepEqual(entry.buildGlobalDeclarations, [
+      { name: 'Object', offset: text.indexOf('const Object') },
+      { name: 'JSON', offset: text.indexOf('if (true)') },
+      { name: 'Symbol', offset: text.indexOf('class Symbol') },
+    ]);
+    assert.deepEqual(entry.findings, []);
+    assert.deepEqual(module.buildGlobalDeclarations, []);
   });
 });

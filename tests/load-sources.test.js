@@ -12,7 +12,7 @@ after(async () => {
 });
 
 /**
- * @param {Record<string, string>} texts Each file's text by its name.
+ * @param {Record<string, string | Buffer>} texts Each file's text or bytes by its name.
  * @returns {Promise<string>} The real path of the folder.
  */
 async function writeFolder(texts) {
@@ -48,6 +48,48 @@ describe('loadSources', () => {
     assert.deepEqual(present.findings, []);
   });
 
+  it('reports source-encoding-invalid for an entry, a part and an imported file that are not valid UTF-8', async () => {
+    const windows1252Text = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    const folder = await writeFolder({
+      'entry.js': "export const meta = {};\n// @include ./part.js\nimport note from './note.txt';\nimport './module.js';\nimport settings from './settings.json';\nlog(note, settings);\n",
+      'other.js': Buffer.concat([Buffer.from("export const meta = {};\nlog('caf"), Buffer.from([0xe9]), Buffer.from("');\n")]),
+      'part.js': Buffer.from('﻿log(1);\n', 'utf16le'),
+      'note.txt': windows1252Text,
+      'module.js': Buffer.concat([Buffer.from("log('"), windows1252Text, Buffer.from("');\n")]),
+      'settings.json': Buffer.concat([Buffer.from('"'), Buffer.from([0xc3]), Buffer.from('"\n')]),
+    });
+
+    const imported = await loadSources(join(folder, 'entry.js'), true);
+    const entry = await loadSources(join(folder, 'other.js'), true);
+
+    assert.deepEqual(imported.findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      'source-encoding-invalid 2 The path "./part.js" names a file that is not valid UTF-8',
+      'source-encoding-invalid 3 The specifier "./note.txt" names a file that is not valid UTF-8',
+      'source-encoding-invalid 4 The specifier "./module.js" names a file that is not valid UTF-8',
+      'source-encoding-invalid 5 The specifier "./settings.json" names a file that is not valid UTF-8',
+    ]);
+    assert.deepEqual(imported.parts, []);
+    assert.deepEqual([...imported.sources.keys()], [join(folder, 'entry.js')]);
+    assert.deepEqual(entry.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['source-encoding-invalid', 1, 1]]);
+  });
+
+  it('reports include-twice for each module import of a part, and not for a text file import of one', async () => {
+    const folder = await writeFolder({
+      'entry.js': "export const meta = {};\n// @include ./shared.js\n// @include ./quoted.js\nimport './shared.js';\nimport source from './quoted.js' with { type: 'text' };\nimport './helper.js';\n",
+      'shared.js': 'log(1);\n',
+      'quoted.js': 'log(2);\n',
+      'helper.js': "import './shared.js';\n",
+    });
+
+    const { parts, findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${basename(finding.file)} ${finding.rule} ${finding.line} ${finding.message}`), [
+      'entry.js include-twice 4 The specifier "./shared.js" names a part of the entry, so its code would run twice',
+      'helper.js include-twice 1 The specifier "./shared.js" names a part of the entry, so its code would run twice',
+    ]);
+    assert.deepEqual(parts, [join(folder, 'shared.js'), join(folder, 'quoted.js')]);
+  });
+
   it('reports import-not-found for a specifier with a malformed percent escape or an encoded NUL', async () => {
     const folder = await writeFolder({ 'entry.js': "export const meta = {};\nimport './100%.js';\nimport './a%00.js';\n" });
 
@@ -70,6 +112,30 @@ describe('loadSources', () => {
     assert.match(findings[0].message, /holds a query or a fragment/);
     assert.match(findings[2].message, isCaseInsensitive ? /differs in letter case/ : /No file exists/);
     assert.deepEqual([...sources.keys()], [join(folder, 'entry.js'), join(folder, 'a.js')]);
+  });
+
+  it('reports include-not-found for a directive path with a backslash, a root or another letter case', async () => {
+    const folder = await writeFolder({ 'part.js': 'log(1);\n' });
+    await mkdir(join(folder, 'steps'));
+    await writeFile(join(folder, 'steps', 'part.js'), 'log(2);\n');
+    const absolutePart = join(folder, 'part.js').split('\\').join('/');
+    await writeFile(
+      join(folder, 'entry.js'),
+      `export const meta = {};\n// @include .\\part.js\n// @include ${absolutePart}\n// @include C:part.js\n// @include ./Steps/part.js\n// @include ./PART.js\n// @include steps/part.js\n`,
+    );
+    const isCaseInsensitive = await realpath(join(folder, 'PART.js')).then(() => true, () => false);
+    const otherCaseMessage = (path) => (isCaseInsensitive ? `The path "${path}" differs in letter case from the file it names` : `No file exists at "${path}"`);
+
+    const { parts, findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      'include-not-found 2 The path ".\\\\part.js" holds a backslash, which only Windows reads as a folder separator',
+      `include-not-found 3 The path "${absolutePart}" is not relative to the entry's folder`,
+      'include-not-found 4 The path "C:part.js" is not relative to the entry\'s folder',
+      `include-not-found 5 ${otherCaseMessage('./Steps/part.js')}`,
+      `include-not-found 6 ${otherCaseMessage('./PART.js')}`,
+    ]);
+    assert.deepEqual(parts, [join(folder, 'steps', 'part.js')]);
   });
 
   it('reads a module through a link whose stored target differs in letter case from its folder, and refuses a specifier that misspells the link', async (context) => {

@@ -1,11 +1,15 @@
 import { parse, tokenizer, tokTypes } from 'acorn';
 import { createFinding } from './finding.js';
+import { isIncludeComment } from './find-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
+import { formatSyntaxErrorReason, PARSE_OPTIONS } from './parse-source.js';
 import { isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
 
+/** @typedef {import('./expand-parts.js').IncludedPart} IncludedPart */
 /** @typedef {import('./finding.js').Finding} Finding */
 /** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */
+/** @typedef {'module' | 'text' | 'json'} SourceKind */
 
 /**
  * @typedef {object} ImportBinding
@@ -18,7 +22,9 @@ import { isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, li
  * @typedef {object} ImportRecord
  * @property {string} specifier
  * @property {number} offset The offset of the specifier.
- * @property {ImportBinding[]} bindings Empty for an import that only evaluates the module.
+ * @property {ImportBinding[]} bindings Empty for an import that only evaluates the module. For a text file
+ *   or a JSON file, at most one binding, of the name `default`.
+ * @property {SourceKind} kind What the import names.
  */
 
 /**
@@ -43,33 +49,43 @@ import { isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, li
 /**
  * @typedef {object} SourceAnalysis
  * @property {Finding[]} findings In source order.
- * @property {ImportRecord[]} imports The imports that name a module, in source order.
+ * @property {ImportRecord[]} imports The imports that name a source file with no finding, in source order.
  * @property {ExportRecord[]} exports
  * @property {Edit[]} edits In source order, with no overlap.
  * @property {number | null} metaEnd For an entry, the offset just after its meta statement.
- * @property {string[]} topLevelNames For an entry, the names its top level declares. Empty for a module.
+ * @property {string[]} topLevelNames For an entry, the names its top level declares after its meta statement.
+ *   Empty for a module.
  * @property {FreeName[]} freeNames For a module, the names it reads that none of its scopes declares, in
  *   source order. Empty for an entry.
+ * @property {BuildGlobalDeclaration[]} buildGlobalDeclarations For an entry, each top-level statement's
+ *   declaration of a name that BUILD_GLOBAL_READERS lists, in source order. Empty for a module.
+ */
+
+/**
+ * @typedef {object} BuildGlobalDeclaration
+ * @property {string} name
+ * @property {number} offset The offset of the statement that declares the name.
  */
 
 export const RESERVED_PREFIX = '__dwfb_';
 export const DEFAULT_EXPORT_LOCAL = `${RESERVED_PREFIX}default`;
-/** The globals that the scope code from formatScope in join-modules.js reads. */
-export const SCOPE_GLOBALS = Object.freeze(['Object', 'Symbol']);
+/**
+ * @type {Readonly<Record<string, SourceKind>>} Each global that the code the build adds reads, with the kind
+ * of source whose code reads it, from formatScope and formatJsonFile in join-modules.js.
+ */
+export const BUILD_GLOBAL_READERS = Object.freeze({ Object: 'module', Symbol: 'module', JSON: 'json' });
+/** @type {Readonly<Record<SourceKind, string>>} The word for each kind of source in a message. */
+export const SOURCE_KIND_NAMES = Object.freeze({ module: 'module', text: 'text file', json: 'JSON file' });
 
-// The runtime runs the body inside an async function (Claude Code 2.1.332), so a top-level return and await parse.
-// A probe parsed seven production workflow scripts of 20 KB to 344 KB with these options.
-const PARSE_OPTIONS = Object.freeze({
-  ecmaVersion: 'latest',
-  sourceType: 'module',
-  allowReturnOutsideFunction: true,
-  allowAwaitOutsideFunction: true,
-});
 const HASHBANG = '#!';
 // Acorn reads `<!--` in a module as code, where Node.js 24.22.1 refuses the module and a script reads a comment.
 const HTML_OPEN_COMMENT = '<!--';
 const RELATIVE_PREFIXES = ['./', '../'];
 const MODULE_ENDINGS = ['.js', '.mjs'];
+const JSON_ENDING = '.json';
+// Node.js 24.22.1 imports each ending as code or JSON and refuses it in another letter case, so none gives a string.
+const RUNTIME_CODE_ENDINGS = ['.js', '.mjs', '.cjs', '.json', '.ts', '.mts', '.cts', '.wasm', '.node'];
+const IMPORT_TYPES = new Set(['text', 'json']);
 const EXPORT_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration', 'ExportAllDeclaration']);
 // A class field value and a static block take the class or instance as `this`.
 const THIS_BINDING_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'PropertyDefinition', 'StaticBlock']);
@@ -82,10 +98,11 @@ const DECLARATION_TYPES = new Set(['FunctionDeclaration', 'ClassDeclaration']);
  * @param {string} file
  * @param {boolean} isEntry
  * @param {boolean} hasBanner For an entry, whether the build puts the banner line after its meta statement.
+ * @param {IncludedPart[]} [includes] For an entry, the parts that `text` holds in place of their directives.
  * @returns {SourceAnalysis}
  */
-export function analyzeSource(text, file, isEntry, hasBanner) {
-  const analysis = { findings: [], imports: [], exports: [], edits: [], metaEnd: null, topLevelNames: [], freeNames: [] };
+export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
+  const analysis = { findings: [], imports: [], exports: [], edits: [], metaEnd: null, topLevelNames: [], freeNames: [], buildGlobalDeclarations: [] };
   const liveLocals = new Set();
   const comments = [];
   const htmlCommentOffsets = [];
@@ -99,18 +116,25 @@ export function analyzeSource(text, file, isEntry, hasBanner) {
     program = parse(text, { ...PARSE_OPTIONS, onComment: comments, onToken });
   } catch (error) {
     if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') throw error;
-    addFinding('syntax-error', error.message.replace(/ \(\d+:\d+\)$/, ''), error.pos);
+    addFinding('syntax-error', formatSyntaxErrorReason(error), error.pos);
     return analysis;
   }
 
   for (const offset of htmlCommentOffsets) addFinding('syntax-error', `The file holds ${HTML_OPEN_COMMENT}, which an ES module does not allow`, offset);
   if (isEntry) analysis.metaEnd = checkMeta(program, text, comments, hasBanner, addFinding);
   if (isEntry && analysis.metaEnd !== null) checkMetaImports(program, addFinding);
-  if (isEntry) checkScopeGlobals(program, addFinding);
-  if (isEntry) analysis.topLevelNames = listTopLevelNames(program.body);
+  if (isEntry) analysis.buildGlobalDeclarations = listBuildGlobalDeclarations(program);
+  if (isEntry) checkPartBoundaries(program, includes, addFinding);
+  // The runtime compiles only the text after the meta statement (Claude Code 2.1.332), so its body binds no meta.
+  if (isEntry) analysis.topLevelNames = listTopLevelNames(analysis.metaEnd === null ? program.body : program.body.slice(1));
   if (!isEntry) analysis.freeNames = findFreeNames(program).map((identifier) => ({ name: identifier.name, offset: identifier.start }));
   if (!isEntry && text.startsWith(HASHBANG)) {
     addFinding('syntax-error', 'The module starts with a #! line, which is legal only at the start of a script', 0);
+  }
+  if (!isEntry) {
+    for (const comment of comments.filter(isIncludeComment)) {
+      addFinding('include-misplaced', 'The module holds a // @include comment, which only the entry may hold', comment.start);
+    }
   }
 
   for (const statement of program.body) {
@@ -136,9 +160,10 @@ export function analyzeSource(text, file, isEntry, hasBanner) {
 }
 
 /**
- * Checks that the entry opens with `export const meta = { ... }`. The build puts the banner and the module
- * scopes after the meta statement's last line, so when it puts a line there, no comment or literal may
- * span that line's break, and when the entry imports a module, no code may share that line.
+ * Checks that the entry opens with `export const meta = { ... }`. The build puts the banner, the text file
+ * and JSON file constants and the module scopes after the meta statement's last line, so when it puts a line
+ * there, no comment or literal may span that line's break, and when the entry imports a source file, no code
+ * may share that line.
  * @param {SyntaxNode} program
  * @param {string} text
  * @param {import('acorn').Comment[]} comments
@@ -209,19 +234,29 @@ function checkMetaImports(program, addFinding) {
 }
 
 /**
- * Module scopes run in the entry's top-level scope and read the globals SCOPE_GLOBALS names, so an entry
- * that imports a module may not declare one of them at its top level.
  * @param {SyntaxNode} program
+ * @returns {BuildGlobalDeclaration[]}
+ */
+function listBuildGlobalDeclarations(program) {
+  return program.body.flatMap((statement) => listTopLevelNames([statement])
+    .filter((name) => Object.hasOwn(BUILD_GLOBAL_READERS, name))
+    .map((name) => ({ name, offset: statement.start })));
+}
+
+/**
+ * A part's text joins the entry's code around it. A statement that runs across the line break where a
+ * part starts or ends, as `a` then `(b)` does without a semicolon, would read the two sides as one
+ * statement that neither side holds on its own.
+ * @param {SyntaxNode} program
+ * @param {IncludedPart[]} includes
  * @param {(rule: string, message: string, offset: number) => void} addFinding
  */
-function checkScopeGlobals(program, addFinding) {
-  const imports = program.body.filter((statement) => statement.type === 'ImportDeclaration');
-  if (imports.length === 0) return;
+function checkPartBoundaries(program, includes, addFinding) {
+  const boundaries = [...new Set(includes.flatMap((include) => [include.start, include.end]))];
 
   for (const statement of program.body) {
-    const declaredNames = listTopLevelNames([statement]);
-    for (const name of SCOPE_GLOBALS.filter((global) => declaredNames.includes(global))) {
-      addFinding('reserved-name', `The entry declares ${name} at its top level, where the module scopes read it`, statement.start);
+    for (const boundary of boundaries.filter((offset) => statement.start < offset && offset < statement.end)) {
+      addFinding('statement-crosses-part', 'A statement runs on into this line from the line above it in the built script, where a part starts or ends', boundary);
     }
   }
 }
@@ -240,18 +275,56 @@ function readImport(statement, text, analysis, addFinding) {
     local: specifierNode.local.name,
     offset: specifierNode.start,
   }));
+  const kindRead = readImportKind(statement, specifier);
+  const otherSpecifier = statement.specifiers.find((specifierNode) => specifierNode.type !== 'ImportDefaultSpecifier');
 
   analysis.edits.push(removeStatement(statement, text));
 
   if (!RELATIVE_PREFIXES.some((prefix) => specifier.startsWith(prefix))) {
     addFinding('import-not-relative', `The specifier ${JSON.stringify(specifier)} does not start with ./ or ../`, offset);
-  } else if (statement.attributes?.length > 0) {
-    addFinding('import-not-module', 'The import holds import attributes', offset);
-  } else if (!MODULE_ENDINGS.some((ending) => specifier.endsWith(ending))) {
-    addFinding('import-not-module', `The specifier ${JSON.stringify(specifier)} does not end in .js or .mjs`, offset);
+  } else if ('message' in kindRead) {
+    addFinding(kindRead.rule, kindRead.message, kindRead.offset);
+  } else if (kindRead.kind !== 'module' && otherSpecifier !== undefined) {
+    const form = otherSpecifier.type === 'ImportNamespaceSpecifier' ? 'a namespace' : 'a named';
+    addFinding('import-not-default', `The ${SOURCE_KIND_NAMES[kindRead.kind]} ${JSON.stringify(specifier)} is imported with ${form} import`, otherSpecifier.start);
+  } else if (kindRead.kind !== 'module' && bindings.length === 0) {
+    addFinding('import-not-default', `The ${SOURCE_KIND_NAMES[kindRead.kind]} ${JSON.stringify(specifier)} is imported with no binding`, statement.start);
   } else {
-    analysis.imports.push({ specifier, offset, bindings });
+    analysis.imports.push({ specifier, offset, bindings, kind: kindRead.kind });
   }
+}
+
+/**
+ * Reads what an import names. Its `type` attribute decides when it holds one, and else the specifier's
+ * ending: `.js` and `.mjs` name a module, `.json` a JSON file and every other ending a text file, except
+ * an ending that an ES runtime reads as code or JSON, such as `.cjs`, `.ts` or `.JSON`.
+ * @param {SyntaxNode} statement An ImportDeclaration.
+ * @param {string} specifier
+ * @returns {{ kind: SourceKind } | { rule: string, message: string, offset: number }} The second form for an
+ *   attribute that is not `type`, a type that is not `text` or `json`, or an ending that is refused.
+ */
+function readImportKind(statement, specifier) {
+  const lowerCaseSpecifier = specifier.toLowerCase();
+  let type = null;
+
+  for (const attribute of statement.attributes ?? []) {
+    const key = readModuleName(attribute.key);
+    if (key !== 'type') return { rule: 'import-attribute-unknown', message: `The import holds the attribute ${JSON.stringify(key)}`, offset: attribute.start };
+    if (!IMPORT_TYPES.has(attribute.value.value)) {
+      const message = `The import's type ${JSON.stringify(attribute.value.value)} is neither "text" nor "json"`;
+      return { rule: 'import-attribute-unknown', message, offset: attribute.value.start };
+    }
+    type = attribute.value.value;
+  }
+
+  if (type !== null) return { kind: type };
+  if (MODULE_ENDINGS.some((ending) => specifier.endsWith(ending))) return { kind: 'module' };
+  if (specifier.endsWith(JSON_ENDING)) return { kind: 'json' };
+  if (RUNTIME_CODE_ENDINGS.some((ending) => lowerCaseSpecifier.endsWith(ending))) {
+    const message = `The specifier ${JSON.stringify(specifier)} has an ending that an ES runtime reads as code or JSON, which the build would read as a text file`;
+    return { rule: 'import-ending-unknown', message, offset: statement.source.start };
+  }
+  return { kind: 'text' };
 }
 
 /**

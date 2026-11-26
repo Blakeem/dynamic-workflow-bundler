@@ -11,14 +11,14 @@ is one long script, and two workflows cannot share code. This tool removes that 
 
 | Command | Purpose | Status |
 |---|---|---|
-| `dwfb build` | Build one workflow script from an entry and its modules. | available |
+| `dwfb build` | Build one workflow script from an entry, its parts, and the modules, text files and JSON files it imports. | available |
 | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
 
 ## dwfb build
 
-The entry is the file that holds `meta` and the top-level body of the workflow. It imports modules by relative paths.
+The entry is the file that holds `meta` and the top-level body of the workflow. It imports source files by relative paths.
 
 `workflows/review/entry.js`:
 
@@ -45,9 +45,9 @@ This command writes the workflow script:
 dwfb build workflows/review/entry.js --out .claude/workflows/review.js
 ```
 
-The built script holds the `meta` statement, a banner line, one scope per module and the rest of the entry. Each source line keeps its order, and a line outside an import or export statement keeps its text. `--no-banner` leaves out the banner line. `--json` prints the result as one JSON object.
+The built script holds the `meta` statement, a banner line, the text files and JSON files, one scope per module and the rest of the entry. Each source line keeps its order, and a JavaScript line outside an import or export statement keeps its text. `--no-banner` leaves out the banner line. `--json` prints the result as one JSON object.
 
-A module specifier starts with `./` or `../` and ends in `.js` or `.mjs`. Each module is evaluated once, before the files that import it, as in an ES module.
+A specifier starts with `./` or `../`. A specifier that ends in `.js` or `.mjs` names a module. Each module is evaluated once, before the files that import it, as in an ES module.
 
 These import forms work:
 
@@ -64,7 +64,34 @@ These export forms work in a module:
 - `export { a, b as c }`
 - `export default`
 
-A source that uses another form, such as `export let`, `export * from` or `import()`, stops the build with a finding. An import cycle also stops the build. So does a direct `eval` call in a module, since in the built script the call can read the entry's names. A finding prints as `<file>:<line>:<column> <rule id> <what is wrong>. <how to fix it>.`, and the build writes nothing.
+A source that uses another form, such as `export let`, `export * from` or `import()`, stops the build with a finding. An import cycle also stops the build. So does a direct `eval` call in a module, since in the built script the call can read the entry's names. So does a source that is not valid UTF-8. A finding prints as `<file>:<line>:<column> <rule id> <what is wrong>. <how to fix it>.`, and the build writes nothing.
+
+### Text files and JSON files
+
+A specifier that ends in `.json` names a JSON file, and any other ending names a text file. An ending that an ES runtime reads as code or JSON, such as `.cjs`, `.ts` or `.JSON`, stops the build with a finding. A `type` attribute of `text` or `json` decides in place of the ending. A text file and a JSON file take a default import only.
+
+```js
+import reviewPrompt from './review-prompt.md';
+import limits from './limits.json';
+import example from './example.js' with { type: 'text' };
+```
+
+A text file is imported as a string of its content, with a byte order mark dropped and CRLF read as LF. Each of its lines is a line of the built script, with a backtick, `${` and a backslash escaped, so a diff of the built script shows a prompt edit line by line. A JSON file is imported as the value `JSON.parse` gives for its content, and every importer gets the same object. The built script holds each file once.
+
+### Parts
+
+A long entry can be cut into parts. A `// @include <path>` line in the entry names a part by its path relative to the entry's folder, and the build puts the part's text in place of that line. The path uses forward slashes and the letter case of the names on disk.
+
+`workflows/review/entry.js`:
+
+```js
+export const meta = { name: 'review', description: 'Review a change' };
+
+// @include ./steps/collect.js
+// @include ./steps/review.js
+```
+
+A part is a list of complete statements with no `import` or `export`. One `// @include` line names it, and no import reads it as a module. A `// @include` line sits alone on its line at the top level of the entry, below `meta`. A part or a `// @include` line that breaks these rules stops the build with a finding. A `// @include` line inside a template literal is text.
 
 ## License
 

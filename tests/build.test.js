@@ -135,9 +135,30 @@ describe('build findings', () => {
     { rule: 'meta-reads-import', file: 'entry.js', line: 2 },
     { rule: 'entry-export', file: 'entry.js', line: 2 },
     { rule: 'import-not-relative', file: 'entry.js', line: 2 },
-    { rule: 'import-not-module', file: 'entry.js', line: 2 },
-    { rule: 'import-not-module', file: 'entry.js', line: 3 },
+    { rule: 'import-not-default', file: 'entry.js', line: 2 },
+    { rule: 'import-not-default', file: 'entry.js', line: 3 },
+    { rule: 'import-not-default', file: 'entry.js', line: 4 },
+    { rule: 'import-attribute-unknown', file: 'entry.js', line: 2 },
+    { rule: 'import-attribute-unknown', file: 'entry.js', line: 3 },
+    { rule: 'import-ending-unknown', file: 'entry.js', line: 2 },
+    { rule: 'import-ending-unknown', file: 'entry.js', line: 3 },
     { rule: 'import-not-found', file: 'entry.js', line: 2 },
+    { rule: 'import-kind-conflict', file: 'entry.js', line: 3 },
+    { rule: 'source-encoding-invalid', file: 'entry.js', line: 2 },
+    { rule: 'json-invalid', file: 'settings.json', line: 4 },
+    { rule: 'include-not-found', file: 'entry.js', line: 2 },
+    { rule: 'include-misplaced', file: 'entry.js', line: 1 },
+    { rule: 'include-misplaced', file: 'entry.js', line: 5 },
+    { rule: 'include-misplaced', file: 'entry.js', line: 7 },
+    { rule: 'include-misplaced', file: 'part.js', line: 2 },
+    { rule: 'include-misplaced', file: 'helper.js', line: 1 },
+    { rule: 'include-twice', file: 'entry.js', line: 3 },
+    { rule: 'include-twice', file: 'entry.js', line: 4 },
+    { rule: 'include-twice', file: 'entry.js', line: 6 },
+    { rule: 'part-not-plain', file: 'broken.js', line: 1 },
+    { rule: 'part-not-plain', file: 'module.js', line: 1 },
+    { rule: 'part-not-plain', file: 'module.js', line: 2 },
+    { rule: 'statement-crosses-part', file: 'next.js', line: 1 },
     { rule: 'import-not-exported', file: 'entry.js', line: 2 },
     { rule: 'import-cycle', file: 'second.js', line: 1 },
     { rule: 'import-dynamic', file: 'entry.js', line: 2 },
@@ -229,6 +250,176 @@ describe('build text handling', () => {
 
     assert.equal(lines.length, 1 + 2 + 7 + 1 + 1 + 4 + 1);
     assert.equal((await runBuiltScript(result.script, {})).value, 'named');
+  });
+});
+
+describe('build of text files, JSON files and parts', () => {
+  it('imports a text file as its exact content, with each of its lines on a line of the built script', async () => {
+    const folder = await makeTemporaryFolder();
+    const prompt = "Review `this` change.\nKeep ${literal} and \\n as written.\nimport { nothing } from './nowhere.js';\n// @include ./part.js\nNo line break at the end";
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport prompt from './prompt.md';\nimport again from './prompt.md';\nreturn [prompt, again];\n");
+    await writeFile(join(folder, 'prompt.md'), prompt);
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+    const builtLines = result.script.split('\n');
+    const firstLine = builtLines.indexOf('// prompt.md') + 2;
+
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual((await runBuiltScript(result.script, {})).value, [prompt, prompt]);
+    assert.equal(result.script.split('// prompt.md\n').length, 2);
+    assert.equal(builtLines[firstLine], 'Review \\`this\\` change.');
+    assert.equal(builtLines[firstLine + 2], "import { nothing } from './nowhere.js';");
+    assert.equal(builtLines[firstLine + 4], 'No line break at the end`;');
+  });
+
+  it('drops a byte order mark and reads CRLF as LF in a text file, and keeps a lone CR', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport notes from './notes.txt';\nimport empty from './empty.txt' with { type: 'text' };\nreturn [notes, empty];\n");
+    await writeFile(join(folder, 'notes.txt'), '﻿one\r\ntwo\rthree\n');
+    await writeFile(join(folder, 'empty.txt'), '');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual((await runBuiltScript(result.script, {})).value, ['one\ntwo\rthree\n', '']);
+  });
+
+  it('gives every importer of a JSON file one object, equal to what JSON.parse gives', async () => {
+    const folder = await makeTemporaryFolder();
+    const json = '{\n  "name": "review",\n  "limits": [1, 2.5, -3e2],\n  "__proto__": { "own": true },\n  "text": "a`b${c}\\\\d"\n}\n';
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { first } from './first.js';\nimport { second } from './second.js';\nimport settings from './settings.json';\nreturn [first === second, first === settings, settings];\n");
+    await writeFile(join(folder, 'first.js'), "import settings from './settings.json';\nexport const first = settings;\n");
+    await writeFile(join(folder, 'second.js'), "import data from './settings.json' with { type: 'json' };\nexport const second = data;\n");
+    await writeFile(join(folder, 'settings.json'), json);
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+    const [isShared, isEntryShared, settings] = (await runBuiltScript(result.script, {})).value;
+
+    assert.deepEqual(result.findings, []);
+    assert.equal(isShared, true);
+    assert.equal(isEntryShared, true);
+    assert.deepEqual(settings, JSON.parse(json));
+    assert.equal(Object.hasOwn(settings, '__proto__'), true);
+    assert.equal(result.script.split('// settings.json\n').length, 2);
+    assert.ok(result.script.indexOf('// settings.json') < result.script.indexOf('// first.js'));
+  });
+
+  it('builds an entry of meta and directives over parts cut at statement boundaries to the original bytes', async () => {
+    const folder = await makeTemporaryFolder();
+    const original = [
+      'export const meta = {',
+      "  name: 'cut',",
+      '};',
+      '',
+      'const steps = [];',
+      'function step(name) { steps.push(name); return name }',
+      '',
+      "const prompt = `First line.",
+      '// @include ./not-a-part.js',
+      'Last line.`',
+      "step('one')",
+      ';[2, 3].forEach((n) => step(n))',
+      'if (args.stop) return steps;',
+      'const done = await agent(prompt);',
+      'return [steps, done, prompt];',
+    ].join('\n');
+    const program = parse(original, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true });
+    const lineStarts = program.body.map((statement) => original.slice(0, statement.start).split('\n').length - 1);
+    const lines = original.split('\n');
+    const metaLineCount = lineStarts[1];
+    const cuts = [metaLineCount, lineStarts[2], lineStarts[4], lineStarts[6], lines.length];
+    const directives = [];
+    for (let index = 0; index < cuts.length - 1; index += 1) {
+      await writeFile(join(folder, `part-${index + 1}.js`), lines.slice(cuts[index], cuts[index + 1]).join('\r\n'));
+      directives.push(`// @include ./part-${index + 1}.js`);
+    }
+    await writeFile(join(folder, 'entry.js'), `﻿${[...lines.slice(0, metaLineCount), ...directives].join('\r\n')}`);
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), banner: false });
+    const written = await readFile(join(folder, 'out.js'), 'utf8');
+
+    assert.deepEqual(result.findings, []);
+    assert.equal(written, `${original}\n`);
+    assert.deepEqual(result.sources.map((file) => file.split('/').at(-1)), ['entry.js', 'part-1.js', 'part-2.js', 'part-3.js', 'part-4.js']);
+    assert.deepEqual((await runBuiltScript(written, { stop: true })).value, ['one', 2, 3]);
+  });
+
+  it('puts each part line byte for byte in the built script, and lists every text file, JSON file and part', async () => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'parts'));
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { label } from './label.js';\n// @include parts/setup.js\nreturn [label, notes, count];\n");
+    await writeFile(join(folder, 'label.js'), "import settings from './settings.json';\nexport const label = settings.label;\n");
+    await writeFile(join(folder, 'settings.json'), '{ "label": "L" }\n');
+    await writeFile(join(folder, 'parts', 'setup.js'), "  const notes = (await readNotes());\n\tconst count = 2; // a comment\nasync function readNotes() { return 'N'; }\n");
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+    const partLines = ['  const notes = (await readNotes());', '\tconst count = 2; // a comment', "async function readNotes() { return 'N'; }"];
+    const builtLines = result.script.split('\n');
+    const partStart = builtLines.indexOf(partLines[0]);
+
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(builtLines.slice(partStart, partStart + 3), partLines);
+    assert.deepEqual((await runBuiltScript(result.script, {})).value, ['L', 'N', 2]);
+    assert.deepEqual(result.sources.map((file) => file.split('/').at(-1)), ['entry.js', 'setup.js', 'label.js', 'settings.json']);
+  });
+
+  it('reports a finding in a part at the part\'s line, and an entry finding below a part at the entry\'s line', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./part.js\nconst ok = 2;\n');
+    await writeFile(join(folder, 'part.js'), 'log(1);\nconst ok = 1;\n');
+    await writeFile(join(folder, 'clean.js'), "export const meta = {};\n// @include ./clean-part.js\nconst __dwfb_entry = 1;\nimport './missing.js';\n");
+    await writeFile(join(folder, 'clean-part.js'), 'const ok = import.meta;\nconst __dwfb_part = 2;\n');
+
+    const redeclared = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+    const result = await build({ entry: join(folder, 'clean.js'), out: join(folder, 'out.js'), write: false });
+    const listFindings = (findings) => findings.map((finding) => `${finding.rule} ${finding.file.split('/').at(-1)}:${finding.line}:${finding.column}`);
+
+    assert.deepEqual(listFindings(redeclared.findings), ['syntax-error entry.js:3:7']);
+    assert.deepEqual(listFindings(result.findings), [
+      'reserved-name clean.js:3:7',
+      'import-not-found clean.js:4:8',
+      'import-meta clean-part.js:1:12',
+      'reserved-name clean-part.js:2:7',
+    ]);
+  });
+
+  it('reports an import that reads a text file of this build as a module', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport source from './a.js' with { type: 'text' };\nimport { a } from './a.js';\nreturn [a, source];\n");
+    await writeFile(join(folder, 'a.js'), 'export const a = 1;\n');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      'import-kind-conflict 3 The specifier "./a.js" names a text file of this build, which this import reads as a module',
+    ]);
+  });
+
+  it('builds an entry that imports only text files and declares Object, Symbol and JSON', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport prompt from './prompt.md';\nconst Object = 1;\nclass Symbol {}\nconst JSON = 2;\nreturn [prompt, Object, JSON];\n");
+    await writeFile(join(folder, 'prompt.md'), 'p');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual((await runBuiltScript(result.script, {})).value, ['p', 1, 2]);
+  });
+
+  it('reports include-not-found for a folder, an empty path and a NUL, and refuses an out that is a part', async () => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'folder.js'));
+    await writeFile(join(folder, 'part.js'), 'log(1);\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./folder.js\n// @include\n// @include ./a\0b.js\n');
+    await writeFile(join(folder, 'with-part.js'), 'export const meta = {};\n// @include ./part.js\n');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      'include-not-found 2 The path "./folder.js" names a folder',
+      'include-not-found 3 The directive names no path',
+      'include-not-found 4 The path "./a\\u0000b.js" holds a NUL character',
+    ]);
+    await assert.rejects(build({ entry: join(folder, 'with-part.js'), out: join(folder, 'part.js') }), (error) => error.name === 'UsageError' && /is a source/.test(error.message));
   });
 });
 
@@ -480,6 +671,18 @@ describe('build output and usage errors', () => {
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
     assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line]), [['import-not-found', 2]]);
+    assert.match(result.findings[0].message, /another drive than the entry/);
+  });
+
+  it('reports include-not-found for a part that a link places on another drive than the entry', async (context) => {
+    const folder = await makeTemporaryFolder();
+    if (hasSameRoot(folder, FIXTURES)) return context.skip('the fixtures sit on the drive of the temporary folder');
+    await symlink(join(FIXTURES, 'modules', 'lib'), join(folder, 'linked'), 'junction');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./linked/side-effect.js\n');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line]), [['include-not-found', 2]]);
     assert.match(result.findings[0].message, /another drive than the entry/);
   });
 

@@ -13,7 +13,8 @@ const EXIT_FAILURE = 2;
 const MAIN_USAGE = `Usage: dwfb <command> [options]
 
 Commands:
-  build <entry> --out <file>   Build one workflow script from an entry and its modules.
+  build <entry> --out <file>   Build one workflow script from an entry, its parts, and the modules,
+                               text files and JSON files it imports.
 
 Options:
   --help      Print this help.

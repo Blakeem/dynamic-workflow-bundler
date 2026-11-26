@@ -8,16 +8,18 @@ const ENTRY_FILE = `${FOLDER}entry.js`;
 
 /**
  * Builds the sources that loadSources would read, with each `./<name>` specifier naming `/work/<name>`.
- * @param {Record<string, string>} texts The entry's text under `entry.js`, then each module's text by its name.
+ * A name that ends in `.json` is a JSON file, one that ends in `.md` a text file, and every other a module.
+ * @param {Record<string, string>} texts The entry's text under `entry.js`, then each source's text by its name.
  */
 function makeSources(texts) {
   const sources = new Map();
 
   for (const [name, text] of Object.entries(texts)) {
     const file = `${FOLDER}${name}`;
-    const analysis = analyzeSource(text, file, file === ENTRY_FILE, true);
-    const dependencies = analysis.imports.map((record) => ({ record, target: `${FOLDER}${record.specifier.slice(2)}` }));
-    sources.set(file, { file, text, analysis, dependencies });
+    const kind = name.endsWith('.json') ? 'json' : name.endsWith('.md') ? 'text' : 'module';
+    const analysis = kind === 'module' ? analyzeSource(text, file, file === ENTRY_FILE, true) : null;
+    const dependencies = (analysis?.imports ?? []).map((record) => ({ record, target: `${FOLDER}${record.specifier.slice(2)}` }));
+    sources.set(file, { file, loaderFile: file, kind, text, analysis, dependencies, includes: [] });
   }
 
   return sources;
@@ -63,5 +65,36 @@ describe('linkModules', () => {
 
     assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': 'export function read() {\n  return phaseName;\n}\n' }), ['module-reads-entry-name a.js:2']);
     assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': 'export function read(phaseName) {\n  return [phaseName, log];\n}\n' }), []);
+  });
+
+  it('reports no module-reads-entry-name for meta, which the script body does not bind', () => {
+    const entry = "export const meta = {};\nimport { read } from './a.js';\n";
+
+    assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': 'export const read = () => typeof meta;\n' }), []);
+  });
+
+  it('reports reserved-name for an entry declaration of a global that the code the build adds for this build\'s sources reads', () => {
+    const entry = (imports) => `export const meta = {};\n${imports}const Object = 1;\nclass Symbol {}\nvar JSON;\n`;
+    const module = 'log(1);\n';
+
+    assert.deepEqual(listFindings({ 'entry.js': entry("import './a.js';\n"), 'a.js': module }), ['reserved-name entry.js:3', 'reserved-name entry.js:4']);
+    assert.deepEqual(listFindings({ 'entry.js': entry("import a from './a.json';\n"), 'a.json': '1' }), ['reserved-name entry.js:5']);
+    assert.deepEqual(listFindings({ 'entry.js': entry("import './a.js';\n"), 'a.js': "import a from './a.json';\n", 'a.json': '1' }), [
+      'reserved-name entry.js:3',
+      'reserved-name entry.js:4',
+      'reserved-name entry.js:5',
+    ]);
+    assert.deepEqual(listFindings({ 'entry.js': entry("import a from './a.md';\n"), 'a.md': 'a' }), []);
+    assert.deepEqual(listFindings({ 'entry.js': entry('') }), []);
+  });
+
+  it('skips a text file, which has no analysis, when it checks imported names', () => {
+    const sources = makeSources({ 'entry.js': "export const meta = {};\nimport notes from './notes.md';\n", 'notes.md': 'n' });
+    const notesFile = `${FOLDER}notes.md`;
+
+    const { order, findings } = linkModules(sources, ENTRY_FILE, (file) => file);
+
+    assert.deepEqual(findings, []);
+    assert.deepEqual(order, [notesFile]);
   });
 });

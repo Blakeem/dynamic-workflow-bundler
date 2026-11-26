@@ -18,3 +18,12 @@ export function findPosition(text, offset) {
 
   return { line, column: offset - lineStart + 1 };
 }
+
+/**
+ * Counts the line breaks in a text by the rule findPosition uses.
+ * @param {string} text
+ * @returns {number}
+ */
+export function countLineBreaks(text) {
+  return text.split('\n').length - 1;
+}

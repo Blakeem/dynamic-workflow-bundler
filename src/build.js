@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes } from './display-path.js';
+import { findLineOrigin } from './expand-parts.js';
 import { joinModules } from './join-modules.js';
 import { linkModules } from './link-modules.js';
 import { loadSources, MISSING_FILE_CODES } from './load-sources.js';
@@ -27,13 +28,15 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write']);
  * @typedef {object} BuildResult
  * @property {boolean} ok True when the build found nothing.
  * @property {string | null} script The built script, or null when the build has a finding.
- * @property {string[]} sources Every source file read, entry first.
+ * @property {string[]} sources Every source file read, once each: the entry, its parts in directive order,
+ *   then each module, text file and JSON file in the order its first import reached it.
  * @property {Finding[]} findings
  * Every path is relative to the real path of the working directory, with forward slashes.
  */
 
 /**
- * Builds one workflow script from an entry and the modules it imports. Prints nothing.
+ * Builds one workflow script from an entry, its parts, and the modules, text files and JSON files it
+ * imports. Prints nothing.
  * Rejects with a UsageError for options that are not an object, an unknown or wrong option, a missing
  * entry, an `out` that names a source, a folder or a path inside a file, and an `out` on another drive
  * than the entry when the banner is on.
@@ -55,26 +58,28 @@ export async function build(options = /** @type {BuildOptions} */ ({})) {
   // Source files are real paths, so each path they are reported against is a real path too.
   const workFolder = await realpath(process.cwd());
   const formatSourcePath = (file) => formatForwardSlashes(relative(workFolder, file));
-  const { sources, findings: loadFindings } = await loadSources(resolve(entry), banner);
-  await checkOutFile(outFile, out, sources);
+  const { sources, parts, findings: loadFindings } = await loadSources(resolve(entry), banner);
+  const [, ...importedFiles] = sources.keys();
+  const sourceFiles = [...new Set([entryFile, ...parts, ...importedFiles])];
+  await checkOutFile(outFile, out, sourceFiles);
   const bannerPath = banner ? formatForwardSlashes(relative(await findRealFolder(dirname(outFile)), entryFile)) : null;
   if (bannerPath !== null && isAbsolute(bannerPath)) {
     throw new UsageError(`The out file ${out} is on another drive than the entry, so the banner cannot name the entry by a relative path`);
   }
   const { order, findings: linkFindings } = linkModules(sources, entryFile, formatSourcePath);
 
-  const sourceFiles = [...sources.keys()];
+  const entrySource = /** @type {LoadedSource} */ (sources.get(entryFile));
   const sourcePaths = sourceFiles.map(formatSourcePath);
-  const findings = sortFindings([...loadFindings, ...linkFindings], sourceFiles).map((finding) => ({
+  const placedFindings = [...loadFindings, ...linkFindings].map((finding) => placeEntryFinding(finding, entrySource));
+  const findings = sortFindings(placedFindings, sourceFiles).map((finding) => ({
     ...finding,
     file: formatSourcePath(finding.file),
   }));
   if (findings.length > 0) return { ok: false, script: null, sources: sourcePaths, findings };
 
-  const entrySource = /** @type {LoadedSource} */ (sources.get(entryFile));
   const entryFolder = dirname(entryFile);
-  const modules = order.map((file) => ({ ...sources.get(file), path: formatForwardSlashes(relative(entryFolder, file)) }));
-  const script = joinModules({ entry: entrySource, modules, bannerPath });
+  const joinedSources = order.map((file) => ({ ...sources.get(file), path: formatForwardSlashes(relative(entryFolder, file)) }));
+  const script = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
 
   compileBuiltScript(script, entrySource.analysis.metaEnd);
   if (write) await writeScript(outFile, script);
@@ -118,9 +123,9 @@ async function findEntryFile(entry) {
 /**
  * @param {string} outFile
  * @param {string} out The path as the caller gave it.
- * @param {Map<string, LoadedSource>} sources
+ * @param {string[]} sourceFiles The real path of every source.
  */
-async function checkOutFile(outFile, out, sources) {
+async function checkOutFile(outFile, out, sourceFiles) {
   let outRealFile = null;
 
   try {
@@ -130,7 +135,7 @@ async function checkOutFile(outFile, out, sources) {
     await checkOutFolder(outFile, out);
     return;
   }
-  if (sources.has(outRealFile)) throw new UsageError(`The out file ${out} is a source of this build`);
+  if (sourceFiles.includes(outRealFile)) throw new UsageError(`The out file ${out} is a source of this build`);
   if (!(await stat(outRealFile)).isFile()) throw new UsageError(`The out path ${out} is not a file`);
 }
 
@@ -182,6 +187,19 @@ async function statIfExists(path) {
     if (MISSING_FILE_CODES.has(error.code)) return null;
     throw error;
   }
+}
+
+/**
+ * A finding on the entry is placed in the entry's text with each part in place of its directive, so a
+ * finding on a part's line names the part and its own line.
+ * @param {Finding} finding
+ * @param {LoadedSource} entrySource
+ * @returns {Finding}
+ */
+function placeEntryFinding(finding, entrySource) {
+  if (finding.file !== entrySource.file) return finding;
+  const origin = findLineOrigin(entrySource.includes, finding.line);
+  return { ...finding, file: origin.file ?? entrySource.file, line: origin.line };
 }
 
 /**
