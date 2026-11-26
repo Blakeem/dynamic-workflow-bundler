@@ -17,10 +17,26 @@
     "url": "git+https://github.com/Blakeem/dynamic-workflow-bundler.git"
   },
   "type": "module",
+  "bin": {
+    "dwfb": "bin/dwfb.js",
+    "dynamic-workflow-bundler": "bin/dwfb.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "test": "node --test"
+  },
+  "dependencies": {
+    "acorn": "8.19.0"
   }
 }
