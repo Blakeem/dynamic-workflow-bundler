@@ -456,6 +456,46 @@ describe('dwfb build with a config file', () => {
     assert.deepEqual(await readdir(join(folder, 'dist')), []);
   });
 
+  it('names each script written before a failed write, with and without --json, and exits 2', async (context) => {
+    if (process.getuid?.() === 0) return context.skip('root writes every folder');
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'first'));
+    await mkdir(join(folder, 'second'));
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'c.js'), 'export const meta = { name: "p", description: "d" };\nreturn 3;\n');
+    await writeFile(join(folder, 'b.js'), 'export const meta = { name: "p", description: "d" };\nreturn 2;\n');
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'first/a.js' }, { entry: 'c.js', out: 'first/c.js' }, { entry: 'b.js', out: 'second/b.js' }] };\n");
+    await writeFile(join(folder, 'second', 'b.js'), 'old\n');
+    // Windows refuses a rename over a read-only file, and POSIX refuses to create a file in a folder with no write permission.
+    const lockedPath = process.platform === 'win32' ? join(folder, 'second', 'b.js') : join(folder, 'second');
+    const cause = process.platform === 'win32' ? '(rename EPERM)' : '(open EACCES)';
+    const stderr = `dwfb build: Could not read or write second/b.js ${cause}. Wrote first/a.js, first/c.js before the failure.\n`;
+    const resetFirst = async () => {
+      await writeFile(join(folder, 'first', 'a.js'), 'old\n');
+      await writeFile(join(folder, 'first', 'c.js'), 'old\n');
+    };
+    await chmod(lockedPath, process.platform === 'win32' ? 0o444 : 0o555);
+
+    try {
+      await resetFirst();
+      const plain = runCommand(['build'], folder);
+      const plainFirst = [await readFile(join(folder, 'first', 'a.js'), 'utf8'), await readFile(join(folder, 'first', 'c.js'), 'utf8')];
+      await resetFirst();
+      const json = runCommand(['build', '--json'], folder);
+      const jsonFirst = [await readFile(join(folder, 'first', 'a.js'), 'utf8'), await readFile(join(folder, 'first', 'c.js'), 'utf8')];
+
+      assert.equal(plain.status, 2);
+      assert.match(plain.stdout, /^Built first\/a\.js from 1 source file, \d+ bytes\.\nBuilt first\/c\.js from 1 source file, \d+ bytes\.\n$/);
+      assert.equal(plain.stderr, stderr);
+      assert.deepEqual(json, { status: 2, stdout: '', stderr });
+      for (const [index, text] of [...plainFirst, ...jsonFirst].entries()) assert.match(text, index % 2 === 0 ? /\nreturn 1;\n/ : /\nreturn 3;\n/);
+      assert.equal(await readFile(join(folder, 'second', 'b.js'), 'utf8'), 'old\n');
+    } finally {
+      await chmod(lockedPath, process.platform === 'win32' ? 0o644 : 0o755);
+    }
+  });
+
   it('exits 2 for a config file that lists no workflow', async () => {
     const folder = await makeTemporaryFolder();
     await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');

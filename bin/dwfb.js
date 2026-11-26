@@ -181,7 +181,7 @@ async function runBuild(args) {
       // The out path takes the base of the source paths, so that one output names each file one way.
       builtWorkflow.out = await formatRealDisplayPath(builtWorkflow.workflow.out);
     } catch (error) {
-      return printCommandFailure('dwfb build', error);
+      return printCommandFailure('dwfb build', error, await formatWrittenNote(builtWorkflows));
     }
     if (!values.json) process.stdout.write(formatBuildText(builtWorkflow.out, builtWorkflow.result, buildCommand));
   }
@@ -474,16 +474,30 @@ function formatBuildJson(builtWorkflows, isSuccess) {
 /**
  * @param {string} label The command, such as `dwfb build`.
  * @param {unknown} error
+ * @param {string} [note] A sentence that follows the failure line's own, with its leading space.
  * @returns {Promise<number>}
  */
-async function printCommandFailure(label, error) {
-  if (error instanceof UsageError) return printUsageError(label, `${error.message}.\n`);
+async function printCommandFailure(label, error, note = '') {
+  if (error instanceof UsageError) return printUsageError(label, `${error.message}.${note}\n`);
   if (isFileSystemError(error)) {
-    process.stderr.write(`${label}: Could not read or write ${await formatFailedPath(error.path)} (${error.syscall} ${error.code}).\n`);
+    process.stderr.write(`${label}: Could not read or write ${await formatFailedPath(error.path)} (${error.syscall} ${error.code}).${note}\n`);
     return EXIT_FAILURE;
   }
-  process.stderr.write(`${label}: internal failure.\n${error.stack ?? error}\n`);
+  process.stderr.write(`${label}: internal failure.${note}\n${error.stack ?? error}\n`);
   return EXIT_FAILURE;
+}
+
+/**
+ * @param {{ workflow: { out: string }, result: { status: string } }[]} builtWorkflows
+ * @returns {Promise<string>} The sentence that names each script written before a failure, in write order, or
+ *   '' when none was written.
+ */
+async function formatWrittenNote(builtWorkflows) {
+  const writtenPaths = [];
+  for (const { workflow, result } of builtWorkflows) {
+    if (result.status === 'written') writtenPaths.push(await formatFailedPath(workflow.out));
+  }
+  return writtenPaths.length === 0 ? '' : ` Wrote ${writtenPaths.join(', ')} before the failure.`;
 }
 
 /**

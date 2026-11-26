@@ -16,6 +16,8 @@ const SCRIPT_TREE_DEPTH_MESSAGE = 'The script nests code deeper than dwfb can re
 const LONE_CR_PATTERN = /\r(?!\n)/g;
 // `&&=` writes a property only when it already holds a truthy value, so it never defines a name.
 const NON_DEFINING_ASSIGNMENT = '&&=';
+const IMMEDIATE_FUNCTION_TYPES = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
+const INVOKING_METHOD_NAMES = new Set(['call', 'apply']);
 
 // Each fact below was measured on Claude Code 2.1.332.
 // The runtime refuses a script file larger than this.
@@ -240,6 +242,7 @@ function checkBodyNodes(bodyProgram, addFinding) {
   const typeofOperands = new Set();
   const assignedNodes = new Set();
   const deferredNodes = new Set();
+  const immediateFunctions = new WeakSet();
   const globalThisDefinedRanges = new Map();
   const isGlobal = (node, name) => node.type === 'Identifier' && node.name === name && freeNodes.has(node);
   // A tagged template calls its tag as a function call does.
@@ -247,7 +250,8 @@ function checkBodyNodes(bodyProgram, addFinding) {
   const isGlobalMember = (node, objectName, propertyName) => node.type === 'MemberExpression' && isGlobal(node.object, objectName) && readMemberName(node) === propertyName;
   const readGlobalThisName = (target) => (target.type === 'MemberExpression' && isGlobal(target.object, 'globalThis') ? readMemberName(target) : null);
   // An instance field initializer runs at each `new`, as a function body runs at each call, and a static one runs with the class.
-  const isDeferredChild = (node, child) => isFunctionNode(node) || (node.type === 'PropertyDefinition' && !node.static && child === node.value);
+  // A function called where it is written, such as the scope a build wraps around a module, runs at that point unless it is async or a generator.
+  const isDeferredChild = (node, child) => (isFunctionNode(node) && !immediateFunctions.has(node)) || (node.type === 'PropertyDefinition' && !node.static && child === node.value);
   const visit = (node, isDeferred) => {
     // Acorn shares one node between the two names of `export { a }`.
     if (visitedNodes.has(node)) return;
@@ -285,6 +289,9 @@ function checkBodyNodes(bodyProgram, addFinding) {
       if (globalThisName !== null) globalThisDefinedRanges.set(globalThisName, [...(globalThisDefinedRanges.get(globalThisName) ?? []), definingWrite.definedRange]);
     }
 
+    const immediateFunction = readImmediateFunction(node);
+    if (immediateFunction !== null) immediateFunctions.add(immediateFunction);
+
     for (const child of listChildNodes(node)) visit(child, isDeferred || isDeferredChild(node, child));
   };
 
@@ -293,14 +300,36 @@ function checkBodyNodes(bodyProgram, addFinding) {
 }
 
 /**
+ * Reads the function whose body a node runs at once: the function a call, a tagged template, `.call` or
+ * `.apply` invokes where it is written, or the function `new` constructs there. An arrow function is no
+ * constructor, an async body may pause at an await, and a generator body waits for next(), so none counts.
+ * @param {SyntaxNode} node
+ * @returns {SyntaxNode | null}
+ */
+function readImmediateFunction(node) {
+  const isInvokingMember = node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && INVOKING_METHOD_NAMES.has(readMemberName(node.callee));
+  let invoked = null;
+
+  if (isInvokingMember) invoked = node.callee.object;
+  else if (node.type === 'CallExpression') invoked = node.callee;
+  else if (node.type === 'TaggedTemplateExpression') invoked = node.tag;
+  else if (node.type === 'NewExpression' && node.callee.type === 'FunctionExpression') invoked = node.callee;
+
+  if (invoked === null || !IMMEDIATE_FUNCTION_TYPES.has(invoked.type) || invoked.async || invoked.generator) return null;
+  return invoked;
+}
+
+/**
  * Reports the first counted reference to each name that no declaration binds and the runtime does not
  * define. The operand of typeof does not throw, so it does not count. A name the script writes as a property
  * of globalThis is defined in the code that runs after such a write, so a reference there does not count,
- * and neither does a reference inside a function or an instance field initializer, which may run after it.
+ * and neither does a reference inside a function that is not called where it is written, an async or generator
+ * function, or an instance field initializer, which may run after it.
  * @param {SyntaxNode[]} freeReferences In source order.
  * @param {{ typeofOperands: Set<SyntaxNode>, assignedNodes: Set<SyntaxNode>, deferredNodes: Set<SyntaxNode>, globalThisDefinedRanges: Map<string, DefinedRange[]> }} referenceFacts
  *   `globalThisDefinedRanges` maps each name to the range after each write to it as a property of globalThis.
- *   `deferredNodes` holds each identifier inside a function or an instance field initializer.
+ *   `deferredNodes` holds each identifier inside a function that is not called where it is written, an async or
+ *   generator function, or an instance field initializer.
  * @param {AddFinding} addFinding
  */
 function checkUndefinedNames(freeReferences, referenceFacts, addFinding) {

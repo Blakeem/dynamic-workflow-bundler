@@ -1015,6 +1015,19 @@ describe('build contract check', () => {
     ]);
   });
 
+  it('reports global-undefined in a module whose scope reads a name that the entry writes on globalThis later', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'a', description: 'b' };\nimport { a } from './m.js';\nglobalThis.late = a;\n");
+    await writeFile(join(folder, 'm.js'), 'export const a = late;\n');
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.equal(result.status, 'failed');
+    assert.deepEqual(result.findings.map(({ rule, file, line, column }) => ({ rule, file, line, column })), [
+      { rule: 'global-undefined', file: await formatBuildPath(folder, 'm.js'), line: 1, column: 18 },
+    ]);
+  });
+
   it('builds a script of SCRIPT_BYTE_LIMIT bytes, reports script-too-large on the entry for one byte more, and every other finding beside it', async () => {
     const folder = await makeTemporaryFolder();
     const entry = join(folder, 'entry.js');

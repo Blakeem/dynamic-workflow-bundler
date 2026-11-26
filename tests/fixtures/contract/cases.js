@@ -125,6 +125,8 @@ export const CONTRACT_CASES = Object.freeze([
   { id: 'r06-typeof-undeclared', measured: 'returned', message: null, rules: [] },
   { id: 'r07-then-read', measured: 'returned', message: null, rules: [] },
   { id: 'r08-inherited-global-names', measured: 'returned', message: null, rules: [] },
+  { id: 'r09-immediate-function-read', measured: 'threw', message: 'ReferenceError: made is not defined', rules: ['global-undefined'] },
+  { id: 'r10-immediate-function-read-after-write', measured: 'returned', message: null, rules: [] },
   { id: 't01-throws', measured: 'returned', message: null, rules: ['clock-unavailable', 'eval-unavailable', 'global-undefined', 'random-unavailable'] },
   { id: 't02-globals', measured: 'returned', message: null, rules: [] },
   { id: 't03-timer', measured: 'returned', message: null, rules: [] },
