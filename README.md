@@ -13,7 +13,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 |---|---|---|
 | `dwfb build` | Build a workflow script from an entry, its parts, and the modules, text files and JSON files it imports, or every workflow of a config file. | available |
 | `dwfb locate` | Find the source file and line that a line of a built script comes from. | available |
-| `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
+| `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | available |
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
 
@@ -136,6 +136,43 @@ workflows/review/prompts.js:2:10
 ```
 
 The command finds the entry from the banner line. A banner that names no relative path stops the command. A script with no banner takes the entry of the config file's workflow whose `out` is the script, and `--config <path>` names another config file. `--entry <file>` names the entry in place of both. Then the command builds the script in memory. For a line that the build adds, such as the banner or the first line of a module's scope, it says so, and names the source file whose constant, scope or imported names the line holds when there is one. A built script that differs from the script the build gives stops the command with the finding `script-stale`, since its line numbers may not match the source. The finding names the `dwfb build` command that rewrites it. `--json` prints the result as one JSON object.
+
+## dwfb validate
+
+`dwfb validate` checks a workflow script against the rules that the Workflow runtime enforces. This way a script that the runtime refuses or that throws is found before launch.
+
+```
+$ dwfb validate .claude/workflows/review.js
+.claude/workflows/review.js:4:17 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.
+```
+
+The command takes several scripts. With no script, it checks the `out` of each workflow of the config file, and `--config <path>` names another config file. A script that breaks no rule gets one line that says so. The command exits 0 when no script breaks a rule and 1 when one does. `--json` prints the result as one JSON object.
+
+The command reads a script as the runtime does. A byte sequence that is not valid UTF-8 is read as U+FFFD, and the size limit counts the bytes of the file. A script larger than 2,097,152 bytes gets the `script-too-large` finding alone, since a check of its other rules may run out of memory.
+
+| Rule | What the runtime does |
+|---|---|
+| `script-too-large` | Refuses a script file larger than 524,288 bytes. |
+| `syntax-error` | Refuses a script that does not parse. |
+| `source-too-deep` | No runtime rule. The code is nested deeper than dwfb can read, so dwfb cannot check it. |
+| `meta-not-first` | Refuses a script whose first statement is not `export const meta = { ... }`. |
+| `meta-not-literal` | Refuses a meta object that holds a value other than a literal, or a key named `__proto__`, `constructor` or `prototype`. |
+| `meta-name-invalid` | Refuses a meta object whose `name` is not a string of 1 or more characters. |
+| `meta-description-invalid` | Refuses a meta object whose `description` is not a string of 1 or more characters. |
+| `script-export` | Refuses a script with an export other than `meta`. |
+| `script-import` | Refuses a script with a static `import`. |
+| `import-dynamic` | Refuses a script that holds `import()`. |
+| `import-meta` | Refuses a script that holds `import.meta`. |
+| `await-using` | Refuses a script with an `await using` declaration. |
+| `runtime-reserved-name` | Refuses a script with a variable whose name starts with `__wRg$`. |
+| `clock-unavailable` | Throws when the script calls `Date.now()`, `new Date()` with no argument or `Date()`. |
+| `random-unavailable` | Throws when the script calls `Math.random()`. |
+| `eval-unavailable` | Throws when the script calls `eval` or `Function`. |
+| `global-undefined` | Throws a `ReferenceError` when the script reads or assigns a name that it does not declare and the runtime does not define, such as `require` or `process`. |
+
+The rules were measured on Claude Code 2.1.332, and a rule may differ on another version.
+
+The command does not check the arguments of `agent`, `parallel`, `pipeline`, `phase`, `log` and `workflow`, the script's return value, or the 30 second limit on code that does not yield. Each depends on values that exist only when the script runs. A rule reads the direct form of the code only. So `Date.now()` gets a finding, and `const { now } = Date; now()` or `(0, eval)('1')` gets none, although each throws.
 
 ## License
 

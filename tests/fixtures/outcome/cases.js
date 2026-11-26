@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { SCRIPT_BYTE_LIMIT } from '../../../src/check-contract.js';
 
 /**
  * @typedef {object} OutcomeCase
@@ -28,6 +29,10 @@ const createCase = (name, files, outcome) => ({ name, files, ...outcome });
 const buildFinding = (rule) => ({ args: BUILD_ARGS, exit: /** @type {const} */ (1), rule });
 const BUILT = { args: BUILD_ARGS, exit: /** @type {const} */ (0) };
 const CONFIG_USAGE_ERROR = { args: ['build'], exit: /** @type {const} */ (2) };
+const VALIDATE_ARGS = ['validate', 'x.js'];
+/** @param {string} rule */
+const validateFinding = (rule) => ({ args: VALIDATE_ARGS, exit: /** @type {const} */ (1), rule });
+const VALIDATED = { args: VALIDATE_ARGS, exit: /** @type {const} */ (0) };
 
 /** @returns {Record<string, string>} An entry that imports a chain of modules, each of which imports the next. */
 function createImportChain() {
@@ -124,4 +129,38 @@ export const OUTCOME_CASES = [
   ),
   createCase('locate a binary script', { 'x.js': Buffer.from([255, 254, 0, 1]) }, { args: ['locate', 'x.js', '1'], exit: 2 }),
   createCase('locate runtime line before the body', { 'entry.js': `${META}return 1;\n` }, { args: ['locate', 'entry.js', '0:1', '--runtime', '--entry', 'entry.js'], exit: 2 }),
+  createCase('validate an empty file', { 'x.js': '' }, validateFinding('meta-not-first')),
+  createCase('validate a file that holds only a comment', { 'x.js': '// only a comment\n' }, validateFinding('meta-not-first')),
+  createCase('validate a file of only a byte order mark', { 'x.js': '﻿' }, validateFinding('meta-not-first')),
+  createCase('validate a binary file', { 'x.js': Buffer.from([0, 159, 146, 150, 255, 254, 0, 0]) }, validateFinding('syntax-error')),
+  createCase('validate a script with a byte that is not UTF-8 in a string', { 'x.js': Buffer.concat([Buffer.from(`${META}return '`), Buffer.from([255]), Buffer.from("';\n")]) }, VALIDATED),
+  // U+FFFD cannot sit in a name, where the latin1 reading of 0xFF, ÿ, can.
+  createCase('validate a script with a byte that is not UTF-8 in a name', { 'x.js': Buffer.concat([Buffer.from(`${META}const a`), Buffer.from([255]), Buffer.from(' = 1;\n')]) }, validateFinding('syntax-error')),
+  createCase('validate a script with a byte order mark and CRLF', { 'x.js': `﻿${META.replace(/\n/g, '\r\n')}return 1;\r\n` }, VALIDATED),
+  createCase(
+    'validate a script with CR only line breaks',
+    { 'x.js': `${META.replace(/\n/g, '\r')}const a = 1;\rreturn Date.now();\r` },
+    { ...validateFinding('clock-unavailable'), message: /^x\.js:3:8 clock-unavailable / },
+  ),
+  createCase('validate a script one byte past the size limit', { 'x.js': `${META}//${'a'.repeat(SCRIPT_BYTE_LIMIT - META.length - 2)}\n` }, validateFinding('script-too-large')),
+  createCase('validate a folder', { 'x/x.js': META }, { args: ['validate', 'x'], exit: 2 }),
+  createCase('validate a path that ends in a separator', { 'x.js': META }, { args: ['validate', 'x.js/'], exit: 2 }),
+  createCase('validate a missing file', {}, { args: ['validate', 'x.js'], exit: 2 }),
+  createCase('validate the working directory', {}, { args: ['validate', '.'], exit: 2 }),
+  createCase('validate a path with a space', { 'my script.js': META }, { args: ['validate', 'my script.js'], exit: 0, message: /^my script\.js breaks no rule/ }),
+  createCase('validate a script named -x.js after --', { '-x.js': META }, { args: ['validate', '--', '-x.js'], exit: 0 }),
+  createCase('validate a script named -x.js', { '-x.js': META }, { args: ['validate', '-x.js'], exit: 2 }),
+  createCase('validate the same script named twice', { 'x.js': META }, { args: ['validate', 'x.js', 'x.js'], exit: 0, message: /^x\.js breaks no rule[^\n]*\nx\.js breaks no rule[^\n]*\n$/ }),
+  createCase('validate a script and --config', { 'x.js': META }, { args: ['validate', 'x.js', '--config', 'dwfb.config.js'], exit: 2 }),
+  createCase('validate with no script and no config file', {}, { args: ['validate'], exit: 2 }),
+  createCase(
+    'validate a config file whose out is missing',
+    { 'dwfb.config.js': 'export default { workflows: [{ entry: "entry.js", out: "out/built.js" }] };\n', 'package.json': MODULE_PACKAGE, 'entry.js': META },
+    { args: ['validate'], exit: 2, message: /does not exist, so run dwfb build entry\.js\.\n$/ },
+  ),
+  createCase(
+    'validate a config file whose out is built',
+    { 'dwfb.config.js': 'export default { workflows: [{ entry: "entry.js", out: "out/built.js" }] };\n', 'package.json': MODULE_PACKAGE, 'entry.js': META, 'out/built.js': META },
+    { args: ['validate'], exit: 0, message: /^out\/built\.js breaks no rule/ },
+  ),
 ];

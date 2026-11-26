@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { build, locate } from 'dynamic-workflow-bundler';
 import { formatCommandPath } from '../src/build-command.js';
+import { LOCATE_READ_BYTE_LIMIT } from '../src/locate.js';
+import { VALIDATE_READ_BYTE_LIMIT } from '../src/validate.js';
 
 const ENTRY_TEXT = [
   'export const meta = {',
@@ -55,6 +57,22 @@ async function writeBuiltFixture(banner = true) {
  */
 function formatPath(folder, name) {
   return relative(process.cwd(), join(folder, name)).split('\\').join('/');
+}
+
+/**
+ * Writes a file of the given size whose bytes are all zero. A truncate that extends a file writes no byte, so
+ * the test builds no buffer of that size.
+ * @param {string} path
+ * @param {number} size
+ */
+async function writeSizedFile(path, size) {
+  const handle = await open(path, 'w');
+
+  try {
+    await handle.truncate(size);
+  } finally {
+    await handle.close();
+  }
 }
 
 describe('locate', () => {
@@ -343,5 +361,38 @@ describe('locate', () => {
     for (const [options, message] of rejections) await assert.rejects(locate(options), { name: 'UsageError', message }, JSON.stringify(options));
     assert.equal((await locate({ script, line: 1, column: lines[0].length + 1 })).column, lines[0].length + 1);
     assert.equal((await locate({ script, line: lastLine })).ok, true);
+  });
+
+  it('maps a line of a built script larger than VALIDATE_READ_BYTE_LIMIT', async () => {
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'dwfb-locate-')));
+    temporaryFolders.push(folder);
+    const entry = join(folder, 'entry.js');
+    const script = join(folder, 'workflow.js');
+    const entryText = `export const meta = { name: 'large', description: 'd' };\nconst text = '${'a'.repeat(VALIDATE_READ_BYTE_LIMIT)}';\nreturn text.length;\n`;
+    await writeFile(entry, entryText);
+    await build({ entry, out: script });
+    const lines = (await readFile(script, 'utf8')).split('\n');
+
+    assert.ok((await stat(script)).size > VALIDATE_READ_BYTE_LIMIT);
+    assert.deepEqual(await locate({ script, line: lines.indexOf('return text.length;') + 1 }), {
+      ok: true,
+      file: formatPath(folder, 'entry.js'),
+      line: 3,
+      column: 1,
+      text: 'return text.length;',
+      generated: false,
+      findings: [],
+    });
+  });
+
+  it('rejects a script larger than LOCATE_READ_BYTE_LIMIT', async () => {
+    const { folder } = await writeBuiltFixture();
+    const script = join(folder, 'large.js');
+    await writeSizedFile(script, LOCATE_READ_BYTE_LIMIT + 1);
+
+    await assert.rejects(locate({ script, line: 1 }), {
+      name: 'UsageError',
+      message: `The script ${script} is ${LOCATE_READ_BYTE_LIMIT + 1} bytes, which is more than the ${LOCATE_READ_BYTE_LIMIT} bytes dwfb reads`,
+    });
   });
 });

@@ -697,3 +697,135 @@ describe('dwfb locate', () => {
     assert.match(runCommand(['--help']).stdout, /\n {2}locate <script> <line>\[:<column>\]\n/);
   });
 });
+
+describe('dwfb validate', () => {
+  const META = "export const meta = { name: 'p', description: 'd' };\n";
+  const CLOCK_SCRIPT = `${META}\nconst started = Date.now();\nreturn started;\n`;
+  const CLOCK_LINE = 'clock.js:3:17 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.\n';
+  const PASSED = 'breaks no rule of the contract measured on Claude Code 2.1.332.';
+
+  /**
+   * @returns {Promise<string>} A new folder that holds clock.js, which has one finding, and clean.js, which has none.
+   */
+  async function writeScripts() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'clock.js'), CLOCK_SCRIPT);
+    await writeFile(join(folder, 'clean.js'), `${META}return 1;\n`);
+    return folder;
+  }
+
+  /**
+   * Copies the config project fixture into a temporary folder and builds its workflows there.
+   * @returns {Promise<string>}
+   */
+  async function buildProjectFixture() {
+    const folder = await makeTemporaryFolder();
+    await cp(join(CONFIG_FIXTURES, 'project'), folder, { recursive: true });
+    runCommand(['build'], folder);
+    return folder;
+  }
+
+  it('prints each finding of one script in the finding format and exits 1', async () => {
+    const folder = await writeScripts();
+
+    assert.deepEqual(runCommand(['validate', 'clock.js'], folder), { status: 1, stdout: CLOCK_LINE, stderr: '' });
+    assert.deepEqual(runCommand(['validate', 'clean.js'], folder), { status: 0, stdout: `clean.js ${PASSED}\n`, stderr: '' });
+  });
+
+  it('checks several scripts in the order named, and exits 1 when one has a finding', async () => {
+    const folder = await writeScripts();
+
+    assert.deepEqual(runCommand(['validate', 'clean.js', 'clock.js', './clean.js'], folder), { status: 1, stdout: `clean.js ${PASSED}\n${CLOCK_LINE}clean.js ${PASSED}\n`, stderr: '' });
+  });
+
+  it('checks the out of each workflow of the config file with no script, in order', async () => {
+    const folder = await buildProjectFixture();
+
+    assert.deepEqual(runCommand(['validate'], folder), { status: 0, stdout: `dist/review.js ${PASSED}\ndist/summary.js ${PASSED}\n`, stderr: '' });
+    await cp(join(folder, 'dwfb.config.js'), join(folder, 'other.config.js'));
+    await rm(join(folder, 'dwfb.config.js'));
+    assert.deepEqual(runCommand(['validate', '--config', 'other.config.js'], folder), { status: 0, stdout: `dist/review.js ${PASSED}\ndist/summary.js ${PASSED}\n`, stderr: '' });
+  });
+
+  it('prints one JSON object with --json, for named scripts and for the config file', async () => {
+    const folder = await writeScripts();
+    const projectFolder = await buildProjectFixture();
+
+    const scripts = runCommand(['validate', 'clean.js', 'clock.js', '--json'], folder);
+    const config = runCommand(['validate', '--json'], projectFolder);
+
+    assert.deepEqual({ status: scripts.status, stderr: scripts.stderr }, { status: 1, stderr: '' });
+    assert.deepEqual(JSON.parse(scripts.stdout), {
+      ok: false,
+      runtime: '2.1.332',
+      scripts: [
+        { script: 'clean.js', findings: [] },
+        {
+          script: 'clock.js',
+          findings: [{
+            rule: 'clock-unavailable',
+            message: 'The script uses Date.now, which throws in the runtime when called',
+            fix: 'Pass the time through args, or stamp the result after the workflow returns',
+            file: 'clock.js',
+            line: 3,
+            column: 17,
+          }],
+        },
+      ],
+    });
+    assert.deepEqual({ status: config.status, stderr: config.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(config.stdout), { ok: true, runtime: '2.1.332', scripts: [{ script: 'dist/review.js', findings: [] }, { script: 'dist/summary.js', findings: [] }] });
+  });
+
+  it('exits 2 and prints no result for each usage error', async () => {
+    const folder = await writeScripts();
+    await mkdir(join(folder, 'sub'));
+    const projectFolder = await makeTemporaryFolder();
+    await cp(join(CONFIG_FIXTURES, 'project'), projectFolder, { recursive: true });
+    await cp(join(projectFolder, 'dwfb.config.js'), join(projectFolder, 'other.config.js'));
+    const cases = [
+      [folder, ['validate', 'clean.js', '--config', 'dwfb.config.js'], /^dwfb validate: Name scripts or --config, not both, since a named script needs no config file\.\n\nUsage: dwfb validate/],
+      [folder, ['validate'], /^dwfb validate: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script, or name a config file with --config <path>\.\n$/],
+      [folder, ['validate', 'missing.js'], /^dwfb validate: The script file missing\.js does not exist\.\n$/],
+      [folder, ['validate', 'clean.js', 'sub'], /^dwfb validate: The script sub is not a file\.\n$/],
+      [folder, ['validate', 'clean.js/'], /^dwfb validate: The script clean\.js\/ is not a file\.\n$/],
+      [folder, ['validate', 'sub/.'], /^dwfb validate: The script sub\/\. is not a file\.\n$/],
+      [folder, ['validate', 'sub/..'], /^dwfb validate: The script sub\/\.\. is not a file\.\n$/],
+      [folder, ['validate', ''], /^dwfb validate: Name each script by its path\.\n\nUsage: dwfb validate/],
+      [folder, ['validate', '--config', ''], /^dwfb validate: Name the config file with --config <path>\./],
+      [folder, ['validate', '--config'], /^dwfb validate: Option '--config <value>' argument missing/],
+      [folder, ['validate', '--config', 'missing.config.js'], /^dwfb validate: The config file missing\.config\.js does not exist\.\n$/],
+      [folder, ['validate', 'clean.js', '--verbose'], /^dwfb validate: Unknown option '--verbose'/],
+      [projectFolder, ['validate'], /^dwfb validate: The out file dist\/review\.js of the workflow whose entry is workflows\/review\/entry\.js does not exist, so run dwfb build workflows\/review\/entry\.js\.\n$/],
+      [projectFolder, ['validate', '--config', 'other.config.js'], /^dwfb validate: The out file dist\/review\.js .* so run dwfb build workflows\/review\/entry\.js --config other\.config\.js\.\n$/],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+  });
+
+  it('names the file and the cause when the out of a workflow cannot be read, and exits 2', async (context) => {
+    const folder = await makeTemporaryFolder();
+    await cp(join(CONFIG_FIXTURES, 'project'), folder, { recursive: true });
+    await mkdir(join(folder, 'dist'));
+    try {
+      await symlink(join(folder, 'dist', 'review.js'), join(folder, 'dist', 'review.js'), 'junction');
+    } catch (error) {
+      if (error.code === 'EPERM') return context.skip('this account cannot create a link');
+      throw error;
+    }
+
+    assert.deepEqual(runCommand(['validate'], folder), { status: 2, stdout: '', stderr: 'dwfb validate: Could not read or write dist/review.js (stat ELOOP).\n' });
+  });
+
+  it('prints its usage for validate --help, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['validate', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb validate \[<script>\.\.\.\] \[options\]\n[^]*\n {2}--config <path> {3}Read this config file in place of dwfb\.config\.js or dwfb\.config\.mjs\.\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}validate \[<script>\.\.\.\] +Report each rule/);
+  });
+});

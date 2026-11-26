@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { realpath } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
 import { formatBuildCommand } from '../src/build-command.js';
+import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatFinding } from '../src/format-finding.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
+import { MISSING_FILE_CODES } from '../src/load-sources.js';
 import { locate } from '../src/locate.js';
 import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
+import { validate } from '../src/validate.js';
 import { writeScript } from '../src/write-script.js';
 
 const EXIT_SUCCESS = 0;
@@ -26,6 +29,8 @@ Commands:
                                    text files and JSON files it imports.
   locate <script> <line>[:<column>]
                                    Print the source line that a line of a built script comes from.
+  validate [<script>...]           Report each rule of the runtime's contract that a workflow script
+                                   breaks.
 
 Options:
   --help      Print this help.
@@ -79,6 +84,23 @@ const LOCATE_OPTIONS = Object.freeze({
   help: { type: 'boolean' },
 });
 
+const VALIDATE_USAGE = `Usage: dwfb validate [<script>...] [options]
+
+Reports each rule of the Workflow runtime's contract that a workflow script breaks, as measured on
+Claude Code ${CONTRACT_RUNTIME_VERSION}. With no script, checks the out of every workflow of the config file.
+
+Options:
+  --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
+  --json            Print the result as one JSON object.
+  --help            Print this help.
+`;
+
+const VALIDATE_OPTIONS = Object.freeze({
+  config: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean' },
+});
+
 process.exitCode = await runCommand(process.argv.slice(2));
 
 /**
@@ -92,6 +114,7 @@ async function runCommand(args) {
 
   if (command === 'build') return runBuild(commandArgs);
   if (command === 'locate') return runLocate(commandArgs);
+  if (command === 'validate') return runValidate(commandArgs);
   if (isMainOption && commandArgs.length > 0) return printUsageError('dwfb', `The option ${command} takes no other argument, and ${JSON.stringify(commandArgs[0])} follows it.\n\n${MAIN_USAGE}`);
   if (command === '--version') return printResult(`${readVersion()}\n`);
   if (command === '--help') return printResult(MAIN_USAGE);
@@ -219,6 +242,103 @@ function formatLocateText(result) {
   if (!result.ok) return result.findings.map((finding) => `${formatFinding(finding)}\n`).join('');
   if (result.generated) return `${formatLineSource({ file: result.file, sourceLine: null })} It has no source line.\n`;
   return `${result.file}:${result.line}:${result.column}\n${result.text}\n`;
+}
+
+/**
+ * @param {string[]} args
+ * @returns {Promise<number>}
+ */
+async function runValidate(args) {
+  let parsed = null;
+  let scripts = null;
+  const results = [];
+
+  try {
+    parsed = parseArgs({ args, options: VALIDATE_OPTIONS, allowPositionals: true, strict: true });
+  } catch (error) {
+    if (!String(error.code).startsWith('ERR_PARSE_ARGS')) throw error;
+    return printUsageError('dwfb validate', `${error.message}\n\n${VALIDATE_USAGE}`);
+  }
+
+  const { values, positionals } = parsed;
+  if (values.help) return printResult(VALIDATE_USAGE);
+  if (positionals.includes('')) return printUsageError('dwfb validate', `Name each script by its path.\n\n${VALIDATE_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb validate', `Name the config file with --config <path>.\n\n${VALIDATE_USAGE}`);
+  if (positionals.length > 0 && values.config !== undefined) {
+    return printUsageError('dwfb validate', `Name scripts or --config, not both, since a named script needs no config file.\n\n${VALIDATE_USAGE}`);
+  }
+
+  // Every script is checked before any result prints, so a usage error in a later script prints no result.
+  try {
+    scripts = positionals.length > 0 ? positionals : await findConfigScripts(values.config);
+    for (const script of scripts) results.push(await validate({ script }));
+  } catch (error) {
+    return printCommandFailure('dwfb validate', error);
+  }
+
+  const isSuccess = results.every((result) => result.ok);
+  const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
+  if (values.json) return printResult(`${JSON.stringify(formatValidateJson(results, isSuccess), null, 2)}\n`, exitCode);
+  return printResult(results.map(formatValidateText).join(''), exitCode);
+}
+
+/**
+ * @param {import('../src/validate.js').ValidateResult} result
+ * @returns {string} The lines a person reads for one script.
+ */
+function formatValidateText(result) {
+  if (result.ok) return `${result.script} breaks no rule of the contract measured on Claude Code ${result.runtime}.\n`;
+  return result.findings.map((finding) => `${formatFinding(finding)}\n`).join('');
+}
+
+/**
+ * @param {import('../src/validate.js').ValidateResult[]} results In the order checked.
+ * @param {boolean} isSuccess
+ * @returns {object} The `--json` shape, which is part of the public interface.
+ */
+function formatValidateJson(results, isSuccess) {
+  return {
+    ok: isSuccess,
+    runtime: CONTRACT_RUNTIME_VERSION,
+    scripts: results.map(({ script, findings }) => ({ script, findings })),
+  };
+}
+
+/**
+ * Finds the scripts one `dwfb validate` with no script checks: the out of each workflow of the config file,
+ * in the order the config file lists them, relative to the working directory.
+ * @param {string | undefined} configPath
+ * @returns {Promise<string[]>}
+ */
+async function findConfigScripts(configPath) {
+  const commandConfig = await loadCommandConfig(configPath);
+  const scripts = [];
+
+  if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name a script, or name a config file with --config <path>`);
+  for (const workflow of commandConfig.config.workflows) {
+    const entry = formatDisplayPath(workflow.entry);
+    const out = formatDisplayPath(workflow.out);
+    if (await isMissingFile(out)) {
+      throw new UsageError(`The out file ${out} of the workflow whose entry is ${entry} does not exist, so run ${formatBuildCommand(entry, { config: configPath })}`);
+    }
+    scripts.push(out);
+  }
+
+  return scripts;
+}
+
+/**
+ * @param {string} path
+ * @returns {Promise<boolean>} True when no file or folder exists at the path.
+ */
+async function isMissingFile(path) {
+  try {
+    await stat(resolve(path));
+  } catch (error) {
+    if (MISSING_FILE_CODES.has(error.code)) return true;
+    throw error;
+  }
+  return false;
 }
 
 /**

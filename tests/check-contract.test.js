@@ -3,12 +3,11 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'dynamic-workflow-bundler';
-import { checkContract } from '../src/check-contract.js';
+import { checkContract, SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { findPosition } from '../src/source-position.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const META = "export const meta = { name: 'p', description: 'd' }\n";
-const SCRIPT_BYTE_LIMIT = 524288;
 const TREE_DEPTH = 20000;
 const PARSER_DEPTH = 1200;
 
@@ -42,6 +41,14 @@ const RULE_CASES = [
   { rule: 'meta-description-invalid', breaking: "export const meta = { name: 'p', description: `` };\n", passing: "export const meta = { name: 'p', 'description': ' ' };\n" },
   { rule: 'script-export', breaking: `${META}const a = 1;\nexport { a };\n`, passing: `${META}const a = 1;\n` },
 ];
+
+/**
+ * @param {number} byteCount
+ * @returns {string} A script of this many bytes that breaks no rule.
+ */
+function fillText(byteCount) {
+  return `${META}//${'a'.repeat(byteCount - META.length - 3)}\n`;
+}
 
 /**
  * @param {string} text
@@ -78,15 +85,22 @@ describe('checkContract', () => {
   }
 
   it('reports script-too-large past 524,288 bytes of UTF-8, at line 1, column 1, and still runs the other rules', () => {
-    const fill = (byteCount) => `${META}//${'a'.repeat(byteCount - META.length - 3)}\n`;
     const multiByteText = `${META}// ${'é'.repeat(SCRIPT_BYTE_LIMIT / 2)}\nreturn Date.now();\n`;
 
-    assert.equal(Buffer.byteLength(fill(SCRIPT_BYTE_LIMIT)), SCRIPT_BYTE_LIMIT);
-    assert.deepEqual(listFindings(fill(SCRIPT_BYTE_LIMIT)), []);
-    assert.deepEqual(listFindings(fill(SCRIPT_BYTE_LIMIT + 1)), ['script-too-large 1:1']);
+    assert.equal(Buffer.byteLength(fillText(SCRIPT_BYTE_LIMIT)), SCRIPT_BYTE_LIMIT);
+    assert.deepEqual(listFindings(fillText(SCRIPT_BYTE_LIMIT)), []);
+    assert.deepEqual(listFindings(fillText(SCRIPT_BYTE_LIMIT + 1)), ['script-too-large 1:1']);
     assert.ok(multiByteText.length < SCRIPT_BYTE_LIMIT);
     assert.deepEqual(listRules(multiByteText), ['script-too-large', 'clock-unavailable']);
-    assert.equal(checkContract(multiByteText, 'script.js')[0].message, `The script is ${Buffer.byteLength(multiByteText)} bytes as UTF-8, which is more than the 524288 bytes the runtime reads`);
+    assert.equal(checkContract(multiByteText, 'script.js')[0].message, `The script is ${Buffer.byteLength(multiByteText)} bytes, which is more than the 524288 bytes the runtime reads`);
+  });
+
+  it('measures script-too-large on the byte count it is given in place of the text', () => {
+    assert.deepEqual(listRules(`${META}return 1;\n`), []);
+    assert.deepEqual(checkContract(`${META}return 1;\n`, 'script.js', SCRIPT_BYTE_LIMIT + 1).map((finding) => `${finding.rule} ${finding.message}`), [
+      'script-too-large The script is 524289 bytes, which is more than the 524288 bytes the runtime reads',
+    ]);
+    assert.deepEqual(checkContract(fillText(SCRIPT_BYTE_LIMIT + 1), 'script.js', SCRIPT_BYTE_LIMIT), []);
   });
 
   it('reports source-too-deep alone for a script nested past the parser or past the tree walks', () => {

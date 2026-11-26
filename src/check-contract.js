@@ -20,7 +20,7 @@ const NON_DEFINING_ASSIGNMENT = '&&=';
 
 // Each fact below was measured on Claude Code 2.1.332.
 // The runtime refuses a script file larger than this.
-const SCRIPT_BYTE_LIMIT = 524288;
+export const SCRIPT_BYTE_LIMIT = 524288;
 // The runtime refuses a variable name with this prefix, which its own code uses.
 const RUNTIME_RESERVED_PREFIX = '__wRg$';
 // The runtime refuses a meta object that holds a key of one of these names, at any depth.
@@ -35,12 +35,12 @@ const RUNTIME_GLOBALS = new Set(RUNTIME_GLOBAL_NAMES);
  * syntax tree, or the tree walks overflowed on it.
  * @param {string} text The script's text as the runtime reads it.
  * @param {string} file The path each finding names.
+ * @param {number} [byteCount] The size of the script file in bytes. Defaults to the size of `text` as UTF-8.
  * @returns {Finding[]} Sorted by line, then column.
  */
-export function checkContract(text, file) {
+export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'utf8')) {
   const findings = [];
   const treeFindings = [];
-  const byteCount = Buffer.byteLength(text, 'utf8');
   const markLength = text.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK.length : 0;
   // The parser reads the raw text. A finding is placed as an editor shows it, with no byte order mark and a lone CR as a line break.
   const positionText = text.slice(markLength).replace(LONE_CR_PATTERN, '\n');
@@ -49,9 +49,7 @@ export function checkContract(text, file) {
   const addTreeFinding = (rule, message, offset) => treeFindings.push(placeFinding(rule, message, offset));
   let program = null;
 
-  if (byteCount > SCRIPT_BYTE_LIMIT) {
-    addFinding('script-too-large', `The script is ${byteCount} bytes as UTF-8, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`, 0);
-  }
+  findings.push(...checkScriptSize(byteCount, file));
 
   try {
     program = parse(text, PARSE_OPTIONS);
@@ -73,6 +71,19 @@ export function checkContract(text, file) {
   }
 
   return [...findings, ...treeFindings].sort((first, second) => first.line - second.line || first.column - second.column);
+}
+
+/**
+ * Checks the size of a workflow script file against the runtime's limit, which the runtime of Claude Code 2.1.332
+ * applies before it decodes the file. This rule alone needs no text, so it also serves a file larger than
+ * VALIDATE_READ_BYTE_LIMIT, which is too large to parse.
+ * @param {number} byteCount The size of the script file in bytes.
+ * @param {string} file The path the finding names.
+ * @returns {Finding[]} The script-too-large finding at line 1, column 1, or none.
+ */
+export function checkScriptSize(byteCount, file) {
+  if (byteCount <= SCRIPT_BYTE_LIMIT) return [];
+  return [createFinding('script-too-large', `The script is ${byteCount} bytes, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`, file, '', 0)];
 }
 
 /**

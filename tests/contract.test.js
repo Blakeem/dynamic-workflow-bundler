@@ -11,6 +11,9 @@ import { CONTRACT_CASES } from './fixtures/contract/cases.js';
 const CASE_FOLDER = fileURLToPath(new URL('./fixtures/contract/cases/', import.meta.url));
 // The probe set holds no script for these two rules, so tests/check-contract.test.js covers them.
 const RULES_WITHOUT_CASE = new Set(['script-too-large', 'source-too-deep']);
+const README = new URL('../README.md', import.meta.url);
+const VALIDATE_SECTION_HEADING = '\n## dwfb validate\n';
+const RULE_ROW_PATTERN = /^\| `(?<id>[a-z]+(?:-[a-z]+)*)` \|/gm;
 
 describe('contract cases', () => {
   for (const contractCase of CONTRACT_CASES) {
@@ -43,6 +46,17 @@ describe('contract rule table', () => {
       assert.ok(Object.hasOwn(FIXES, rule.id), rule.id);
     }
     assert.ok(Object.isFrozen(CONTRACT_RULES) && CONTRACT_RULES.every(Object.isFrozen));
+  });
+
+  it('holds the ids of the rule table of the README section on dwfb validate, in its order', async () => {
+    const readme = await readFile(README, 'utf8');
+    const sectionStart = readme.indexOf(VALIDATE_SECTION_HEADING);
+    const sectionEnd = readme.indexOf('\n## ', sectionStart + VALIDATE_SECTION_HEADING.length);
+    const section = readme.slice(sectionStart, sectionEnd === -1 ? readme.length : sectionEnd);
+    const readmeIds = [...section.matchAll(RULE_ROW_PATTERN)].map((match) => match.groups.id);
+
+    assert.notEqual(sectionStart, -1, `README.md has no line ${VALIDATE_SECTION_HEADING.trim()}`);
+    assert.deepEqual(readmeIds, CONTRACT_RULES.map((rule) => rule.id));
   });
 
   it('lists 76 distinct runtime global names', () => {
