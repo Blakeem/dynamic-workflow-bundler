@@ -124,6 +124,7 @@ export const CONTRACT_CASES = Object.freeze([
   { id: 'r05-require-call', measured: 'threw', message: 'ReferenceError: require is not defined', rules: ['global-undefined'] },
   { id: 'r06-typeof-undeclared', measured: 'returned', message: null, rules: [] },
   { id: 'r07-then-read', measured: 'returned', message: null, rules: [] },
+  { id: 'r08-inherited-global-names', measured: 'returned', message: null, rules: [] },
   { id: 't01-throws', measured: 'returned', message: null, rules: ['clock-unavailable', 'eval-unavailable', 'global-undefined', 'random-unavailable'] },
   { id: 't02-globals', measured: 'returned', message: null, rules: [] },
   { id: 't03-timer', measured: 'returned', message: null, rules: [] },

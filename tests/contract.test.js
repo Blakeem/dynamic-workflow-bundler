@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkContract } from '../src/check-contract.js';
-import { CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, RUNTIME_GLOBAL_NAMES } from '../src/contract.js';
+import { CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from '../src/contract.js';
 import { FIXES } from '../src/finding.js';
 import { CONTRACT_CASES } from './fixtures/contract/cases.js';
 
@@ -63,5 +63,12 @@ describe('contract rule table', () => {
     assert.equal(RUNTIME_GLOBAL_NAMES.length, 76);
     assert.equal(new Set(RUNTIME_GLOBAL_NAMES).size, 76);
     assert.ok(Object.isFrozen(RUNTIME_GLOBAL_NAMES));
+  });
+
+  it('lists 12 distinct inherited global names, none of them an own global name', () => {
+    assert.equal(RUNTIME_INHERITED_GLOBAL_NAMES.length, 12);
+    assert.equal(new Set(RUNTIME_INHERITED_GLOBAL_NAMES).size, 12);
+    assert.ok(Object.isFrozen(RUNTIME_INHERITED_GLOBAL_NAMES));
+    assert.deepEqual(RUNTIME_INHERITED_GLOBAL_NAMES.filter((name) => RUNTIME_GLOBAL_NAMES.includes(name)), []);
   });
 });

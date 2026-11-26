@@ -30,7 +30,7 @@ const RULE_IDS = [
 /** @type {readonly Readonly<ContractRule>[]} The rules a workflow script must meet: the runtime's rules, and source-too-deep, the depth limit of dwfb's own reader. */
 export const CONTRACT_RULES = Object.freeze(RULE_IDS.map((id) => Object.freeze({ id, measuredOn: CONTRACT_RUNTIME_VERSION })));
 
-/** @type {readonly string[]} Every name that the runtime's global object holds when a script runs. */
+/** @type {readonly string[]} Every own name that the runtime's global object holds when a script runs. */
 export const RUNTIME_GLOBAL_NAMES = Object.freeze([
   'AggregateError',
   'Array',
@@ -108,4 +108,20 @@ export const RUNTIME_GLOBAL_NAMES = Object.freeze([
   'undefined',
   'unescape',
   'workflow',
+]);
+
+/** @type {readonly string[]} The names the runtime's global object inherits from Object.prototype, which a script reads with no error, measured on Claude Code 2.1.332. */
+export const RUNTIME_INHERITED_GLOBAL_NAMES = Object.freeze([
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  '__proto__',
+  'constructor',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  'toString',
+  'valueOf',
 ]);

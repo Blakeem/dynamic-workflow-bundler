@@ -183,7 +183,7 @@ describe('checkContract', () => {
   });
 
   it('gives each global-undefined finding the fix that fits the name it reports', () => {
-    const text = `${META}require('a');\nconstructor;\nreturn [meta, () => arguments];\n`;
+    const text = `${META}require('a');\nprocess;\nreturn [meta, () => arguments];\n`;
 
     assert.deepEqual(checkContract(text, 'script.js').map((finding) => `${finding.rule} ${finding.fix}`), [
       'global-undefined Declare the name, or pass the value through args',

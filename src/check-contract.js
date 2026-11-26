@@ -1,4 +1,4 @@
-import { RUNTIME_GLOBAL_NAMES } from './contract.js';
+import { RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from './contract.js';
 import { listFreeReferences } from './find-free-names.js';
 import { createFinding } from './finding.js';
 import { readMetaObject } from './meta-statement.js';
@@ -26,7 +26,7 @@ const RUNTIME_RESERVED_PREFIX = '__wRg$';
 const RESERVED_META_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // The runtime checks these keys of meta and no other, each for a string of 1 or more characters.
 const META_KEY_RULES = Object.freeze({ name: 'meta-name-invalid', description: 'meta-description-invalid' });
-const RUNTIME_GLOBALS = new Set(RUNTIME_GLOBAL_NAMES);
+const RUNTIME_GLOBALS = new Set([...RUNTIME_GLOBAL_NAMES, ...RUNTIME_INHERITED_GLOBAL_NAMES]);
 
 /**
  * Checks a workflow script's text against the contract of the runtime, and reads no disk.
