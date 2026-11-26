@@ -80,6 +80,8 @@ Add a row before a new concept gets a name in code.
 - Files that read or write disk, or print, stay separate from files that compute.
 - Tests use `node:test` and sit in `tests/`, one file per source file, named `<source file>.test.js`.
   Fixtures sit in `tests/fixtures/`. `npm test` is the gate.
+- A test of a property of the entire build, such as parity with ES modules, is one file named
+  `<property>.test.js`. A helper that several test files share sits in `tests/support/`.
 - A test of a rule holds one script that breaks the rule and one that passes it.
 - Every fact about the runtime that the code relies on carries the Claude Code version it was measured on.
   The runtime is partly undocumented and changes between releases.
