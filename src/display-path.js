@@ -18,3 +18,13 @@ export function formatForwardSlashes(path) {
 export function formatDisplayPath(path) {
   return formatForwardSlashes(relative(process.cwd(), resolve(path)));
 }
+
+/**
+ * Gives a path to pass on as an option, such as build()'s entry, so that a message names no absolute path.
+ * @param {string} path Absolute, or relative to the working directory.
+ * @returns {string} formatDisplayPath's path, or `.` for the working directory, since an option reads ''
+ *   as a missing path.
+ */
+export function formatOptionPath(path) {
+  return formatDisplayPath(path) || '.';
+}

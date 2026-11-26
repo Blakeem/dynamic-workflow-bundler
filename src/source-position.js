@@ -27,3 +27,14 @@ export function findPosition(text, offset) {
 export function countLineBreaks(text) {
   return text.split('\n').length - 1;
 }
+
+/**
+ * Counts the lines of a text by the rule findPosition uses. The empty text after the last line break is no line.
+ * @param {string} text
+ * @returns {number}
+ */
+export function countLines(text) {
+  const lineBreakCount = countLineBreaks(text);
+
+  return text.endsWith('\n') ? lineBreakCount : lineBreakCount + 1;
+}

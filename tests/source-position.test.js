@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { countLineBreaks, findPosition } from '../src/source-position.js';
+import { countLineBreaks, countLines, findPosition } from '../src/source-position.js';
 
 describe('findPosition', () => {
   it('gives the 1-based line and column of an offset', () => {
@@ -11,6 +11,15 @@ describe('findPosition', () => {
 
   it('counts only LF as a line break', () => {
     assert.deepEqual(findPosition('a b', 2), { line: 1, column: 3 });
+  });
+});
+
+describe('countLines', () => {
+  it('counts no line after the last line break, and counts only LF as a line break', () => {
+    assert.equal(countLines(''), 1);
+    assert.equal(countLines('a\nb'), 2);
+    assert.equal(countLines('a\nb\n'), 2);
+    assert.equal(countLines('a b'), 1);
   });
 });
 

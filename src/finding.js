@@ -5,12 +5,13 @@ import { findPosition } from './source-position.js';
  * @property {string} rule The rule id.
  * @property {string} message What is wrong, with no closing period.
  * @property {string} fix How to fix it, with no closing period.
- * @property {string} file The source file. A real path until the build reports it.
+ * @property {string} file The source that breaks the rule, or the built script for script-stale. A source's
+ *   path is a real path until the build reports it.
  * @property {number} line 1-based.
  * @property {number} column 1-based.
  */
 
-/** How to fix each rule's finding. */
+/** How to fix the finding of each rule that a source breaks. */
 export const FIXES = Object.freeze({
   'syntax-error': 'Correct the syntax',
   'meta-not-first': 'Make export const meta = { ... } the first statement of the entry',

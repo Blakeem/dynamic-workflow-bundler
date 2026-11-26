@@ -76,6 +76,86 @@ describe('joinModules line origins', () => {
   });
 });
 
+describe('joinModules source positions', () => {
+  /**
+   * @param {string} script
+   * @param {string} lineText
+   * @returns {number} The 1-based line of the script that holds the text.
+   */
+  function findScriptLine(script, lineText) {
+    return script.split('\n').indexOf(lineText) + 1;
+  }
+
+  /**
+   * @param {import('../src/join-modules.js').SourcePosition} position
+   * @returns {object} The position with the file's name in place of its path.
+   */
+  function nameFile(position) {
+    return { ...position, file: position.file === null ? null : basename(position.file) };
+  }
+
+  it('maps a column past an edit by the edit\'s change in length, and one inside an edit to its start', async () => {
+    const { script, findSourcePosition } = await joinFiles(
+      {
+        'entry.js': "export const meta = {};\nimport { a } from './a.js';\nimport value from './d.js';\nreturn [a, value];\n",
+        'a.js': 'export const a = 1;\n',
+        'd.js': 'export default (2);\n',
+      },
+      false,
+    );
+    const exportLine = findScriptLine(script, 'const a = 1;');
+    const defaultLine = script.split('\n').findIndex((line) => line.endsWith('= { default: (2) }.default;')) + 1;
+    const defaultText = script.split('\n')[defaultLine - 1];
+
+    assert.deepEqual(nameFile(findSourcePosition(exportLine, 1)), { file: 'a.js', line: 1, column: 8, text: 'export const a = 1;' });
+    assert.equal(findSourcePosition(exportLine, 11).column, 18);
+    assert.equal(findSourcePosition(defaultLine, 3).column, 1);
+    assert.equal(findSourcePosition(defaultLine, defaultText.indexOf('(2)') + 1).column, 16);
+    assert.equal(findSourcePosition(defaultLine, defaultText.indexOf(' }.default') + 1).column, 19);
+    assert.equal(findSourcePosition(defaultLine, defaultText.length).column, 19);
+  });
+
+  it('maps each line of a removed multi-line import to its own source line', async () => {
+    const { script, findSourcePosition } = await joinFiles(
+      { 'entry.js': "export const meta = {};\nimport {\n  a,\n} from './a.js';\nreturn a;\n", 'a.js': 'export const a = 1;\n' },
+      false,
+    );
+    const returnLine = findScriptLine(script, 'return a;');
+    const importLines = [returnLine - 3, returnLine - 2, returnLine - 1];
+
+    assert.deepEqual(importLines.map((line) => nameFile(findSourcePosition(line, 1))), [
+      { file: 'entry.js', line: 2, column: 1, text: 'import {' },
+      { file: 'entry.js', line: 3, column: 1, text: '  a,' },
+      { file: 'entry.js', line: 4, column: 16, text: "} from './a.js';" },
+    ]);
+    assert.equal(findSourcePosition(returnLine - 1, 2).column, 17);
+  });
+
+  it('maps a column of a text file line past its escapes, and a column of a part line', async () => {
+    const { script, findSourcePosition } = await joinFiles(
+      {
+        'entry.js': "export const meta = {};\nimport t from './t.md';\n// @include ./part.js\nreturn [t, p];\n",
+        't.md': 'a`b${c}\\d\n',
+        'part.js': 'const p =   1;\n',
+      },
+      false,
+    );
+    const textLine = findScriptLine(script, 'a\\`b\\${c}\\\\d');
+    const partLine = findScriptLine(script, 'const p =   1;');
+
+    assert.deepEqual(nameFile(findSourcePosition(textLine, 1)), { file: 't.md', line: 1, column: 1, text: 'a`b${c}\\d' });
+    assert.deepEqual([3, 4, 6, 7, 10, 12, 13, 99].map((column) => findSourcePosition(textLine, column).column), [2, 3, 4, 4, 8, 9, 10, 10]);
+    assert.deepEqual(nameFile(findSourcePosition(partLine, 13)), { file: 'part.js', line: 1, column: 13, text: 'const p =   1;' });
+  });
+
+  it('gives a line the build adds no column and no text', async () => {
+    const { script, findSourcePosition } = await joinFiles({ 'entry.js': 'export const meta = {};\nreturn 1;\n' }, true);
+
+    assert.match(script.split('\n')[1], /^\/\/ Built by dynamic-workflow-bundler/);
+    assert.deepEqual(findSourcePosition(2, 1), { file: null, line: null, column: null, text: null });
+  });
+});
+
 describe('nameSource', () => {
   it('names a source from its path, with the reserved prefix', () => {
     assert.match(nameSource('lib/join-modules.js'), /^__dwfb_lib_join_modules_js_[0-9a-f]{8}$/);

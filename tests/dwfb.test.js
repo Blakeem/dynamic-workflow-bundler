@@ -498,3 +498,113 @@ describe('dwfb build with a config file', () => {
     }
   });
 });
+
+describe('dwfb locate', () => {
+  /**
+   * Copies the config project fixture into a temporary folder and builds its workflows there.
+   * @returns {Promise<{ folder: string, review: string[], summary: string[] }>} The folder and the lines of
+   *   each built script.
+   */
+  async function buildProjectFixture() {
+    const folder = await makeTemporaryFolder();
+    await cp(join(CONFIG_FIXTURES, 'project'), folder, { recursive: true });
+    runCommand(['build'], folder);
+    const review = (await readFile(join(folder, 'dist', 'review.js'), 'utf8')).split('\n');
+    const summary = (await readFile(join(folder, 'dist', 'summary.js'), 'utf8')).split('\n');
+    return { folder, review, summary };
+  }
+
+  it('prints the source file, line and column, then the source line, of a script with a banner and of one the config file names', async () => {
+    const { folder, review, summary } = await buildProjectFixture();
+    const promptLine = review.indexOf('  return `Review this change.') + 1;
+    const collectLine = summary.indexOf('const files = args.files ?? [];') + 1;
+
+    assert.deepEqual(runCommand(['locate', 'dist/review.js', String(promptLine)], folder), { status: 0, stdout: 'workflows/review/prompts.js:2:1\n  return `Review this change.\n', stderr: '' });
+    assert.deepEqual(runCommand(['locate', 'dist/review.js', `${promptLine}:10`], folder), { status: 0, stdout: 'workflows/review/prompts.js:2:10\n  return `Review this change.\n', stderr: '' });
+    assert.deepEqual(runCommand(['locate', 'dist/summary.js', String(collectLine)], folder), { status: 0, stdout: 'workflows/summary/steps/collect.js:1:1\nconst files = args.files ?? [];\n', stderr: '' });
+  });
+
+  it('says that the build adds a line, and prints one JSON object with --json', async () => {
+    const { folder, review } = await buildProjectFixture();
+    const scopeLine = review.findIndex((line) => line.startsWith('const __dwfb_prompts_js_')) + 1;
+
+    assert.deepEqual(runCommand(['locate', 'dist/review.js', '2'], folder), { status: 0, stdout: 'The build adds the line. It has no source line.\n', stderr: '' });
+    assert.deepEqual(runCommand(['locate', 'dist/review.js', String(scopeLine)], folder), { status: 0, stdout: 'The build adds the line for workflows/review/prompts.js. It has no source line.\n', stderr: '' });
+    const json = runCommand(['locate', 'dist/review.js', '1:8', '--json'], folder);
+    assert.equal(json.status, 0);
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, file: 'workflows/review/entry.js', line: 1, column: 8, text: "export const meta = { name: 'review', description: 'Review a change' };", generated: false, findings: [] });
+  });
+
+  it('reads a line of a runtime stack trace with --runtime', async () => {
+    const { folder } = await buildProjectFixture();
+    const entry = join(folder, 'workflows', 'review', 'entry.js');
+    await writeFile(entry, (await readFile(entry, 'utf8')).replace("export const meta = { name: 'review', description: 'Review a change' };", "export const meta = {\n  name: 'review',\n  description: 'Review a change',\n};"));
+    runCommand(['build'], folder);
+    const review = (await readFile(join(folder, 'dist', 'review.js'), 'utf8')).split('\n');
+    const returnLine = review.indexOf('return await agent(reviewPrompt(args.change, checklist));') + 1;
+
+    // The meta statement ends on line 4 and the banner is line 5, so runtime line R is script line R + 3.
+    assert.deepEqual(runCommand(['locate', 'dist/review.js', `${returnLine - 3}:14`, '--runtime'], folder), runCommand(['locate', 'dist/review.js', `${returnLine}:14`], folder));
+    assert.equal(runCommand(['locate', 'dist/review.js', `${returnLine - 3}:14`, '--runtime'], folder).stdout, 'workflows/review/entry.js:9:14\nreturn await agent(reviewPrompt(args.change, checklist));\n');
+  });
+
+  it('builds from the entry that --entry names, and reads the config file that --config names', async () => {
+    const { folder, summary } = await buildProjectFixture();
+    const collectLine = summary.indexOf('const files = args.files ?? [];') + 1;
+    await cp(join(folder, 'workflows', 'review'), join(folder, 'copy'), { recursive: true });
+    await cp(join(folder, 'dwfb.config.js'), join(folder, 'other.config.js'));
+    await rm(join(folder, 'dwfb.config.js'));
+
+    const fromEntry = runCommand(['locate', 'dist/review.js', '1', '--entry', 'copy/entry.js'], folder);
+    const fromConfig = runCommand(['locate', 'dist/summary.js', String(collectLine), '--config', 'other.config.js'], folder);
+
+    assert.deepEqual({ status: fromEntry.status, stderr: fromEntry.stderr }, { status: 1, stderr: '' });
+    assert.match(fromEntry.stdout, /^dist\/review\.js:2:1 script-stale .* Run dwfb build copy\/entry\.js --out dist\/review\.js, since/);
+    assert.deepEqual(fromConfig, { status: 0, stdout: 'workflows/summary/steps/collect.js:1:1\nconst files = args.files ?? [];\n', stderr: '' });
+    assert.equal(runCommand(['locate', 'dist/summary.js', String(collectLine)], folder).status, 2);
+  });
+
+  it('prints script-stale and exits 1 for a script that differs from its source, with the command that rewrites it', async () => {
+    const { folder, review } = await buildProjectFixture();
+    const checklist = join(folder, 'workflows', 'review', 'checklist.md');
+    await writeFile(checklist, (await readFile(checklist, 'utf8')).replace('Each message', 'Every message'));
+    const checklistLine = review.indexOf('- Each message names its cause.') + 1;
+
+    const { status, stdout, stderr } = runCommand(['locate', 'dist/review.js', '1'], folder);
+    runCommand(['build', 'workflows/review/entry.js', '--out', 'dist/review.js'], folder);
+
+    assert.deepEqual({ status, stderr }, { status: 1, stderr: '' });
+    assert.equal(stdout, `dist/review.js:${checklistLine}:1 script-stale The script differs from the script the build gives. Run dwfb build workflows/review/entry.js --out dist/review.js, since the line numbers may not match the source.\n`);
+    assert.equal(runCommand(['locate', 'dist/review.js', '1'], folder).status, 0);
+  });
+
+  it('exits 2 for a missing script or line, a line that is not a whole number of 1 or more, is too large or lies past the script, and an empty option', async () => {
+    const { folder, review } = await buildProjectFixture();
+    const cases = [
+      [['locate'], /^dwfb locate: Name one built script and one line\.\n\nUsage: dwfb locate/],
+      [['locate', 'dist/review.js'], /^dwfb locate: Name one built script and one line\./],
+      [['locate', 'dist/review.js', ''], /^dwfb locate: Name one built script and one line\./],
+      [['locate', 'dist/review.js', 'x'], /^dwfb locate: The line x is not a whole number, or a line and a column such as 12:5\./],
+      [['locate', 'dist/review.js', '3:'], /^dwfb locate: The line 3: is not a whole number/],
+      [['locate', 'dist/review.js', '0'], /^dwfb locate: The line 0 is not a whole number of 1 or more\.\n$/],
+      [['locate', 'dist/review.js', '9007199254740993'], /^dwfb locate: The line 9007199254740993 is larger than 9007199254740991\.\n\nUsage: dwfb locate/],
+      [['locate', 'dist/review.js', '1:999999999999999999999'], /^dwfb locate: The column 999999999999999999999 is larger than 9007199254740991\.\n\nUsage: dwfb locate/],
+      [['locate', 'dist/review.js', `${review.length}`], new RegExp(`^dwfb locate: The script dist/review\.js ends on line ${review.length - 1}, so line ${review.length} is past its end\.\n$`)],
+      [['locate', 'dist/missing.js', '1'], /^dwfb locate: The script file dist\/missing\.js does not exist\.\n$/],
+      [['locate', 'dist/review.js', '1', '--entry', ''], /^dwfb locate: Name the entry file with --entry <file>\./],
+      [['locate', 'dist/review.js', '1', '--config', ''], /^dwfb locate: Name the config file with --config <path>\./],
+      [['locate', 'dist/review.js', '1', '--verbose'], /^dwfb locate: Unknown option '--verbose'/],
+    ];
+
+    for (const [args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, folder);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+  });
+
+  it('prints its usage for locate --help, and the main usage lists it', () => {
+    assert.match(runCommand(['locate', '--help']).stdout, /^Usage: dwfb locate <script> <line>\[:<column>\] \[options\]\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}locate <script> <line>\[:<column>\]\n/);
+  });
+});

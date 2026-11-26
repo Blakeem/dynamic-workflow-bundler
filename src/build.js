@@ -50,6 +50,15 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
  */
 
 /**
+ * @typedef {object} MappedBuild
+ * @property {BuildResult} result
+ * @property {((line: number, column: number) => import('./join-modules.js').SourcePosition) | null} findSourcePosition
+ *   As JoinedScript gives it, with each path as BuildResult gives it. Null when the build has a finding.
+ * @property {number | null} metaEnd The offset just after the built script's meta statement, or null when
+ *   the build has a finding.
+ */
+
+/**
  * Builds one workflow script from an entry, its parts, and the modules, text files and JSON files it
  * imports. Prints nothing.
  * Rejects with a UsageError for options that are not an object, an unknown or wrong option, `check` with
@@ -58,7 +67,16 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
  * @param {BuildOptions} options
  * @returns {Promise<BuildResult>}
  */
-export async function build(options = /** @type {BuildOptions} */ ({})) {
+export async function build(options) {
+  return (await buildMappedScript(options)).result;
+}
+
+/**
+ * Builds as build() does, and also gives what maps each line of the built script to its source.
+ * @param {BuildOptions} options
+ * @returns {Promise<MappedBuild>}
+ */
+export async function buildMappedScript(options = /** @type {BuildOptions} */ ({})) {
   if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('build() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !BUILD_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`build() takes no option ${unknownKey}`);
@@ -93,20 +111,27 @@ export async function build(options = /** @type {BuildOptions} */ ({})) {
     ...finding,
     file: formatSourcePath(finding.file),
   }));
-  if (findings.length > 0) return { ok: false, status: 'failed', script: null, sources: sourcePaths, findings };
+  if (findings.length > 0) return { result: { ok: false, status: 'failed', script: null, sources: sourcePaths, findings }, findSourcePosition: null, metaEnd: null };
 
   const entryFolder = dirname(entryFile);
   const joinedSources = order.map((file) => ({ ...sources.get(file), path: formatForwardSlashes(relative(entryFolder, file)) }));
-  const { script, lineOrigins } = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
+  const joined = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
+  const { script, lineOrigins } = joined;
+  // The entry's edits all follow its meta statement, so the offset holds in the built script.
+  const metaEnd = entrySource.analysis.metaEnd;
+  const findSourcePosition = (line, column) => {
+    const position = joined.findSourcePosition(line, column);
+    return { ...position, file: position.file === null ? null : formatSourcePath(position.file) };
+  };
 
-  compileBuiltScript(script, entrySource.analysis.metaEnd);
+  compileBuiltScript(script, metaEnd);
   if (check) {
     const comparison = await compareOutFile(outFile, script, lineOrigins, formatSourcePath);
-    return { ok: true, ...comparison, script, sources: sourcePaths, findings: [] };
+    return { result: { ok: true, ...comparison, script, sources: sourcePaths, findings: [] }, findSourcePosition, metaEnd };
   }
   if (write) await writeScript(outFile, script);
 
-  return { ok: true, status: write ? 'written' : 'built', script, sources: sourcePaths, findings: [] };
+  return { result: { ok: true, status: write ? 'written' : 'built', script, sources: sourcePaths, findings: [] }, findSourcePosition, metaEnd };
 }
 
 /**

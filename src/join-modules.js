@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { RESERVED_PREFIX } from './analyze-source.js';
+import { BANNER_END, BANNER_START } from './banner.js';
 import { findLineOrigin } from './expand-parts.js';
-import { countLineBreaks } from './source-position.js';
+import { countLineBreaks, findPosition } from './source-position.js';
 
 /** @typedef {import('./analyze-source.js').Edit} Edit */
 /** @typedef {import('./analyze-source.js').ExportRecord} ExportRecord */
@@ -28,9 +29,32 @@ const TEMPLATE_ESCAPES = Object.freeze({ '\\': '\\\\', '`': '\\`', '${': '\\${',
  */
 
 /**
+ * @typedef {object} SourcePosition
+ * @property {string | null} file As LineOrigin gives it.
+ * @property {number | null} line As LineOrigin gives it.
+ * @property {number | null} column The source line's 1-based column, or null for a line the build adds.
+ * @property {string | null} text The source line, or null for a line the build adds.
+ */
+
+/**
+ * @typedef {object} SourceMapping
+ * @property {string} sourceText The text that `edits` index. The entry's holds its parts.
+ * @property {Edit[]} edits The edits that give the built text from `sourceText`.
+ * @property {number} offset The offset of the piece's text in the built text.
+ * @property {(line: number) => LineOrigin} findOrigin Maps a 1-based line of `sourceText` to its origin.
+ */
+
+/**
  * @typedef {object} ScriptPiece
  * @property {string} text
  * @property {(line: number) => LineOrigin} findOrigin Maps a 1-based line of `text` to its origin.
+ * @property {SourceMapping | null} mapping Null for lines the build adds.
+ */
+
+/**
+ * @typedef {object} ScriptLine
+ * @property {ScriptPiece} piece The piece where the line starts.
+ * @property {number} pieceLine The line's 1-based line in the piece's text.
  */
 
 /**
@@ -38,6 +62,9 @@ const TEMPLATE_ESCAPES = Object.freeze({ '\\': '\\\\', '`': '\\`', '${': '\\${',
  * @property {string} script
  * @property {LineOrigin[]} lineOrigins One per line of the script, as `script.split('\n')` gives the lines,
  *   so index 0 holds line 1.
+ * @property {(line: number, column: number) => SourcePosition} findSourcePosition Maps a line that
+ *   `lineOrigins` holds and a 1-based column to its source. A column past the line's end gives the end of
+ *   the source line.
  */
 
 /**
@@ -65,44 +92,95 @@ export function joinModules({ entry, sources, bannerPath }) {
     const origin = findLineOrigin(entry.includes, line);
     return { file: origin.file ?? entry.file, line: origin.line };
   };
-  const pieces = [{ text: head, findOrigin: findEntryOrigin }];
+  const entryMapping = { sourceText: entry.text, edits: entry.analysis.edits, findOrigin: findEntryOrigin };
+  const pieces = [{ text: head, findOrigin: findEntryOrigin, mapping: { ...entryMapping, offset: 0 } }];
 
   if (bannerPath !== null) {
     const separator = head.endsWith('\n') ? '' : '\n';
-    pieces.push(addedPiece(`${separator}// Built by dynamic-workflow-bundler from ${formatCommentText(bannerPath)}. Edit the source, not this file.\n`, null));
+    pieces.push(addedPiece(`${separator}${BANNER_START}${formatCommentText(bannerPath)}${BANNER_END}\n`, null));
   }
   for (const source of sources.filter((each) => each.kind === 'text')) pieces.push(...formatTextFile(source, sourceNames));
   for (const source of sources.filter((each) => each.kind === 'json')) pieces.push(...formatJsonFile(source, sourceNames));
   for (const source of sources.filter((each) => each.kind === 'module')) pieces.push(...formatScope(source, sourceNames));
   if (entryBindings !== '') pieces.push(addedPiece(`${entryBindings}\n`, entry.file));
-  pieces.push({ text: entryText.slice(splitOffset), findOrigin: (line) => findEntryOrigin(metaLastLine + line) });
+  pieces.push({ text: entryText.slice(splitOffset), findOrigin: (line) => findEntryOrigin(metaLastLine + line), mapping: { ...entryMapping, offset: splitOffset } });
+  const scriptLines = mapScriptLines(pieces);
 
-  return { script: pieces.map((piece) => piece.text).join(''), lineOrigins: mapLineOrigins(pieces) };
+  return {
+    script: pieces.map((piece) => piece.text).join(''),
+    lineOrigins: scriptLines.map(({ piece, pieceLine }) => piece.findOrigin(pieceLine)),
+    findSourcePosition: (line, column) => findSourcePosition(scriptLines[line - 1], column),
+  };
 }
 
 /**
- * Gives each line of the joined pieces the origin of the piece where the line starts. The line after the
- * script's last line break takes the origin of the last piece's next line.
+ * Gives each line of the joined pieces the piece where the line starts. The line after the script's last
+ * line break takes the last piece's next line.
  * @param {ScriptPiece[]} pieces
- * @returns {LineOrigin[]}
+ * @returns {ScriptLine[]}
  */
-function mapLineOrigins(pieces) {
-  const origins = [];
+function mapScriptLines(pieces) {
+  const scriptLines = [];
   let isLineStart = true;
 
-  for (const { text, findOrigin } of pieces) {
-    const lines = text.split('\n');
+  for (const piece of pieces) {
+    const lines = piece.text.split('\n');
     lines.forEach((lineText, index) => {
       const continuesLine = index === 0 && !isLineStart;
       const isAfterLastBreak = index === lines.length - 1 && lineText === '';
-      if (!continuesLine && !isAfterLastBreak) origins.push(findOrigin(index + 1));
+      if (!continuesLine && !isAfterLastBreak) scriptLines.push({ piece, pieceLine: index + 1 });
     });
-    if (text !== '') isLineStart = text.endsWith('\n');
+    if (piece.text !== '') isLineStart = piece.text.endsWith('\n');
   }
   const lastPiece = pieces[pieces.length - 1];
-  if (isLineStart) origins.push(lastPiece.findOrigin(countLineBreaks(lastPiece.text) + 1));
+  if (isLineStart) scriptLines.push({ piece: lastPiece, pieceLine: countLineBreaks(lastPiece.text) + 1 });
 
-  return origins;
+  return scriptLines;
+}
+
+/**
+ * @param {ScriptLine} scriptLine
+ * @param {number} column 1-based.
+ * @returns {SourcePosition}
+ */
+function findSourcePosition({ piece, pieceLine }, column) {
+  if (piece.mapping === null) return { ...piece.findOrigin(pieceLine), column: null, text: null };
+  const { sourceText, edits, offset, findOrigin } = piece.mapping;
+  const lineStart = findOffsetAfterLine(piece.text, pieceLine - 1);
+  const lineEnd = findLineEnd(piece.text, lineStart);
+  const builtOffset = offset + Math.min(lineStart + column - 1, lineEnd);
+  const position = findPosition(sourceText, findSourceOffset(sourceText, edits, builtOffset));
+  const sourceLineStart = findOffsetAfterLine(sourceText, position.line - 1);
+
+  return {
+    ...findOrigin(position.line),
+    column: position.column,
+    text: sourceText.slice(sourceLineStart, findLineEnd(sourceText, sourceLineStart)),
+  };
+}
+
+/**
+ * Maps an offset of the text that applyEdits gives back to the source text. An offset in an edit's new text
+ * maps to the start of the replaced text on the same line, since an edit keeps the line breaks it replaces.
+ * @param {string} sourceText
+ * @param {Edit[]} edits In source order, with no overlap.
+ * @param {number} builtOffset
+ * @returns {number}
+ */
+function findSourceOffset(sourceText, edits, builtOffset) {
+  let shift = 0;
+
+  for (const edit of edits) {
+    const builtStart = edit.start + shift;
+    if (builtOffset < builtStart) break;
+    if (builtOffset < builtStart + edit.text.length) {
+      const lineBreakCount = countLineBreaks(edit.text.slice(0, builtOffset - builtStart));
+      return edit.start + findOffsetAfterLine(sourceText.slice(edit.start, edit.end), lineBreakCount);
+    }
+    shift += edit.text.length - (edit.end - edit.start);
+  }
+
+  return builtOffset - shift;
 }
 
 /**
@@ -111,16 +189,18 @@ function mapLineOrigins(pieces) {
  * @returns {ScriptPiece}
  */
 function addedPiece(text, file) {
-  return { text, findOrigin: () => ({ file, line: null }) };
+  return { text, findOrigin: () => ({ file, line: null }), mapping: null };
 }
 
 /**
  * @param {string} text The source's lines, in their order and count.
  * @param {JoinedSource} source
+ * @param {Edit[]} edits The edits that give `text` from the source's text.
  * @returns {ScriptPiece}
  */
-function sourcePiece(text, source) {
-  return { text, findOrigin: (line) => ({ file: source.file, line }) };
+function sourcePiece(text, source, edits) {
+  const findOrigin = (line) => ({ file: source.file, line });
+  return { text, findOrigin, mapping: { sourceText: source.text, edits, offset: 0, findOrigin } };
 }
 
 /**
@@ -167,11 +247,11 @@ function formatJsonFile(source, sourceNames) {
  * @returns {ScriptPiece[]}
  */
 function formatTemplateConstant(source, before, after) {
-  const escapedText = source.text.replace(TEMPLATE_SPECIAL_TEXT, (special) => TEMPLATE_ESCAPES[special]);
+  const escapes = Array.from(source.text.matchAll(TEMPLATE_SPECIAL_TEXT), (match) => ({ start: match.index, end: match.index + match[0].length, text: TEMPLATE_ESCAPES[match[0]] }));
 
   return [
     addedPiece(`// ${formatCommentText(source.path)}\n${before}\`\\\n`, source.file),
-    sourcePiece(escapedText, source),
+    sourcePiece(applyEdits(source.text, escapes), source, escapes),
     addedPiece(`\`${after}\n`, source.file),
   ];
 }
@@ -190,7 +270,7 @@ function formatScope(module, sourceNames) {
   const opening = `// ${formatCommentText(module.path)}\nconst ${sourceNames.get(module.file)} = Object.freeze(Object.defineProperty((() => {${bindings === '' ? '' : ` ${bindings}`}\n`;
   const closing = `return { __proto__: null${exportNames === '' ? '' : `, ${exportNames}`} }; })(), Symbol.toStringTag, { value: 'Module' }));\n`;
 
-  return [addedPiece(opening, module.file), sourcePiece(closedBody, module), addedPiece(closing, module.file)];
+  return [addedPiece(opening, module.file), sourcePiece(closedBody, module, module.analysis.edits), addedPiece(closing, module.file)];
 }
 
 /**
@@ -284,4 +364,14 @@ function findOffsetAfterLine(text, line) {
   }
 
   return offset;
+}
+
+/**
+ * @param {string} text
+ * @param {number} lineStart The offset where a line starts.
+ * @returns {number} The offset of the line's line break, or the text's length when the line has none.
+ */
+function findLineEnd(text, lineStart) {
+  const breakIndex = text.indexOf('\n', lineStart);
+  return breakIndex === -1 ? text.length : breakIndex;
 }

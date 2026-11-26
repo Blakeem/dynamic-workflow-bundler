@@ -12,6 +12,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 | Command | Purpose | Status |
 |---|---|---|
 | `dwfb build` | Build a workflow script from an entry, its parts, and the modules, text files and JSON files it imports, or every workflow of a config file. | available |
+| `dwfb locate` | Find the source file and line that a line of a built script comes from. | available |
 | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | planned |
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
@@ -111,6 +112,26 @@ export default {
 ### Check
 
 `dwfb build --check` builds each workflow in memory and compares the result with the file at `out`, and it writes nothing. The command exits 0 when every file matches. It exits 1 when a file differs or is missing, or a workflow has a finding. For a file that differs, it prints the file's first differing line and the source file and line that this line comes from. This way a commit hook or a CI job can stop a built script that no longer matches its source.
+
+## dwfb locate
+
+An error message, a review finding or a diff names a line of the built script. `dwfb locate` prints the source file, line and column of that line, then the source line.
+
+```
+$ dwfb locate .claude/workflows/review.js 14
+workflows/review/entry.js:5:1
+return await agent(reviewPrompt(args.change));
+```
+
+A line can carry a column, as in `14:5`. The Workflow runtime numbers lines from the code after the `meta` statement, so the line in a stack trace can differ from the built script's line. `--runtime` reads the line and column as the runtime reports them. For a stack trace line `workflow.js:6:10`, run this command:
+
+```
+$ dwfb locate .claude/workflows/review.js 6:10 --runtime
+workflows/review/prompts.js:2:10
+  return `Review this change.
+```
+
+The command finds the entry from the banner line. A script with no banner takes the entry of the config file's workflow whose `out` is the script, and `--config <path>` names another config file. `--entry <file>` names the entry in place of both. Then the command builds the script in memory. For a line that the build adds, such as the banner or the first line of a module's scope, it says so, and names the source file whose constant, scope or imported names the line holds when there is one. A built script that differs from the script the build gives stops the command with the finding `script-stale`, since its line numbers may not match the source. The finding names the `dwfb build` command that rewrites it. `--json` prints the result as one JSON object.
 
 ## License
 

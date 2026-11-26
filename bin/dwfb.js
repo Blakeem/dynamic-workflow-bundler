@@ -4,9 +4,12 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
-import { formatDisplayPath } from '../src/display-path.js';
+import { formatBuildCommand } from '../src/build-command.js';
+import { formatDisplayPath, formatOptionPath } from '../src/display-path.js';
+import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatFinding } from '../src/format-finding.js';
 import { CONFIG_FILE, loadConfig } from '../src/load-config.js';
+import { locate } from '../src/locate.js';
 import { findRealPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
 import { writeScript } from '../src/write-script.js';
@@ -14,13 +17,15 @@ import { writeScript } from '../src/write-script.js';
 const EXIT_SUCCESS = 0;
 const EXIT_FINDINGS = 1;
 const EXIT_FAILURE = 2;
-const SHELL_SAFE_PATH_PATTERN = /^[\w./:@+-]+$/;
+const SCRIPT_POSITION_PATTERN = /^(?<line>\d+)(?::(?<column>\d+))?$/;
 
 const MAIN_USAGE = `Usage: dwfb <command> [options]
 
 Commands:
   build [<entry>] [--out <file>]   Build workflow scripts from an entry, its parts, and the modules,
                                    text files and JSON files it imports.
+  locate <script> <line>[:<column>]
+                                   Print the source line that a line of a built script comes from.
 
 Options:
   --help      Print this help.
@@ -52,6 +57,28 @@ const BUILD_OPTIONS = Object.freeze({
   help: { type: 'boolean' },
 });
 
+const LOCATE_USAGE = `Usage: dwfb locate <script> <line>[:<column>] [options]
+
+Prints the source file, line and column that a line of a built script comes from, then the source line.
+The command builds the script in memory from the entry that its banner names, or with no banner from the
+workflow of the config file whose out is the script.
+
+Options:
+  --runtime         Read the line and column as the runtime reports them, as in workflow.js:5:9.
+  --entry <file>    Build the script from this entry.
+  --config <path>   Read this config file in place of ${CONFIG_FILE}.
+  --json            Print the result as one JSON object.
+  --help            Print this help.
+`;
+
+const LOCATE_OPTIONS = Object.freeze({
+  runtime: { type: 'boolean' },
+  entry: { type: 'string' },
+  config: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean' },
+});
+
 const SUCCESS_STATUSES = new Set(['written', 'fresh']);
 
 process.exitCode = await runCommand(process.argv.slice(2));
@@ -66,6 +93,7 @@ async function runCommand(args) {
   const isMainOption = command === '--version' || command === '--help';
 
   if (command === 'build') return runBuild(commandArgs);
+  if (command === 'locate') return runLocate(commandArgs);
   if (isMainOption && commandArgs.length > 0) return printUsageError('dwfb', `The option ${command} takes no other argument, and ${JSON.stringify(commandArgs[0])} follows it.\n\n${MAIN_USAGE}`);
   if (command === '--version') return printResult(`${readVersion()}\n`);
   if (command === '--help') return printResult(MAIN_USAGE);
@@ -103,7 +131,7 @@ async function runBuild(args) {
   try {
     workflows = await findWorkflows(entry, values.out, values.config);
   } catch (error) {
-    return printBuildFailure(error);
+    return printCommandFailure('dwfb build', error);
   }
   // Every workflow builds before any script is written, so a usage error in a later workflow writes nothing.
   for (const workflow of workflows) {
@@ -111,13 +139,13 @@ async function runBuild(args) {
     try {
       builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false }) });
     } catch (error) {
-      return printBuildFailure(error);
+      return printCommandFailure('dwfb build', error);
     }
   }
   try {
     await checkOutFiles(builtWorkflows);
   } catch (error) {
-    return printBuildFailure(error);
+    return printCommandFailure('dwfb build', error);
   }
   if (!values.json && builtWorkflows.length === 0) process.stdout.write(`The config file ${values.config ?? CONFIG_FILE} lists no workflow.\n`);
   for (const builtWorkflow of builtWorkflows) {
@@ -125,7 +153,7 @@ async function runBuild(args) {
       try {
         await writeScript(resolve(builtWorkflow.workflow.out), builtWorkflow.result.script);
       } catch (error) {
-        return printBuildFailure(error);
+        return printCommandFailure('dwfb build', error);
       }
       builtWorkflow.result = { ...builtWorkflow.result, status: 'written' };
     }
@@ -136,6 +164,62 @@ async function runBuild(args) {
   const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
   if (values.json) return printResult(`${JSON.stringify(formatBuildJson(builtWorkflows, isSuccess), null, 2)}\n`, exitCode);
   return exitCode;
+}
+
+/**
+ * @param {string[]} args
+ * @returns {Promise<number>}
+ */
+async function runLocate(args) {
+  let parsed = null;
+  let result = null;
+
+  try {
+    parsed = parseArgs({ args, options: LOCATE_OPTIONS, allowPositionals: true, strict: true });
+  } catch (error) {
+    if (!String(error.code).startsWith('ERR_PARSE_ARGS')) throw error;
+    return printUsageError('dwfb locate', `${error.message}\n\n${LOCATE_USAGE}`);
+  }
+
+  const { values, positionals } = parsed;
+  const [script, position] = positionals;
+  const positionMatch = SCRIPT_POSITION_PATTERN.exec(position ?? '');
+  if (values.help) return printResult(LOCATE_USAGE);
+  if (positionals.length !== 2 || script === '' || position === '') return printUsageError('dwfb locate', `Name one built script and one line.\n\n${LOCATE_USAGE}`);
+  if (positionMatch === null) return printUsageError('dwfb locate', `The line ${position} is not a whole number, or a line and a column such as 12:5.\n\n${LOCATE_USAGE}`);
+  if (values.entry === '') return printUsageError('dwfb locate', `Name the entry file with --entry <file>.\n\n${LOCATE_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb locate', `Name the config file with --config <path>.\n\n${LOCATE_USAGE}`);
+  const { line, column } = /** @type {{ line: string, column?: string }} */ (positionMatch.groups);
+  // Number() rounds a larger digit string, so locate() would name a number the user did not type.
+  if (!Number.isSafeInteger(Number(line))) return printUsageError('dwfb locate', `The line ${line} is larger than ${Number.MAX_SAFE_INTEGER}.\n\n${LOCATE_USAGE}`);
+  if (column !== undefined && !Number.isSafeInteger(Number(column))) return printUsageError('dwfb locate', `The column ${column} is larger than ${Number.MAX_SAFE_INTEGER}.\n\n${LOCATE_USAGE}`);
+
+  try {
+    result = await locate({
+      script,
+      line: Number(line),
+      ...(column === undefined ? {} : { column: Number(column) }),
+      runtime: values.runtime === true,
+      entry: values.entry,
+      config: values.config,
+    });
+  } catch (error) {
+    return printCommandFailure('dwfb locate', error);
+  }
+
+  const exitCode = result.ok ? EXIT_SUCCESS : EXIT_FINDINGS;
+  if (values.json) return printResult(`${JSON.stringify(result, null, 2)}\n`, exitCode);
+  return printResult(formatLocateText(result), exitCode);
+}
+
+/**
+ * @param {import('../src/locate.js').LocateResult} result
+ * @returns {string} The lines a person reads.
+ */
+function formatLocateText(result) {
+  if (!result.ok) return result.findings.map((finding) => `${formatFinding(finding)}\n`).join('');
+  if (result.generated) return `${formatLineSource({ file: result.file, sourceLine: null })} It has no source line.\n`;
+  return `${result.file}:${result.line}:${result.column}\n${result.text}\n`;
 }
 
 /**
@@ -154,16 +238,10 @@ async function findWorkflows(entry, out, configPath) {
   }
 
   const config = await loadConfig(configPath ?? CONFIG_FILE);
-  // formatDisplayPath gives '' for the working directory, which build() reads as a missing option.
-  const formatConfigPath = (path) => formatDisplayPath(path) || '.';
-  const configWorkflows = config.workflows.map((workflow) => ({ ...workflow, entry: formatConfigPath(workflow.entry), out: formatConfigPath(workflow.out) }));
+  const configWorkflows = config.workflows.map((workflow) => ({ ...workflow, entry: formatOptionPath(workflow.entry), out: formatOptionPath(workflow.out) }));
   if (entry === undefined) return configWorkflows;
 
-  const entryFile = await findRealPath(entry);
-  const entryWorkflows = [];
-  for (const workflow of configWorkflows) {
-    if ((await findRealPath(workflow.entry)) === entryFile) entryWorkflows.push(workflow);
-  }
+  const entryWorkflows = await findConfigWorkflows(configWorkflows, 'entry', entry);
   if (entryWorkflows.length === 0) throw new UsageError(`The config file ${configPath ?? CONFIG_FILE} has no workflow whose entry is ${entry}`);
 
   return entryWorkflows;
@@ -203,33 +281,6 @@ async function checkOutFiles(builtWorkflows) {
 }
 
 /**
- * @param {string | undefined} entry
- * @param {{ out?: string, config?: string, 'no-banner'?: boolean }} values
- * @returns {string} The command that writes the scripts this command builds, which a `--check` message names.
- */
-function formatBuildCommand(entry, values) {
-  const args = ['dwfb', 'build'];
-
-  if (entry !== undefined) args.push(formatCommandPath(entry));
-  if (values.out !== undefined) args.push('--out', formatCommandPath(values.out));
-  if (values.config !== undefined) args.push('--config', formatCommandPath(values.config));
-  if (values['no-banner']) args.push('--no-banner');
-
-  return args.join(' ');
-}
-
-/**
- * @param {string} path
- * @returns {string} The path relative to the working directory, in double quotes when it holds a character
- *   outside SHELL_SAFE_PATH_PATTERN. cmd, PowerShell and POSIX shells read the quoted path as one argument,
- *   unless it holds `"`, `$`, `` ` ``, `%` or `!`, which a shell still reads inside double quotes.
- */
-function formatCommandPath(path) {
-  const displayPath = formatDisplayPath(path);
-  return SHELL_SAFE_PATH_PATTERN.test(displayPath) ? displayPath : `"${displayPath}"`;
-}
-
-/**
  * @param {{ out: string }} workflow
  * @param {import('../src/build.js').BuildResult} result
  * @param {string} buildCommand The command that rewrites a script that differs or is missing.
@@ -248,7 +299,8 @@ function formatBuildText(workflow, result, buildCommand) {
 }
 
 /**
- * @param {import('../src/build.js').FirstDifference} firstDifference
+ * @param {{ file: string | null, sourceLine: number | null }} lineSource The source of one built line, such as
+ *   a FirstDifference.
  * @returns {string}
  */
 function formatLineSource({ file, sourceLine }) {
@@ -278,16 +330,17 @@ function formatBuildJson(builtWorkflows, isSuccess) {
 }
 
 /**
+ * @param {string} label The command, such as `dwfb build`.
  * @param {unknown} error
  * @returns {number}
  */
-function printBuildFailure(error) {
-  if (error instanceof UsageError) return printUsageError('dwfb build', `${error.message}.\n`);
+function printCommandFailure(label, error) {
+  if (error instanceof UsageError) return printUsageError(label, `${error.message}.\n`);
   if (isFileSystemError(error)) {
-    process.stderr.write(`dwfb build: Could not read or write ${formatDisplayPath(error.path)} (${error.syscall} ${error.code}).\n`);
+    process.stderr.write(`${label}: Could not read or write ${formatDisplayPath(error.path)} (${error.syscall} ${error.code}).\n`);
     return EXIT_FAILURE;
   }
-  process.stderr.write(`dwfb build: internal failure.\n${error.stack ?? error}\n`);
+  process.stderr.write(`${label}: internal failure.\n${error.stack ?? error}\n`);
   return EXIT_FAILURE;
 }
 
