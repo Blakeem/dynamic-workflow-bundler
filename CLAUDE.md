@@ -34,7 +34,7 @@ Add a row before a new concept gets a name in code.
 
 ## Names
 
-- **Package:** `dynamic-workflow-bundler`. **Command:** `dwf`. **Config file:** `dwf.config.js`.
+- **Package:** `dynamic-workflow-bundler`. **Command:** `dwfb`. **Config file:** `dwfb.config.js`.
 - **No Anthropic mark in a name.** Never put "Claude", "Claude Code" or "Anthropic" in a package, command,
   file, export or option name. Say "Claude Code" only in plain descriptive text.
 - **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`. A new command takes
@@ -67,7 +67,9 @@ Add a row before a new concept gets a name in code.
 
 ## Code
 
-- JavaScript for Node 22 and later, ES modules, no dependency at run time and none for development.
+- JavaScript for Node 22 and later, ES modules. The one dependency is the `acorn` parser, pinned to an exact
+  version. Read code structure from its syntax tree, never from a text pattern, since a pattern also matches
+  inside a prompt string. Add no other dependency.
 - Types go in JSDoc comments.
 - Files that read or write disk, or print, stay separate from files that compute.
 - Tests use `node:test` and sit in `tests/`, one file per source file, named `<source file>.test.js`.

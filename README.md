@@ -11,10 +11,10 @@ is one long script, and two workflows cannot share code. This tool removes that 
 
 | Command | Purpose |
 |---|---|
-| `dwf build` | Build one workflow script from an entry, modules and text files. |
-| `dwf validate` | Report each rule of the Workflow runtime that a script breaks, before launch. |
-| `dwf simulate` | Run a script against scripted agent returns, with no model call. |
-| `dwf inspect` | Show what each agent of a simulation received and returned. |
+| `dwfb build` | Build one workflow script from an entry, modules and text files. |
+| `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. |
+| `dwfb simulate` | Run a script against scripted agent returns, with no model call. |
+| `dwfb inspect` | Show what each agent of a simulation received and returned. |
 
 ## License
 
