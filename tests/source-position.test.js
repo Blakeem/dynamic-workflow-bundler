@@ -10,7 +10,7 @@ describe('findPosition', () => {
   });
 
   it('counts only LF as a line break', () => {
-    assert.deepEqual(findPosition('a b', 2), { line: 1, column: 3 });
+    assert.deepEqual(findPosition('a\u2028b', 2), { line: 1, column: 3 });
   });
 });
 
@@ -19,7 +19,7 @@ describe('countLines', () => {
     assert.equal(countLines(''), 1);
     assert.equal(countLines('a\nb'), 2);
     assert.equal(countLines('a\nb\n'), 2);
-    assert.equal(countLines('a b'), 1);
+    assert.equal(countLines('a\u2028b'), 1);
   });
 });
 
@@ -27,6 +27,6 @@ describe('countLineBreaks', () => {
   it('counts only LF as a line break, as findPosition does', () => {
     assert.equal(countLineBreaks(''), 0);
     assert.equal(countLineBreaks('a\nb\n'), 2);
-    assert.equal(countLineBreaks('a b c\r'), 0);
+    assert.equal(countLineBreaks('a\u2028b\u2029c\r'), 0);
   });
 });

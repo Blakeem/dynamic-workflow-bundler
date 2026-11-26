@@ -41,7 +41,7 @@ describe('findDirectives', () => {
       'function run() {',
       '  // @include ./inside.js',
       '}',
-      '// @include ./a.js run();',
+      '// @include ./a.js\u2028run();',
       '',
     ].join('\n');
 

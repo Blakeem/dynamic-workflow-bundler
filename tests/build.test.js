@@ -324,7 +324,7 @@ describe('build of text files, JSON files and parts', () => {
   it('drops a byte order mark and reads CRLF as LF in a text file, and keeps a lone CR', async () => {
     const folder = await makeTemporaryFolder();
     await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport notes from './notes.txt';\nimport empty from './empty.txt' with { type: 'text' };\nreturn [notes, empty];\n");
-    await writeFile(join(folder, 'notes.txt'), '﻿one\r\ntwo\rthree\n');
+    await writeFile(join(folder, 'notes.txt'), '\uFEFFone\r\ntwo\rthree\n');
     await writeFile(join(folder, 'empty.txt'), '');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -381,7 +381,7 @@ describe('build of text files, JSON files and parts', () => {
       await writeFile(join(folder, `part-${index + 1}.js`), lines.slice(cuts[index], cuts[index + 1]).join('\r\n'));
       directives.push(`// @include ./part-${index + 1}.js`);
     }
-    await writeFile(join(folder, 'entry.js'), `﻿${[...lines.slice(0, metaLineCount), ...directives].join('\r\n')}`);
+    await writeFile(join(folder, 'entry.js'), `\uFEFF${[...lines.slice(0, metaLineCount), ...directives].join('\r\n')}`);
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), banner: false });
     const written = await readFile(join(folder, 'out.js'), 'utf8');

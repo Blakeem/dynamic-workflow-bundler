@@ -81,7 +81,7 @@ describe('validate', () => {
   });
 
   it('reads a script with a byte order mark, as the runtime runs it', async () => {
-    const { script } = await writeTemporaryScript(`﻿${META}return 1;\n`);
+    const { script } = await writeTemporaryScript(`\uFEFF${META}return 1;\n`);
 
     assert.deepEqual((await validate({ script })).findings, []);
   });

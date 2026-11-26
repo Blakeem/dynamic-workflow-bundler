@@ -29,7 +29,7 @@ describe('loadSources', () => {
   it('reads the entry and each module once, as normalized text', async () => {
     const folder = await writeFolder({
       'entry.js': "export const meta = {};\r\nimport './a.js';\r\nimport './b.js';\r\n",
-      'a.js': "﻿import './b.js';\r\n",
+      'a.js': "\uFEFFimport './b.js';\r\n",
       'b.js': 'log(1);\n',
     });
 
@@ -56,7 +56,7 @@ describe('loadSources', () => {
     const folder = await writeFolder({
       'entry.js': "export const meta = {};\n// @include ./part.js\nimport note from './note.txt';\nimport './module.js';\nimport settings from './settings.json';\nlog(note, settings);\n",
       'other.js': Buffer.concat([Buffer.from("export const meta = {};\nlog('caf"), Buffer.from([0xe9]), Buffer.from("');\n")]),
-      'part.js': Buffer.from('﻿log(1);\n', 'utf16le'),
+      'part.js': Buffer.from('\uFEFFlog(1);\n', 'utf16le'),
       'note.txt': windows1252Text,
       'module.js': Buffer.concat([Buffer.from("log('"), windows1252Text, Buffer.from("');\n")]),
       'settings.json': Buffer.concat([Buffer.from('"'), Buffer.from([0xc3]), Buffer.from('"\n')]),

@@ -4,7 +4,7 @@ import { checkJsonFile, findJsonError } from '../src/find-json-error.js';
 
 describe('findJsonError', () => {
   it('finds nothing in valid JSON', () => {
-    for (const text of ['{}', '[]', ' { "a": [1, -2.5e3, "x\\u00e9\\n", true, false, null, {}] } \n', '" "', '0', '[[[[]]]]']) {
+    for (const text of ['{}', '[]', ' { "a": [1, -2.5e3, "x\\u00e9\\n", true, false, null, {}] } \n', '"\u2028"', '0', '[[[[]]]]']) {
       assert.equal(findJsonError(text), null, text);
     }
   });
