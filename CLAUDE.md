@@ -25,7 +25,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | scope | The function scope that holds one module's code in the built script. |
 | banner | The comment line after `meta` that names the entry a built script comes from. |
 | directive | A `// @include <path>` comment line in an entry, which names a part. |
-| config file | The `dwfb.config.js` file, which lists the workflows a project builds. |
+| config file | The `dwfb.config.js` or `dwfb.config.mjs` file, which lists the workflows a project builds. |
 | line origin | The source file and line that a line of the built script comes from. |
 | contract | The rules the Workflow runtime enforces on a script. |
 | rule | One entry of the contract, with an id and the Claude Code version it was measured on. |
@@ -40,7 +40,8 @@ Add a row before a new concept gets a name in code.
 
 ## Names
 
-- **Package:** `dynamic-workflow-bundler`. **Command:** `dwfb`. **Config file:** `dwfb.config.js`.
+- **Package:** `dynamic-workflow-bundler`. **Command:** `dwfb`. **Config file:** `dwfb.config.js`, or `dwfb.config.mjs`
+  when that file does not exist.
 - **No Anthropic mark in a name.** Never put "Claude", "Claude Code" or "Anthropic" in a package, command,
   file, export or option name. Say "Claude Code" only in plain descriptive text.
 - **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`. A new command takes
