@@ -81,6 +81,13 @@ describe('linkModules', () => {
     assert.deepEqual(listFindings({ 'entry.js': entry, 'a.js': 'export function read(phaseName) {\n  return [phaseName, log];\n}\n' }), []);
   });
 
+  it('names a joiner inside the name a module-reads-entry-name finding quotes by its JavaScript escape', () => {
+    const entry = "export const meta = {};\nimport { read } from './a.js';\nconst phase\u200DName = 1;\n";
+    const { findings } = linkModules(makeSources({ 'entry.js': entry, 'a.js': 'export const read = () => phase\u200DName;\n' }), ENTRY_FILE, (file) => file);
+
+    assert.deepEqual(findings.map((finding) => finding.message), ['The module reads phase\\u{200D}Name, which the entry declares at its top level']);
+  });
+
   it('reports no module-reads-entry-name for meta, which the script body does not bind', () => {
     const entry = "export const meta = {};\nimport { read } from './a.js';\n";
 

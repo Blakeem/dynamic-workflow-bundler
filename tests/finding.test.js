@@ -14,6 +14,14 @@ describe('createFinding', () => {
     });
   });
 
+  it('writes each hidden character of the message as its JavaScript escape, once, and keeps the file as it is', () => {
+    const finding = createFinding('import-meta', 'The file reads a\u200Db', '/work/a\u200Db.js', '', 0);
+
+    assert.equal(finding.message, 'The file reads a\\u{200D}b');
+    assert.equal(finding.file, '/work/a\u200Db.js');
+    assert.equal(createFinding('import-meta', finding.message, 'a.js', '', 0).message, finding.message);
+  });
+
   it('holds a fix with no closing period for each rule, and a default for each rule whose fix depends on the name', () => {
     for (const [rule, ruleFix] of Object.entries(FIXES)) {
       const fixes = typeof ruleFix === 'string' ? [ruleFix] : Object.values(ruleFix);

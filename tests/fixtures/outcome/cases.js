@@ -136,7 +136,7 @@ export const OUTCOME_CASES = [
   createCase(
     'validate a script with a NUL outside a string',
     { 'x.js': `${META}const a = 1;\u0000\n` },
-    { ...validateFinding('syntax-error'), message: /^x\.js:2:13 syntax-error Unexpected character 'U\+0000'\. / },
+    { ...validateFinding('syntax-error'), message: /^x\.js:2:13 syntax-error Unexpected character '\\u\{0000\}'\. / },
   ),
   createCase('validate a script with a byte that is not UTF-8 in a string', { 'x.js': Buffer.concat([Buffer.from(`${META}return '`), Buffer.from([255]), Buffer.from("';\n")]) }, VALIDATED),
   // U+FFFD cannot sit in a name, where the latin1 reading of 0xFF, ÿ, can.

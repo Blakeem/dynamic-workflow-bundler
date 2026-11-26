@@ -236,7 +236,7 @@ throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + c
       await writeFile(join(folder, 'large', 'dwfb.config.mjs'), configText);
       await writeSizedFile(join(folder, 'limit', 'a.mjs'), READ_BYTE_LIMIT);
       await writeSizedFile(join(folder, 'large', 'a.mjs'), READ_BYTE_LIMIT + 1);
-      await assert.rejects(loadConfig(join(folder, 'limit', 'dwfb.config.mjs')), isUsageError(new RegExp(`does not load\\. ${displayFolder}/limit/a\\.mjs:1:1 Unexpected character 'U\\+0000'$`)));
+      await assert.rejects(loadConfig(join(folder, 'limit', 'dwfb.config.mjs')), isUsageError(new RegExp(`does not load\\. ${displayFolder}/limit/a\\.mjs:1:1 Unexpected character '\\\\u\\{0000\\}'$`)));
       await assert.rejects(
         loadConfig(join(folder, 'large', 'dwfb.config.mjs')),
         isUsageError(new RegExp(`does not load\\. .+\\. The file ${displayFolder}/large/a\\.mjs is ${READ_BYTE_LIMIT + 1} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads, so the place of the syntax error is unknown$`)),

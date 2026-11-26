@@ -182,6 +182,12 @@ describe('checkContract', () => {
     ]);
   });
 
+  it('names a joiner inside an undefined name by its JavaScript escape', () => {
+    assert.deepEqual(checkContract(`${META}return a\u200Db;\n`, 'script.js').map((finding) => `${finding.rule} ${finding.message}`), [
+      'global-undefined The script reads a\\u{200D}b, which the runtime does not define',
+    ]);
+  });
+
   it('gives each global-undefined finding the fix that fits the name it reports', () => {
     const text = `${META}require('a');\nprocess;\nreturn [meta, () => arguments];\n`;
 

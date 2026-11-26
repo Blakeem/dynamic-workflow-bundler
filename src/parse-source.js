@@ -1,4 +1,5 @@
 import { Parser } from 'acorn';
+import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { isStackOverflowError } from './syntax-tree.js';
 
 // The runtime runs the body inside an async function (Claude Code 2.1.332), so a top-level return and await parse.
@@ -13,9 +14,6 @@ export const PARSE_OPTIONS = Object.freeze({
 const STACK_SPACE_REASON = 'Not enough stack space to parse input';
 /** The message of the source-too-deep finding for a source that acorn cannot parse. */
 export const PARSER_DEPTH_MESSAGE = 'The file nests code deeper than the parser can read';
-// Acorn quotes the character it refuses as it is, and a terminal shows none of these: the control and format
-// characters, the line separator (Zl) and the paragraph separator (Zp).
-const HIDDEN_CHARACTER_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /**
  * Parses a text with acorn, and gives acorn's stack space error for a stack overflow anywhere in the parse.
@@ -38,14 +36,15 @@ export function parseSource(text, options, ParserClass = Parser) {
 
 /**
  * Gives acorn's reason for a syntax error without the line and column it appends, which a finding states.
- * Each character a terminal does not show reads as U+ and its code point, such as U+0000.
+ * Acorn quotes the character it refuses as it is, so each character a terminal does not show reads as its
+ * JavaScript escape, such as \u{0000}. A reason also reaches a usage error, which createFinding does not map.
  * @param {SyntaxError} error
  * @returns {string}
  */
 export function formatSyntaxErrorReason(error) {
   const reason = error.message.replace(/ \(\d+:\d+\)$/, '');
 
-  return reason.replace(HIDDEN_CHARACTER_PATTERN, (character) => `U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+  return formatHiddenCharacters(reason);
 }
 
 /**

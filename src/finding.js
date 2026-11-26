@@ -1,9 +1,11 @@
+import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { findPosition } from './source-position.js';
 
 /**
  * @typedef {object} Finding
  * @property {string} rule The rule id.
- * @property {string} message What is wrong, with no closing period.
+ * @property {string} message What is wrong, with no closing period. Each character a terminal does not show
+ *   reads as its JavaScript escape, such as \u{200D}.
  * @property {string} fix How to fix it, with no closing period.
  * @property {string} file The source or workflow script that breaks the rule, or the built script for script-stale. A source's
  *   path is a real path until the build reports it.
@@ -74,7 +76,7 @@ export const FIXES = Object.freeze({
 /**
  * @param {string} rule
  * @param {string} message
- * @param {string} file
+ * @param {string} file Kept as it is, since a program reads it as a path.
  * @param {string} text The text of `file` as an editor shows its lines, which the offset indexes.
  * @param {number} offset
  * @param {string | null} [name] The name the finding reports, for a rule whose fix depends on it.
@@ -82,7 +84,7 @@ export const FIXES = Object.freeze({
  */
 export function createFinding(rule, message, file, text, offset, name = null) {
   const { line, column } = findPosition(text, offset);
-  return { rule, message, fix: readFix(rule, name), file, line, column };
+  return { rule, message: formatHiddenCharacters(message), fix: readFix(rule, name), file, line, column };
 }
 
 /**

@@ -40,13 +40,13 @@ describe('formatSyntaxErrorReason', () => {
     assert.equal(reason, 'Unexpected token');
   });
 
-  it('names each character a terminal does not show by U+ and its code point, and keeps every other character', () => {
+  it('names each character a terminal does not show by its JavaScript escape, and keeps every other character', () => {
     // Each case is a code point that acorn refuses, and the reason formatSyntaxErrorReason gives for it.
     const cases = [
-      [0x0, "Unexpected character 'U+0000'"],
-      [0x1b, "Unexpected character 'U+001B'"],
-      [0x200b, "Unexpected character 'U+200B'"],
-      [0x1d173, "Unexpected character 'U+1D173'"],
+      [0x0, "Unexpected character '\\u{0000}'"],
+      [0x1b, "Unexpected character '\\u{001B}'"],
+      [0x200b, "Unexpected character '\\u{200B}'"],
+      [0x1d173, "Unexpected character '\\u{1D173}'"],
       [0xa7, `Unexpected character '${String.fromCodePoint(0xa7)}'`],
     ];
     const reasons = [];
@@ -61,10 +61,21 @@ describe('formatSyntaxErrorReason', () => {
     assert.deepEqual(reasons, cases.map(([, reason]) => reason));
   });
 
-  it('names a line separator and a paragraph separator by their code points', () => {
+  it('names a line separator and a paragraph separator by their JavaScript escapes', () => {
     const message = `Unexpected character '${String.fromCodePoint(0x2028, 0x2029)}' (1:0)`;
 
-    assert.equal(formatSyntaxErrorReason(new SyntaxError(message)), "Unexpected character 'U+2028U+2029'");
+    assert.equal(formatSyntaxErrorReason(new SyntaxError(message)), "Unexpected character '\\u{2028}\\u{2029}'");
+  });
+
+  it('ends the escape of a joiner inside an identifier before a hex digit that follows it', () => {
+    let reason = '';
+    try {
+      parse('const A\u200DB = 1;\nlet A\u200DB = 2;\n', PARSE_OPTIONS);
+    } catch (error) {
+      reason = formatSyntaxErrorReason(error);
+    }
+
+    assert.equal(reason, "Identifier 'A\\u{200D}B' has already been declared");
   });
 });
 
