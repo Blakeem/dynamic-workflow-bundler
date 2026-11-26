@@ -4,8 +4,9 @@ import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
+import { readMetaObject } from './meta-statement.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE } from './parse-source.js';
-import { findDeepestNode, isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
+import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
 
 /** @typedef {import('./expand-parts.js').IncludedPart} IncludedPart */
 /** @typedef {import('./finding.js').Finding} Finding */
@@ -89,12 +90,9 @@ const JSON_ENDING = '.json';
 // Node.js 24.22.1 imports each ending as code or JSON and refuses it in another letter case, so none gives a string.
 const RUNTIME_CODE_ENDINGS = ['.js', '.mjs', '.cjs', '.json', '.ts', '.mts', '.cts', '.wasm', '.node'];
 const IMPORT_TYPES = new Set(['text', 'json']);
-const EXPORT_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration', 'ExportAllDeclaration']);
 // A class field value and a static block take the class or instance as `this`.
 const THIS_BINDING_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'PropertyDefinition', 'StaticBlock']);
 const DECLARATION_TYPES = new Set(['FunctionDeclaration', 'ClassDeclaration']);
-// Node.js 24.22.1 gives a RangeError of this message when a recursive call overflows the stack.
-const STACK_OVERFLOW_MESSAGE = 'Maximum call stack size exceeded';
 /** The message of the source-too-deep finding for a source that acorn parses and a tree walk overflows on. */
 const TREE_DEPTH_MESSAGE = 'The file nests code deeper than the build can read';
 
@@ -191,9 +189,7 @@ export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
  */
 function checkMeta(program, text, comments, hasBanner, addFinding) {
   const first = program.body[0];
-  const declaration = first?.type === 'ExportNamedDeclaration' ? first.declaration : null;
-  const declarator = declaration?.type === 'VariableDeclaration' && declaration.kind === 'const' && declaration.declarations.length === 1 ? declaration.declarations[0] : null;
-  const isMeta = declarator?.id.type === 'Identifier' && declarator.id.name === 'meta' && declarator.init?.type === 'ObjectExpression';
+  const isMeta = readMetaObject(first) !== null;
   const hasImport = program.body.some((statement) => statement.type === 'ImportDeclaration');
   const metaLineBreak = isMeta ? text.indexOf('\n', first.end) : -1;
   const isOnMetaLine = (offset) => offset >= first.end && (metaLineBreak === -1 || offset < metaLineBreak);
@@ -553,12 +549,4 @@ function checkNodes(program, isEntry, addFinding) {
  */
 function isDirectEval(node) {
   return node.type === 'CallExpression' && !node.optional && node.callee.type === 'Identifier' && node.callee.name === 'eval';
-}
-
-/**
- * @param {unknown} error
- * @returns {boolean} True for the error of a call stack overflow.
- */
-export function isStackOverflowError(error) {
-  return error instanceof RangeError && error.message === STACK_OVERFLOW_MESSAGE;
 }

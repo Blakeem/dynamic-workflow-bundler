@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { findFreeNames } from '../src/find-free-names.js';
+import { findFreeNames, listFreeReferences } from '../src/find-free-names.js';
 
 /**
  * @param {string} text
@@ -50,5 +50,14 @@ describe('findFreeNames', () => {
 
   it('finds a name read in a computed key, a default value and a shorthand property', () => {
     assert.deepEqual(listFreeNames('const a = { [b]: 1, c };\nfunction d(e = f) {}\n'), ['b', 'c', 'f']);
+  });
+});
+
+describe('listFreeReferences', () => {
+  it('lists every reference to an undeclared name, in source order', () => {
+    const program = parse('b(a);\nfunction f(a) { return [a, b]; }\n', { ecmaVersion: 'latest', sourceType: 'module' });
+    const references = listFreeReferences(program);
+
+    assert.deepEqual(references.map((identifier) => `${identifier.name}@${identifier.start}`), ['b@0', 'a@2', 'b@33']);
   });
 });

@@ -4,6 +4,10 @@ const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'Ar
 const EXPORT_DECLARATION_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration']);
 const KEY_TYPES = new Set(['Property', 'PropertyDefinition', 'MethodDefinition']);
 const LABEL_TYPES = new Set(['LabeledStatement', 'BreakStatement', 'ContinueStatement']);
+// Node.js 24.22.1 gives a RangeError of this message when a recursive call overflows the stack.
+const STACK_OVERFLOW_MESSAGE = 'Maximum call stack size exceeded';
+/** The types of a statement that exports. */
+export const EXPORT_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration', 'ExportAllDeclaration']);
 
 /**
  * @param {SyntaxNode} node
@@ -55,6 +59,14 @@ export function findDeepestNode(node) {
 }
 
 /**
+ * @param {unknown} error
+ * @returns {boolean} True for the error of a call stack overflow, which a recursive tree walk gives on a tree too deep.
+ */
+export function isStackOverflowError(error) {
+  return error instanceof RangeError && error.message === STACK_OVERFLOW_MESSAGE;
+}
+
+/**
  * Lists the identifiers directly below a node that name a property, a label, an import or an export,
  * and that bind and reference no variable.
  * Acorn gives `import { a }` and `export { a }` one node for both names, and that node is the variable's.
@@ -80,21 +92,31 @@ export function listNameChildren(node) {
  * @returns {SyntaxNode[]}
  */
 export function listPatternIdentifiers(pattern) {
+  return listPatternTargets(pattern).filter((target) => target.type === 'Identifier');
+}
+
+/**
+ * Lists the targets that a binding or assignment pattern writes: each identifier and each member expression.
+ * @param {SyntaxNode | null} pattern
+ * @returns {SyntaxNode[]}
+ */
+export function listPatternTargets(pattern) {
   if (pattern === null) return [];
 
   switch (pattern.type) {
     case 'Identifier':
+    case 'MemberExpression':
       return [pattern];
     case 'ObjectPattern':
       return pattern.properties.flatMap((property) =>
-        listPatternIdentifiers(property.type === 'RestElement' ? property.argument : property.value),
+        listPatternTargets(property.type === 'RestElement' ? property.argument : property.value),
       );
     case 'ArrayPattern':
-      return pattern.elements.flatMap((element) => listPatternIdentifiers(element));
+      return pattern.elements.flatMap((element) => listPatternTargets(element));
     case 'AssignmentPattern':
-      return listPatternIdentifiers(pattern.left);
+      return listPatternTargets(pattern.left);
     case 'RestElement':
-      return listPatternIdentifiers(pattern.argument);
+      return listPatternTargets(pattern.argument);
     default:
       return [];
   }

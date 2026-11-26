@@ -1,4 +1,4 @@
-const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+export const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
 
 /**
  * Drops a leading byte order mark and reads every CRLF or lone CR as LF.

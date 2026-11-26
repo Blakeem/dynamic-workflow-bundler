@@ -10,18 +10,32 @@ import { walkScopes } from './walk-scopes.js';
  * @returns {SyntaxNode[]} One identifier per name, in source order.
  */
 export function findFreeNames(program) {
+  const firstByName = new Map();
+
+  for (const identifier of listFreeReferences(program)) {
+    if (!firstByName.has(identifier.name)) firstByName.set(identifier.name, identifier);
+  }
+
+  return [...firstByName.values()];
+}
+
+/**
+ * Lists every reference to a name that no scope of the file declares.
+ * @param {SyntaxNode} program
+ * @returns {SyntaxNode[]} The identifiers, in source order.
+ */
+export function listFreeReferences(program) {
   const topLevelNames = new Set(listTopLevelNames(program.body));
   const nameNodes = new WeakSet();
-  const firstByName = new Map();
+  const references = [];
 
   walkScopes(program, (node, scopes) => {
     for (const child of listNameChildren(node)) nameNodes.add(child);
     if (node.type !== 'Identifier' || nameNodes.has(node)) return;
 
     const isDeclared = topLevelNames.has(node.name) || scopes.some((scope) => scope.has(node.name));
-    const earlier = firstByName.get(node.name);
-    if (!isDeclared && (earlier === undefined || node.start < earlier.start)) firstByName.set(node.name, node);
+    if (!isDeclared) references.push(node);
   });
 
-  return [...firstByName.values()].sort((first, second) => first.start - second.start);
+  return references.sort((first, second) => first.start - second.start);
 }

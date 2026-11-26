@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { findDeepestNode, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listTopLevelNames, listVarNames } from '../src/syntax-tree.js';
+import { findDeepestNode, isStackOverflowError, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listPatternTargets, listTopLevelNames, listVarNames } from '../src/syntax-tree.js';
 
 /** @param {string} text */
 function parseBody(text) {
@@ -29,6 +29,14 @@ describe('syntax-tree', () => {
     assert.deepEqual(listPatternIdentifiers(parseBody('g.h = 1;')[0].expression.left), []);
   });
 
+  it('lists the identifier and member targets of a pattern, in source order', () => {
+    const [statement] = parseBody('({ a, b: [g.h, ...d], e: i[j] = 1, ...f } = k);');
+    const listText = (node) => (node.type === 'Identifier' ? node.name : `${node.object.name}.${node.property.name}`);
+
+    assert.deepEqual(listPatternTargets(statement.expression.left).map(listText), ['a', 'g.h', 'd', 'i.j', 'f']);
+    assert.deepEqual(listPatternTargets(null), []);
+  });
+
   it('lists lexical names of direct statements and var names outside nested functions', () => {
     const body = parseBody('let a; class B {} function c() { var d; }\n{ let e; var f; }\nfor (var g of []) {}');
     assert.deepEqual(listLexicalNames(body), ['a', 'B', 'c']);
@@ -52,5 +60,21 @@ describe('syntax-tree', () => {
     assert.deepEqual(exportStatement.specifiers.map(listNames), [['d'], []]);
     assert.deepEqual([listNames(labelStatement), listNames(labelStatement.body.body)], [['e'], ['e']]);
     assert.deepEqual([listNames(firstProperty), listNames(firstProperty.value), listNames(computedProperty)], [['f'], ['h'], []]);
+  });
+});
+
+describe('isStackOverflowError', () => {
+  it('is true for the error of a recursion that overflows the stack, and false for another RangeError', () => {
+    const recurse = () => recurse();
+    let overflowError = null;
+    try {
+      recurse();
+    } catch (error) {
+      overflowError = error;
+    }
+
+    assert.equal(isStackOverflowError(overflowError), true);
+    assert.equal(isStackOverflowError(new RangeError('Invalid array length')), false);
+    assert.equal(isStackOverflowError(new Error('Maximum call stack size exceeded')), false);
   });
 });

@@ -1,3 +1,5 @@
 # LF in the working tree for every text file. The Claude Code Workflow tool reads a script raw,
 # and a CR byte in a script is one of the things this project checks for.
 * text=auto eol=lf
+# The probe scripts keep the bytes the runtime read, CRLF included.
+tests/fixtures/contract/cases/** -text
