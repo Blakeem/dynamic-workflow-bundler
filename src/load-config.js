@@ -7,7 +7,7 @@ import { checkModuleSyntax, hasModuleSyntax } from './check-module-syntax.js';
 import { formatDisplayPath, isFolderPath } from './display-path.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 import { normalizeSourceText } from './normalize-source-text.js';
-import { formatRealDisplayPath } from './real-path.js';
+import { findRealPath, formatRealDisplayPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
 
 /** @typedef {import('./check-config.js').Config} Config */
@@ -118,17 +118,19 @@ async function readConfig(path, isFoundFile) {
   } catch (error) {
     if (error instanceof UsageError) throw error;
     // A read of the default export can run the config file's code, such as a getter that throws.
-    throw new UsageError(`The config file ${path} does not load. ${formatErrorCause(error)}`);
+    throw new UsageError(`The config file ${path} does not load. ${await formatErrorCause(error)}`);
   }
 }
 
 /**
  * @param {unknown} error What the import of the config file rejected with, or what its code threw.
- * @returns {string} The error's message with no absolute path and no closing period, or a fixed cause for a
- *   value with no text.
+ * @returns {Promise<string>} The error's message with no absolute path and no closing period, or a fixed cause
+ *   for a value with no text.
  */
-function formatErrorCause(error) {
+async function formatErrorCause(error) {
   let message = '';
+  let periodlessMessage = '';
+  let displayTokens = [];
   let cause = '';
 
   try {
@@ -137,7 +139,11 @@ function formatErrorCause(error) {
     // String() throws for a value with no primitive form, such as Object.create(null).
     return TEXTLESS_THROW_CAUSE;
   }
-  cause = message.replace(ABSOLUTE_PATH_PATTERN, formatPathToken).replace(/\.$/, '');
+  // The period goes before the paths are named, so a path named `.` at the message's end stays.
+  periodlessMessage = message.replace(/\.$/, '');
+  displayTokens = await Promise.all(Array.from(periodlessMessage.matchAll(ABSOLUTE_PATH_PATTERN), ([token]) => formatPathToken(token)));
+  // replace visits the matches in the order matchAll gave them.
+  cause = periodlessMessage.replace(ABSOLUTE_PATH_PATTERN, () => displayTokens.shift());
 
   return cause.trim() === '' ? TEXTLESS_THROW_CAUSE : cause;
 }
@@ -150,7 +156,7 @@ function formatErrorCause(error) {
  * @returns {Promise<string>}
  */
 async function formatLoadFailure(error, configFile, path, isFoundFile) {
-  const cause = formatErrorCause(error);
+  const cause = await formatErrorCause(error);
   // A found file that loads as CommonJS is dwfb.config.js, since a .mjs file loads as an ES module.
   const moduleFileRecovery = isFoundFile ? `rename it to ${CONFIG_FILES[1]}` : 'name a .mjs config file with --config';
   let parseFailure = null;
@@ -290,11 +296,13 @@ function findImportedFile(specifier, importingFile) {
  * A token that is no path on disk stays as it is, since an error message the config file throws, such as one
  * that quotes a regular expression, can hold text that looks like a path.
  * @param {string} token An absolute path or file URL, with any punctuation that follows it in the message.
- * @returns {string} The path relative to the working directory, with the punctuation kept.
+ * @returns {Promise<string>} The real path relative to the real path of the working directory, since Node's
+ *   message names real paths, else the path as formatDisplayPath gives it, with the punctuation kept.
  */
-function formatPathToken(token) {
+async function formatPathToken(token) {
   const [, pathText, punctuation] = /** @type {RegExpExecArray} */ (TRAILING_PUNCTUATION_PATTERN.exec(token));
   let file = pathText;
+  let displayPath = '';
 
   if (pathText.startsWith('file:')) {
     try {
@@ -307,8 +315,17 @@ function formatPathToken(token) {
   if (file.startsWith(WINDOWS_LONG_UNC_PREFIX)) file = `${UNC_PREFIX}${file.slice(WINDOWS_LONG_UNC_PREFIX.length)}`;
   if (file.startsWith(WINDOWS_LONG_PATH_PREFIX)) file = file.slice(WINDOWS_LONG_PATH_PREFIX.length);
   if (!isPathOnDisk(file)) return token;
+  try {
+    // The last name resolves too, since a thrown message can name a link, such as the working directory's spelling.
+    displayPath = await formatRealDisplayPath(await findRealPath(file));
+  } catch {
+    // A realpath error, such as for a link that loops, would hide the load failure, so the path keeps its spelling.
+    return `${formatDisplayPath(file)}${punctuation}`;
+  }
+  // A real path on another drive than the working directory has no relative form, so the path keeps its spelling.
+  if (isAbsolute(displayPath)) return `${formatDisplayPath(file)}${punctuation}`;
 
-  return `${formatDisplayPath(file)}${punctuation}`;
+  return `${displayPath}${punctuation}`;
 }
 
 /**

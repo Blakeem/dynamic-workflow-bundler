@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join, parse, relative } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from 'dynamic-workflow-bundler';
@@ -11,6 +11,18 @@ import { formatForwardSlashes } from '../src/display-path.js';
 import { IS_MODULE_SYNTAX_DETECTED } from '../src/load-config.js';
 
 const CONFIG_FIXTURES = fileURLToPath(new URL('./fixtures/config/', import.meta.url));
+
+/**
+ * Loads a config file in a child process, since a test that names paths relative to a working directory needs
+ * its own working directory.
+ * @param {string} cwd
+ * @param {string} configFile
+ * @returns {string} The message loadConfig rejected with, or '' when it loaded.
+ */
+function runLoadConfig(cwd, configFile) {
+  const code = `import { loadConfig } from '${new URL('../src/index.js', import.meta.url).href}'; await loadConfig('${configFile}').catch((error) => process.stdout.write(error.message));`;
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd, encoding: 'utf8' }).stdout;
+}
 
 /**
  * One fixture per usage error of a config file, each with the message its rejection holds.
@@ -84,13 +96,11 @@ describe('loadConfig', () => {
 const cwd = process.cwd();
 throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + cwd.slice(1) + sep + 'b.js', 'c', new URL('c.js', import.meta.url).href, 'd'].join(' '));
 `;
-    const code = `import { loadConfig } from '${new URL('../src/index.js', import.meta.url).href}'; await loadConfig('dwfb.config.mjs').catch((error) => process.stdout.write(error.message));`;
 
     try {
       if (!existsSync(shareFolder)) return context.skip('this machine shares no drive as an administrative share');
       await writeFile(join(folder, 'dwfb.config.mjs'), configText);
-      const { stdout } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: shareFolder, encoding: 'utf8' });
-      assert.equal(stdout, 'The config file dwfb.config.mjs does not load. a a.js b b.js c c.js d');
+      assert.equal(runLoadConfig(shareFolder, 'dwfb.config.mjs'), 'The config file dwfb.config.mjs does not load. a a.js b b.js c c.js d');
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
@@ -336,7 +346,6 @@ throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + c
 
   it('names the file that does not parse relative to the real path of a working directory reached through a link', async (context) => {
     const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
-    const code = `import { loadConfig } from '${new URL('../src/index.js', import.meta.url).href}'; await loadConfig('dwfb.config.mjs').catch((error) => process.stdout.write(error.message));`;
 
     try {
       await mkdir(join(folder, 'real'));
@@ -348,8 +357,61 @@ throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + c
         if (error.code === 'EPERM') return context.skip('this account cannot create a link');
         throw error;
       }
-      const { stdout } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: join(folder, 'link'), encoding: 'utf8' });
-      assert.equal(stdout, 'The config file dwfb.config.mjs does not load. bad.mjs:1:18 Unexpected token');
+      assert.equal(runLoadConfig(join(folder, 'link'), 'dwfb.config.mjs'), 'The config file dwfb.config.mjs does not load. bad.mjs:1:18 Unexpected token');
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names each path of a load error relative to the real path of a working directory reached through a link', async (context) => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await mkdir(join(folder, 'real'));
+      await writeFile(join(folder, 'real', 'dwfb.config.mjs'), "import './missing.js';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'real', 'throws.mjs'), "throw new Error('cannot read ' + process.cwd());\n");
+      try {
+        await symlink(join(folder, 'real'), join(folder, 'link'), 'junction');
+      } catch (error) {
+        if (error.code === 'EPERM') return context.skip('this account cannot create a link');
+        throw error;
+      }
+      assert.equal(runLoadConfig(join(folder, 'link'), 'dwfb.config.mjs'), "The config file dwfb.config.mjs does not load. Cannot find module 'missing.js' imported from dwfb.config.mjs");
+      assert.equal(runLoadConfig(join(folder, 'link'), 'throws.mjs'), 'The config file throws.mjs does not load. cannot read .');
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names a path of a load error by its spelling when its real folder is on another drive than the working directory', async (context) => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const otherDriveFolder = fileURLToPath(new URL('./fixtures/', import.meta.url));
+
+    try {
+      if (parse(otherDriveFolder).root.toLowerCase() === parse(folder).root.toLowerCase()) {
+        return context.skip('the fixtures sit on the drive of the temporary folder');
+      }
+      await symlink(otherDriveFolder, join(folder, 'other-drive'), 'junction');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './other-drive/absent.js';\n\nexport default { workflows: [] };\n");
+      assert.equal(runLoadConfig(folder, 'dwfb.config.mjs'), "The config file dwfb.config.mjs does not load. Cannot find module 'other-drive/absent.js' imported from dwfb.config.mjs");
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names a path of a thrown message by its spelling when a folder of it is a link that loops', async (context) => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+
+    try {
+      try {
+        await symlink(join(folder, 'loop'), join(folder, 'loop'), 'junction');
+      } catch (error) {
+        if (error.code === 'EPERM') return context.skip('this account cannot create a link');
+        throw error;
+      }
+      await writeFile(join(folder, 'dwfb.config.mjs'), `throw new Error(${JSON.stringify(join(folder, 'loop', 'a.js'))});\n`);
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.mjs')), (error) => error.name === 'UsageError' && error.message.endsWith(`does not load. ${displayFolder}/loop/a.js`));
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
