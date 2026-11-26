@@ -172,8 +172,9 @@ function findPartModuleImports(sources, parts) {
 }
 
 /**
- * Refuses a path that names a part on some platforms only: one with a backslash, one with a root, and one
- * whose letter case differs from the file's, as resolveImport refuses such a specifier.
+ * Refuses a path that names a part on some platforms only: one with a backslash, one with a root, one whose
+ * letter case differs from the file's, as resolveImport refuses such a specifier, and one that spells a name
+ * its folder does not list, such as a Windows short name.
  * @param {string} path The path a directive names.
  * @param {string} entryFolder The real path of the entry's folder.
  * @returns {Promise<{ file: string, text: string } | { rule: string, message: string }>} The part's real path
@@ -181,27 +182,31 @@ function findPartModuleImports(sources, parts) {
  */
 async function readPart(path, entryFolder) {
   const quotedPath = JSON.stringify(path);
-  const notFound = (message) => ({ rule: 'include-not-found', message });
+  const reportNotFound = (message) => ({ rule: 'include-not-found', message });
   let requestedFile = '';
   let file = '';
+  let spellingDifference = null;
   let read = null;
 
-  if (path === '') return notFound('The directive names no path');
+  if (path === '') return reportNotFound('The directive names no path');
   // Every file system call refuses a path that holds a NUL.
-  if (path.includes('\0')) return notFound(`The path ${quotedPath} holds a NUL character`);
-  if (path.includes('\\')) return notFound(`The path ${quotedPath} holds a backslash, which only Windows reads as a folder separator`);
+  if (path.includes('\0')) return reportNotFound(`The path ${quotedPath} holds a NUL character`);
+  if (path.includes('\\')) return reportNotFound(`The path ${quotedPath} holds a backslash, which only Windows reads as a folder separator`);
   // The Windows root form also covers a POSIX root, and a drive letter such as the one in 'C:part.js'.
-  if (win32.parse(path).root !== '') return notFound(`The path ${quotedPath} is not relative to the entry's folder`);
+  if (win32.parse(path).root !== '') return reportNotFound(`The path ${quotedPath} is not relative to the entry's folder`);
 
   try {
     requestedFile = resolve(entryFolder, path);
     file = await realpath(requestedFile);
-    if (await hasOtherLetterCase(requestedFile, entryFolder)) return notFound(`The path ${quotedPath} differs in letter case from the file it names`);
-    if (isAbsolute(relative(entryFolder, file))) return notFound(`The path ${quotedPath} names a file on another drive than the entry`);
+    spellingDifference = await findSpellingDifference(requestedFile, entryFolder);
+    if (spellingDifference === 'letter-case') return reportNotFound(`The path ${quotedPath} differs in letter case from the file it names`);
+    if (spellingDifference === 'other') return reportNotFound(`The path ${quotedPath} does not spell the file's name as its folder lists it`);
+    if (isAbsolute(relative(entryFolder, file))) return reportNotFound(`The path ${quotedPath} names a file on another drive than the entry`);
     read = await readSourceFile(file);
   } catch (error) {
-    if (MISSING_FILE_CODES.has(error.code)) return notFound(`No file exists at ${quotedPath}`);
-    if (error.code === 'EISDIR') return notFound(`The path ${quotedPath} names a folder`);
+    if (MISSING_FILE_CODES.has(error.code)) return reportNotFound(`No file exists at ${quotedPath}`);
+    if (error.code === 'EISDIR') return reportNotFound(`The path ${quotedPath} names a folder`);
+    if (error.code === 'ELOOP') return reportNotFound(`The path ${quotedPath} names a link that loops`);
     throw error;
   }
   if (!read.isUtf8) return { rule: 'source-encoding-invalid', message: `The path ${quotedPath} names a file that is not valid UTF-8` };
@@ -246,7 +251,8 @@ async function resolveImport(record, importer, loadedSources, entryFolder) {
   try {
     file = await realpath(requestedFile);
     loaderFile = await realpathKeepingCase(requestedFile);
-    if (await hasOtherLetterCase(spelledFile, dirname(importer.file))) {
+    // A spelling the folder does not list, such as a Windows short name, passes, since the Node.js module loader reads the file by it.
+    if ((await findSpellingDifference(spelledFile, dirname(importer.file))) === 'letter-case') {
       return reportNotFound(`The specifier ${quotedSpecifier} differs in letter case from the file it names`);
     }
     const loadedSource = loadedSources.get(file);
@@ -264,6 +270,7 @@ async function resolveImport(record, importer, loadedSources, entryFolder) {
   } catch (error) {
     if (MISSING_FILE_CODES.has(error.code)) return reportNotFound(`No file exists at ${quotedSpecifier}`);
     if (error.code === 'EISDIR') return reportNotFound(`The specifier ${quotedSpecifier} names a folder`);
+    if (error.code === 'ELOOP') return reportNotFound(`The specifier ${quotedSpecifier} names a link that loops`);
     throw error;
   }
   if (!read.isUtf8) return report('source-encoding-invalid', `The specifier ${quotedSpecifier} names a file that is not valid UTF-8`);
@@ -287,20 +294,22 @@ async function readSourceFile(file) {
 }
 
 /**
- * Whether the spelled path spells a folder or file name in another letter case than its folder lists it.
- * The names the spelled path shares with the real folder path hold the spelling on disk, so they do not
- * count. It compares each name the path spells with its folder's
- * listing, so a link whose stored target differs in case from the folder on disk does not count either.
- * A name that the listing holds in no letter case, such as a Windows short name, does not count.
+ * How the spelled path spells a folder or file name other than its folder lists it. The names the spelled
+ * path shares with the real folder path hold the spelling on disk, so they do not count. It compares each
+ * name the path spells with its folder's listing, so a link whose stored target differs in case from the
+ * folder on disk does not count either.
  * @param {string} spelledFile The absolute path of an existing file, as a specifier or a directive spells it.
  * @param {string} realFolder The real path of the folder the spelled path was resolved against.
- * @returns {Promise<boolean>}
+ * @returns {Promise<'letter-case' | 'other' | null>} `letter-case` when a name differs from the listing in
+ *   letter case only, else `other` when the listing holds a name in no letter case, such as a Windows short
+ *   name or another Unicode normalization, else null.
  */
-async function hasOtherLetterCase(spelledFile, realFolder) {
+async function findSpellingDifference(spelledFile, realFolder) {
   const realSegments = realFolder.split(sep);
   const spelledSegments = spelledFile.split(sep);
   let sharedCount = 0;
   let names = [];
+  let difference = null;
 
   while (sharedCount < realSegments.length && spelledSegments[sharedCount] === realSegments[sharedCount]) sharedCount += 1;
 
@@ -311,13 +320,15 @@ async function hasOtherLetterCase(spelledFile, realFolder) {
       names = await readdir(`${spelledSegments.slice(0, index).join(sep)}${sep}`);
     } catch (error) {
       // Above a subst drive's root, the importer's real path reaches another folder than its loader path.
-      if (MISSING_FILE_CODES.has(error.code)) return false;
-      // A folder that may be passed through but not listed holds no evidence of a letter case difference.
+      if (MISSING_FILE_CODES.has(error.code)) return difference;
+      // A folder that may be passed through but not listed holds no evidence of a spelling difference.
       if (UNLISTABLE_FOLDER_CODES.has(error.code)) continue;
       throw error;
     }
-    if (!names.includes(segment) && names.some((name) => name.toLowerCase() === segment.toLowerCase())) return true;
+    if (names.includes(segment)) continue;
+    if (names.some((name) => name.toLowerCase() === segment.toLowerCase())) return 'letter-case';
+    difference = 'other';
   }
 
-  return false;
+  return difference;
 }

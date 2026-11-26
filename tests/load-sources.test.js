@@ -187,6 +187,38 @@ describe('loadSources', () => {
     assert.equal(sources.size, 3);
   });
 
+  it('reports include-not-found for a directive that names a part by its Windows short name', async (context) => {
+    const folder = await writeFolder({ 'longfilename-part.js': 'log(1);\n' });
+    const shortName = basename(readShortPath(join(folder, 'longfilename-part.js'))).toLowerCase();
+    if (shortName === '' || shortName === 'longfilename-part.js') return context.skip('this volume has no short names');
+    await writeFile(join(folder, 'entry.js'), `export const meta = {};\n// @include ./${shortName}\n`);
+
+    const { parts, findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      `include-not-found 2 The path "./${shortName}" does not spell the file's name as its folder lists it`,
+    ]);
+    assert.deepEqual(parts, []);
+  });
+
+  it('reports include-not-found for a directive that names a link that loops', async (context) => {
+    const folder = await writeFolder({ 'entry.js': "export const meta = {};\n// @include ./loop.js\n" });
+    if (!(await writeLinkLoop(folder))) return context.skip('this account cannot create a symbolic link');
+
+    const { findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), ['include-not-found 2 The path "./loop.js" names a link that loops']);
+  });
+
+  it('reports import-not-found for an import that names a link that loops', async (context) => {
+    const folder = await writeFolder({ 'entry.js': "export const meta = {};\nimport './loop.js';\n" });
+    if (!(await writeLinkLoop(folder))) return context.skip('this account cannot create a symbolic link');
+
+    const { findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), ['import-not-found 2 The specifier "./loop.js" names a link that loops']);
+  });
+
   it('resolves an import against the loader path of its importer, as the Node.js module loader does', async (context) => {
     const folder = await writeFolder({ 'entry.js': '' });
     await mkdir(join(folder, 'longfolder-name'));
@@ -210,6 +242,22 @@ describe('loadSources', () => {
     assert.deepEqual(findings, []);
   });
 });
+
+/**
+ * Writes loop.js and loop-back.js into the folder, each a symbolic link to the other.
+ * @param {string} folder
+ * @returns {Promise<boolean>} False when the account cannot create a symbolic link.
+ */
+async function writeLinkLoop(folder) {
+  try {
+    await symlink('loop-back.js', join(folder, 'loop.js'), 'file');
+    await symlink('loop.js', join(folder, 'loop-back.js'), 'file');
+  } catch (error) {
+    if (error.code === 'EPERM') return false;
+    throw error;
+  }
+  return true;
+}
 
 /**
  * @param {string} path An existing file or folder.

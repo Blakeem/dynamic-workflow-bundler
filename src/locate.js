@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, parse, resolve } from 'node:path';
 import { findBanner } from './banner.js';
@@ -55,8 +54,9 @@ const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entr
  * entry, and writes and prints nothing.
  * Rejects with a UsageError for options of another shape, a script that does not exist or is not a file, a
  * line or column that is not a whole number of 1 or more or lies past the script's text, with `runtime` a
- * line that the runtime's numbering cannot convert, an entry it cannot find, two config files in the working
- * directory when it needs one, and every usage error of the build.
+ * line that the runtime's numbering cannot convert, an entry it cannot find, a banner that names a folder, a
+ * link that loops or the script itself as the entry, two config files in the working directory when it needs
+ * one, and every usage error of the build.
  * @param {LocateOptions} options
  * @returns {Promise<LocateResult>}
  */
@@ -125,6 +125,7 @@ async function readScript(script) {
  */
 async function findScriptWorkflow(script, banner, config) {
   const noBannerReason = banner.hasSyntaxError ? 'does not parse' : 'has no banner';
+  let bannerEntryStats = null;
   let commandConfig = null;
 
   if (banner.path !== null) {
@@ -134,8 +135,22 @@ async function findScriptWorkflow(script, banner, config) {
       throw new UsageError(`The banner of the script ${script} names no relative path, so name the entry it is built from with --entry <file>`);
     }
     const bannerEntry = resolve(await findRealPath(dirname(resolve(script))), banner.path);
-    if (!existsSync(bannerEntry)) {
+    try {
+      bannerEntryStats = await stat(bannerEntry);
+    } catch (error) {
+      if (error.code === 'ELOOP') {
+        throw new UsageError(`The banner of the script ${script} names the entry ${formatDisplayPath(bannerEntry)}, which is a link that loops, so name the entry it is built from with --entry <file>`);
+      }
+      if (!MISSING_FILE_CODES.has(error.code)) throw error;
+    }
+    if (bannerEntryStats === null) {
       throw new UsageError(`The banner of the script ${script} names the entry ${formatDisplayPath(bannerEntry)}, which does not exist, so name the entry it is built from with --entry <file>`);
+    }
+    if (!bannerEntryStats.isFile()) {
+      throw new UsageError(`The banner of the script ${script} names the entry ${formatDisplayPath(bannerEntry)}, which is not a file, so name the entry it is built from with --entry <file>`);
+    }
+    if ((await findRealPath(bannerEntry)) === (await findRealPath(resolve(script)))) {
+      throw new UsageError(`The banner of the script ${script} names the script itself as its entry, so name the entry it is built from with --entry <file>`);
     }
     return { entry: formatDisplayPath(bannerEntry), banner: true };
   }

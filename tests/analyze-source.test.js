@@ -52,6 +52,8 @@ const RULE_CASES = [
   { rule: 'module-top-level-await', isEntry: false, breaking: 'for (await using x of []);\n', passing: 'for (using x of []);\n' },
   { rule: 'module-top-level-this', isEntry: false, breaking: 'export const self = this;\n', passing: 'export function self() { return this; }\n' },
   { rule: 'module-top-level-this', isEntry: false, breaking: "export class K { [String(this)] = 1; }\n", passing: 'export class K { key = this; }\n' },
+  { rule: 'module-top-level-arguments', isEntry: false, breaking: 'export const t = typeof arguments;\n', passing: 'export function f() { return arguments.length; }\n' },
+  { rule: 'module-top-level-arguments', isEntry: false, breaking: 'export const u = (() => typeof arguments)();\n', passing: 'export const u = (function () { return typeof arguments; })();\n' },
   { rule: 'module-direct-eval', isEntry: false, breaking: "export const read = () => eval('step');\n", passing: "export const read = () => (0, eval)('step');\n" },
   { rule: 'module-direct-eval', isEntry: false, breaking: "export const read = () => (eval)('step');\n", passing: "export const read = () => eval?.('step');\n" },
   { rule: 'reserved-name', isEntry: false, breaking: 'const __dwfb_x = 1;\n', passing: 'const dwfb_x = 1;\n' },

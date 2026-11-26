@@ -137,6 +137,10 @@ export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
     // The runtime compiles only the text after the meta statement (Claude Code 2.1.332), so its body binds no meta.
     if (isEntry) analysis.topLevelNames = listTopLevelNames(analysis.metaEnd === null ? program.body : program.body.slice(1));
     if (!isEntry) analysis.freeNames = findFreeNames(program).map((identifier) => ({ name: identifier.name, offset: identifier.start }));
+    // A scope's arrow function takes the arguments of the code around the runtime's arrow function (Claude Code 2.1.332).
+    for (const { offset } of analysis.freeNames.filter((freeName) => freeName.name === 'arguments')) {
+      addFinding('module-top-level-arguments', 'The module uses arguments outside every function that binds its own arguments', offset);
+    }
     if (!isEntry && text.startsWith(HASHBANG)) {
       addFinding('syntax-error', 'The module starts with a #! line, which is legal only at the start of a script', 0);
     }

@@ -233,6 +233,41 @@ describe('locate', () => {
     });
   });
 
+  it('names the banner and asks for the entry when the entry the banner names is a link that loops', async (context) => {
+    const { folder, script, lines } = await writeBuiltFixture();
+    try {
+      await symlink('loop-back.js', join(folder, 'loop.js'), 'file');
+      await symlink('loop.js', join(folder, 'loop-back.js'), 'file');
+    } catch (error) {
+      if (error.code === 'EPERM') return context.skip('this account cannot create a symbolic link');
+      throw error;
+    }
+    await writeFile(script, lines.with(4, lines[4].replace('../entry.js', '../loop.js')).join('\n'));
+
+    await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /^The banner of the script .*workflow\.js names the entry .*loop\.js, which is a link that loops, so name the entry/ });
+  });
+
+  it('names the banner and asks for the entry when the entry the banner names is a folder', async () => {
+    const { folder, script, lines } = await writeBuiltFixture();
+    await mkdir(join(folder, 'sub'));
+    await writeFile(script, lines.with(4, lines[4].replace('../entry.js', '../sub')).join('\n'));
+
+    await assert.rejects(locate({ script, line: 1 }), {
+      name: 'UsageError',
+      message: /^The banner of the script .*workflow\.js names the entry .*sub, which is not a file, so name the entry it is built from with --entry <file>$/,
+    });
+  });
+
+  it('names the banner and asks for the entry when the banner names the script itself', async () => {
+    const { script, lines } = await writeBuiltFixture();
+    await writeFile(script, lines.with(4, lines[4].replace('../entry.js', 'workflow.js')).join('\n'));
+
+    await assert.rejects(locate({ script, line: 1 }), {
+      name: 'UsageError',
+      message: /^The banner of the script .*workflow\.js names the script itself as its entry, so name the entry it is built from with --entry <file>$/,
+    });
+  });
+
   it('asks for the entry when the banner names a path with a root of the platform, even one that names the entry', async () => {
     const { entry, script, lines } = await writeBuiltFixture();
     const windowsRootedPaths = ['C:/entry.js', 'C:entry.js', '\\entry.js'];

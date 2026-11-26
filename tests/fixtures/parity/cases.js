@@ -83,6 +83,7 @@ export const PARITY_CASES = [
   { name: 'binding: import used above its statement', expected: 'equal', files: { 'a.js': 'export const v = 6;\n', 'main.js': "const early = v;\nimport { v } from './a.js';\nexport default early;\n" } },
   { name: 'binding: assign to import throws', expected: 'equal', files: { 'a.js': 'export const v = 6;\n', 'main.js': "import { v } from './a.js';\nlet out;\ntry { v = 7; out = 'no throw'; } catch (e) { out = e.name; }\nexport default out;\n" } },
   { name: 'binding: typeof this at top level', expected: 'refused', rule: 'module-top-level-this', files: { 'a.js': 'export const v = typeof this;\n', 'main.js': formatMain("import { v } from './a.js';", 'v') } },
+  { name: 'binding: typeof arguments at top level', expected: 'refused', rule: 'module-top-level-arguments', files: { 'a.js': 'export const v = typeof arguments;\n', 'main.js': formatMain("import { v } from './a.js';", 'v') } },
   { name: 'binding: await at top level', expected: 'refused', rule: 'module-top-level-await', files: { 'a.js': 'export const v = await Promise.resolve(8);\n', 'main.js': formatMain("import { v } from './a.js';", 'v') } },
   { name: 'binding: module reads undeclared global', expected: 'equal', files: { 'a.js': 'export const v = typeof someUndeclaredName;\n', 'main.js': formatMain("import { v } from './a.js';", 'v') } },
   { name: 'binding: export default expression reads later const', expected: 'equal', files: { 'a.js': 'export default () => later;\nconst later = 3;\n', 'main.js': formatMain("import f from './a.js';", 'f()') } },

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { describe, it } from 'node:test';
@@ -74,6 +76,26 @@ describe('loadConfig', () => {
     );
   });
 
+  it('names a UNC path, a \\\\?\\UNC\\ path and a file URL with a host by its path relative to a working directory on a UNC share', async (context) => {
+    if (process.platform !== 'win32') return context.skip('only Windows names a UNC share');
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const shareFolder = `\\\\127.0.0.1\\${folder[0]}$${folder.slice(2)}`;
+    const configText = String.raw`const sep = '\\';
+const cwd = process.cwd();
+throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + cwd.slice(1) + sep + 'b.js', 'c', new URL('c.js', import.meta.url).href, 'd'].join(' '));
+`;
+    const code = `import { loadConfig } from '${new URL('../src/index.js', import.meta.url).href}'; await loadConfig('dwfb.config.mjs').catch((error) => process.stdout.write(error.message));`;
+
+    try {
+      if (!existsSync(shareFolder)) return context.skip('this machine shares no drive as an administrative share');
+      await writeFile(join(folder, 'dwfb.config.mjs'), configText);
+      const { stdout } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: shareFolder, encoding: 'utf8' });
+      assert.equal(stdout, 'The config file dwfb.config.mjs does not load. a a.js b b.js c c.js d');
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
   it('names each file of a load failure by its entire path when a folder name holds a space', async () => {
     const parentFolder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
     const folder = join(parentFolder, 'my project');
@@ -97,11 +119,77 @@ describe('loadConfig', () => {
 
     try {
       await writeFile(join(folder, 'package.json'), '{ "type": "commonjs" }\n');
-      await writeFile(join(folder, 'broken.js'), 'export default { workflows: [ };\n');
+      await writeFile(join(folder, 'broken.js'), 'module.exports = { workflows: [ };\n');
+      await writeFile(join(folder, 'module-broken.js'), 'export default { workflows: [ };\n');
       await writeFile(join(folder, 'imports.js'), "import './bad.js';\n\nexport default { workflows: [] };\n");
       await writeFile(join(folder, 'bad.js'), 'export const x = ;\n');
-      await assert.rejects(loadConfig(join(folder, 'broken.js')), (error) => error.message.endsWith(`does not load. ${displayFolder}/broken.js:1:31 Unexpected token`));
+      await assert.rejects(loadConfig(join(folder, 'broken.js')), (error) => error.message.endsWith(`does not load. ${displayFolder}/broken.js:1:33 Unexpected token`));
+      await assert.rejects(loadConfig(join(folder, 'module-broken.js')), isUsageError(/does not load\. Unexpected token 'export'\. If the file is an ES module, set "type": "module"/));
       await assert.rejects(loadConfig(join(folder, 'imports.js')), isUsageError(/does not load\. Cannot use import statement outside a module\. If the file is an ES module, set "type": "module"/));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the cause a CommonJS config file throws as it runs, with no syntax error of its CommonJS code and no "type": "module" hint', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await writeFile(join(folder, 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'dwfb.config.js'), "var package = require('./package.json');\nmodule.exports = { workflows: JSON.parse('{') };\n");
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.js')), (error) => {
+        assert.match(error.message, /does not load\. [^:\n]* in JSON at position 1\b[^:\n]*$/);
+        assert.ok(!error.message.includes('"type": "module"'), error.message);
+        return true;
+      });
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('parses a .js import of an ES config file that loads as CommonJS as CommonJS', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await mkdir(join(folder, 'sub'));
+      await writeFile(join(folder, 'sub', 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'sub', 'a.js'), 'module.exports = 1;\nif (true) return;\n');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './sub/a.js';\n\nexport default { workflows: JSON.parse('{') };\n");
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.mjs')), isUsageError(/does not load\. [^:\n]* in JSON at position 1\b[^:\n]*$/));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names the line of a syntax error in a config file of a package with no "type" that fails both parses, as Node reparses it as an ES module', { skip: !IS_MODULE_SYNTAX_DETECTED }, async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+
+    try {
+      await writeFile(join(folder, 'package.json'), '{ "private": true }\n');
+      await writeFile(join(folder, 'dwfb.config.js'), 'export default { workflows: [ };\n');
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.js')), (error) => error.message.endsWith(`does not load. ${displayFolder}/dwfb.config.js:1:31 Unexpected token`));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('searches a linked config file\'s imports in the folder of the link\'s target, as Node loads them', async (context) => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await mkdir(join(folder, 'A'));
+      await mkdir(join(folder, 'B'));
+      await writeFile(join(folder, 'B', 'dwfb.config.mjs'), "import './helper.js';\n\nexport default { workflows: JSON.parse('{') };\n");
+      await writeFile(join(folder, 'B', 'helper.js'), 'export const helper = 1;\n');
+      await writeFile(join(folder, 'A', 'helper.js'), 'let let = 1;\n');
+      try {
+        await symlink(join('..', 'B', 'dwfb.config.mjs'), join(folder, 'A', 'dwfb.config.mjs'), 'file');
+      } catch (error) {
+        if (error.code === 'EPERM') return context.skip('this account cannot create a symbolic link');
+        throw error;
+      }
+      await assert.rejects(loadConfig(join(folder, 'A', 'dwfb.config.mjs')), isUsageError(/does not load\. [^:\n]* in JSON at position 1\b[^:\n]*$/));
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
@@ -119,6 +207,149 @@ describe('loadConfig', () => {
       await writeFile(join(folder, 'bad.js'), 'export const x = ;\n');
       await writeFile(join(folder, 'b.js'), "import './missing.js';\n");
       await assert.rejects(loadConfig(join(folder, 'dwfb.config.js')), (error) => error.message.endsWith(`does not load. ${displayFolder}/bad.js:1:18 Unexpected token`));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names an ES module that does not parse ahead of an earlier CommonJS import, which Node compiles only as it runs it', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+
+    try {
+      await mkdir(join(folder, 'sub'));
+      await writeFile(join(folder, 'sub', 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'sub', 'a.js'), 'module.exports = ;\n');
+      await writeFile(join(folder, 'b.mjs'), 'export const b = );\n');
+      await writeFile(join(folder, 'c.mjs'), 'export const c = 1;\n');
+      await writeFile(join(folder, 'imports-bad.mjs'), "import './sub/a.js';\nimport './b.mjs';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'imports-good.mjs'), "import './sub/a.js';\nimport './c.mjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(loadConfig(join(folder, 'imports-bad.mjs')), (error) => error.message.endsWith(`does not load. ${displayFolder}/b.mjs:1:18 Unexpected token`));
+      await assert.rejects(loadConfig(join(folder, 'imports-good.mjs')), (error) => error.message.endsWith(`does not load. ${displayFolder}/sub/a.js:1:18 Unexpected token`));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the cause an ES module throws as it runs ahead of a CommonJS import that does not parse, which Node never compiled', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await writeFile(join(folder, 'b.mjs'), "JSON.parse('{');\n");
+      await writeFile(join(folder, 'a.cjs'), 'module.exports = ;\n');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './b.mjs';\nimport './a.cjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.mjs')), isUsageError(/does not load\. [^:\n]* in JSON at position 1\b[^:\n]*$/));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the cause of a thrown SyntaxError whose stack names no file or cannot be read as text', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const missingFile = JSON.stringify(join(folder, 'missing.cjs'));
+
+    try {
+      await writeFile(join(folder, 'a.cjs'), 'module.exports = ;\n');
+      await writeFile(join(folder, 'missing-file.mjs'), `const error = new SyntaxError('stack names a missing file');\nerror.stack = ${missingFile} + ':1\\n';\nthrow error;\n`);
+      await writeFile(join(folder, 'stack-not-text.mjs'), "const error = new SyntaxError('stack is no text');\nerror.stack = { toString() { throw 1; } };\nthrow error;\n");
+      await writeFile(join(folder, 'stack-throws.mjs'), "const error = new SyntaxError('stack throws');\nObject.defineProperty(error, 'stack', { get() { throw 1; } });\nthrow error;\n");
+      for (const [name, pattern] of [
+        ['missing-file', /does not load\. stack names a missing file$/],
+        ['stack-not-text', /does not load\. stack is no text$/],
+        ['stack-throws', /does not load\. stack throws$/],
+      ]) {
+        await writeFile(join(folder, `${name}.config.mjs`), `import './${name}.mjs';\nimport './a.cjs';\n\nexport default { workflows: [] };\n`);
+        await assert.rejects(loadConfig(join(folder, `${name}.config.mjs`)), isUsageError(pattern), name);
+      }
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names the place of module syntax in a CommonJS import of an ES config file, with the recovery its ending allows', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+
+    try {
+      await mkdir(join(folder, 'sub'));
+      await writeFile(join(folder, 'sub', 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'sub', 'a.js'), 'export const x = 1;\n');
+      await writeFile(join(folder, 'sub', 'b.cjs'), 'export const y = 1;\n');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './sub/a.js';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'imports-cjs.mjs'), "import './sub/b.cjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(
+        loadConfig(join(folder, 'dwfb.config.mjs')),
+        (error) => error.message.endsWith(`does not load. ${displayFolder}/sub/a.js:1:1 'import' and 'export' may appear only with 'sourceType: module'. If the file is an ES module, set "type": "module" in the nearest package.json, or rename it to a .mjs file`),
+      );
+      await assert.rejects(
+        loadConfig(join(folder, 'imports-cjs.mjs')),
+        (error) => error.message.endsWith(`does not load. ${displayFolder}/sub/b.cjs:1:1 'import' and 'export' may appear only with 'sourceType: module'. If the file is an ES module, rename it to a .mjs file`),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the cause a CommonJS config file with a top-level new.target throws as it runs', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await writeFile(join(folder, 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'dwfb.config.js'), "if (new.target) throw 1;\nmodule.exports = { workflows: JSON.parse('{') };\n");
+      await assert.rejects(loadConfig(join(folder, 'dwfb.config.js')), isUsageError(/does not load\. [^:\n]* in JSON at position 1\b[^:\n]*$/));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('gives a .cjs config file that holds module syntax only the .mjs recovery, since no package.json "type" changes it', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+
+    try {
+      await writeFile(join(folder, 'config.cjs'), "import './a.js';\n\nmodule.exports = { workflows: [] };\n");
+      await assert.rejects(
+        loadConfig(join(folder, 'config.cjs')),
+        isUsageError(/does not load\. Cannot use import statement outside a module\. If the file is an ES module, name a \.mjs config file with --config$/),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names an import of a package with no "type" whose only module syntax is nested, as Node reparses it as an ES module', { skip: !IS_MODULE_SYNTAX_DETECTED }, async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+
+    try {
+      await writeFile(join(folder, 'package.json'), '{ "private": true }\n');
+      await writeFile(join(folder, 'nested.js'), 'if (true) {\n  export const q = 1;\n}\nvar z = ;\n');
+      await writeFile(join(folder, 'bad.mjs'), 'export const b = );\n');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './nested.js';\nimport './bad.mjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(
+        loadConfig(join(folder, 'dwfb.config.mjs')),
+        (error) => error.message.endsWith(`does not load. ${displayFolder}/nested.js:2:3 'import' and 'export' may only appear at the top level`),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names the file that does not parse relative to the real path of a working directory reached through a link', async (context) => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const code = `import { loadConfig } from '${new URL('../src/index.js', import.meta.url).href}'; await loadConfig('dwfb.config.mjs').catch((error) => process.stdout.write(error.message));`;
+
+    try {
+      await mkdir(join(folder, 'real'));
+      await writeFile(join(folder, 'real', 'dwfb.config.mjs'), "import './bad.mjs';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'real', 'bad.mjs'), 'export const b = );\n');
+      try {
+        await symlink(join(folder, 'real'), join(folder, 'link'), 'junction');
+      } catch (error) {
+        if (error.code === 'EPERM') return context.skip('this account cannot create a link');
+        throw error;
+      }
+      const { stdout } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: join(folder, 'link'), encoding: 'utf8' });
+      assert.equal(stdout, 'The config file dwfb.config.mjs does not load. bad.mjs:1:18 Unexpected token');
     } finally {
       await rm(folder, { recursive: true, force: true });
     }

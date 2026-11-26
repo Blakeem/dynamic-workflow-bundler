@@ -1,12 +1,13 @@
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
-import { dirname, extname, join, resolve } from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkConfig } from './check-config.js';
 import { checkModuleSyntax, hasModuleSyntax } from './check-module-syntax.js';
 import { formatDisplayPath, isFolderPath } from './display-path.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 import { normalizeSourceText } from './normalize-source-text.js';
+import { formatRealDisplayPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
 
 /** @typedef {import('./check-config.js').Config} Config */
@@ -15,15 +16,28 @@ import { UsageError } from './usage-error.js';
 const CONFIG_FILES = Object.freeze(['dwfb.config.js', 'dwfb.config.mjs']);
 /** The config files that a command looks for in the working directory when no `--config` names another. */
 export const CONFIG_FILES_TEXT = CONFIG_FILES.join(' or ');
+// The endings of a file that Node may load as CommonJS, which it compiles only as it runs it.
+const COMMONJS_ENDINGS = new Set(['.js', '.cjs']);
+const COMPILED_FILE_LINE_PATTERN = /^(.+):\d+\n/;
 
 // Command output holds no absolute path. Node's load errors quote a module path, end the importing file's path
 // after "imported from" at a semicolon or the line's end, and leave other paths bare, which end at a space.
-// On Windows a path may open with the \\?\ prefix, such as the package.json path of a module scope error.
-const ABSOLUTE_PATH_PATTERN = /(?<=(?<quote>['"]))(?:file:\/\/\/|(?:\\\\\?\\)?[A-Za-z]:\\|\/)[^'"\n]+(?=\k<quote>)|(?<= imported from )(?:file:\/\/\/|(?:\\\\\?\\)?[A-Za-z]:\\|\/)[^;\n]*|file:\/\/\/[^\s'"]+|(?<![\w/\\.:])(?:(?:\\\\\?\\)?[A-Za-z]:\\|\/)[^\s'"]+/g;
+// On Windows a path may open with the \\?\ prefix, such as the package.json path of a module scope error, or
+// with a UNC share, as \\server\share\ or \\?\UNC\server\share\ gives it, and a file URL may name a host.
+const FILE_URL_ROOT = String.raw`file:\/\/[^\/\s'"]*\/`;
+const DISK_ROOT = String.raw`(?:\\\\\?\\)?[A-Za-z]:\\|\\\\(?:\?\\UNC\\)?[^\\\s'"]+\\[^\\\s'"]+\\|\/`;
+const ABSOLUTE_PATH_PATTERN = new RegExp([
+  String.raw`(?<=(?<quote>['"]))(?:${FILE_URL_ROOT}|${DISK_ROOT})[^'"\n]+(?=\k<quote>)`,
+  String.raw`(?<= imported from )(?:${FILE_URL_ROOT}|${DISK_ROOT})[^;\n]*`,
+  String.raw`${FILE_URL_ROOT}[^\s'"]+`,
+  String.raw`(?<![\w/\\.:])(?:${DISK_ROOT})[^\s'"]+`,
+].join('|'), 'g');
 const TRAILING_PUNCTUATION_PATTERN = /^(.*?)([.,;:)]*)$/s;
 // Node quotes the pathname of a file URL for an invalid specifier, which on Windows puts a slash before the drive.
 const URL_PATHNAME_DRIVE_PATTERN = /^\/[A-Za-z]:\//;
 const WINDOWS_LONG_PATH_PREFIX = '\\\\?\\';
+const WINDOWS_LONG_UNC_PREFIX = '\\\\?\\UNC\\';
+const UNC_PREFIX = '\\\\';
 const TEXTLESS_THROW_CAUSE = 'Its code threw a value that has no text';
 const [NODE_MAJOR_VERSION, NODE_MINOR_VERSION] = process.versions.node.split('.').map(Number);
 // Node.js 22.7.0 unflagged syntax detection, which loads a .js file of a package with no "type" as an ES
@@ -137,51 +151,119 @@ function formatErrorCause(error) {
  */
 async function formatLoadFailure(error, configFile, path, isFoundFile) {
   const cause = formatErrorCause(error);
-  const isSyntaxError = error instanceof SyntaxError;
-  const isEsModule = isSyntaxError ? await isEsModuleFile(configFile) : true;
-  const parseFailure = isSyntaxError ? await findParseFailure(configFile, isEsModule) : null;
   // A found file that loads as CommonJS is dwfb.config.js, since a .mjs file loads as an ES module.
   const moduleFileRecovery = isFoundFile ? `rename it to ${CONFIG_FILES[1]}` : 'name a .mjs config file with --config';
+  let parseFailure = null;
+  let place = '';
 
-  if (parseFailure !== null) {
-    return `The config file ${path} does not load. ${parseFailure.file}:${parseFailure.line}:${parseFailure.column} ${parseFailure.reason}`;
-  }
-  // Node loaded the config file as CommonJS, where an `import` or `export` statement is a syntax error.
-  if (!isEsModule) {
-    return `The config file ${path} does not load. ${cause}. If the file is an ES module, set "type": "module" in the nearest package.json, or ${moduleFileRecovery}`;
+  if (!(error instanceof SyntaxError)) return `The config file ${path} does not load. ${cause}`;
+  // Node's module loader realpaths the config file, so it reads the imports and the package.json of a link's target.
+  parseFailure = await findParseFailure(await realpath(configFile), await findCompiledFile(error));
+  if (parseFailure === null) return `The config file ${path} does not load. ${cause}`;
+  place = `${parseFailure.file}:${parseFailure.line}:${parseFailure.column} ${parseFailure.reason}`;
+  if (!parseFailure.isModuleSyntaxInCommonJs) return `The config file ${path} does not load. ${place}`;
+  // Node loaded the file as CommonJS, where an `import` or `export` statement is a syntax error.
+  if (parseFailure.isConfigFile) {
+    return `The config file ${path} does not load. ${cause}. ${formatModuleSyntaxRecovery(parseFailure.isTypeFieldIgnored, moduleFileRecovery)}`;
   }
 
-  return `The config file ${path} does not load. ${cause}`;
+  return `The config file ${path} does not load. ${place}. ${formatModuleSyntaxRecovery(parseFailure.isTypeFieldIgnored, 'rename it to a .mjs file')}`;
+}
+
+/**
+ * @param {boolean} isTypeFieldIgnored As ParseFailure holds it.
+ * @param {string} moduleFileRecovery The recovery that gives the file a .mjs ending.
+ * @returns {string}
+ */
+function formatModuleSyntaxRecovery(isTypeFieldIgnored, moduleFileRecovery) {
+  const typeRecovery = isTypeFieldIgnored ? '' : 'set "type": "module" in the nearest package.json, or ';
+
+  return `If the file is an ES module, ${typeRecovery}${moduleFileRecovery}`;
+}
+
+/**
+ * @param {SyntaxError} error What the import of the config file rejected with.
+ * @returns {Promise<string | null>} The real path of the CommonJS file whose compile threw the error, or null
+ *   for an error thrown as code runs, such as from JSON.parse.
+ */
+async function findCompiledFile(error) {
+  let compiledFile = null;
+
+  try {
+    // Node.js 24.22.1 opens the stack of a CommonJS compile error with the file's absolute path and the line.
+    compiledFile = COMPILED_FILE_LINE_PATTERN.exec(error.stack)?.[1] ?? null;
+  } catch {
+    // The config file's code can give a SyntaxError a stack that throws as it is read or turned into text.
+    return null;
+  }
+  if (compiledFile === null || !isAbsolute(compiledFile)) return null;
+  try {
+    return await realpath(compiledFile);
+  } catch {
+    // A path that does not resolve names no file that Node compiled, and an error here would hide the load failure.
+    return null;
+  }
 }
 
 /**
  * Finds the file of a config file's static imports that does not parse, since Node's syntax error names no
- * file and no line (Node.js 24.22.1). A syntax error that the config file throws as it runs, such as from
+ * file and no line (Node.js 24.22.1). A syntax error that a module throws as it runs, such as from
  * JSON.parse, gives null.
- * Node compiles the files depth first in source order and stops at the first that fails, so the search
- * takes that order and reads only files that Node read.
- * @param {string} configFile
- * @param {boolean} isImportFollowed False for a config file that loads as CommonJS, which loads no ES import.
- * @returns {Promise<{ file: string, line: number, column: number, reason: string } | null>} The file relative
- *   to the working directory.
+ * Node compiles each ES module and parses each JSON file depth first in source order as it loads the graph,
+ * and stops at the first that fails. It compiles a CommonJS file only as it runs it, after the entire graph
+ * loaded, so a module that runs before it can throw first. So the search takes that order, reads only files
+ * that Node read, and gives a CommonJS failure only when no ES module or JSON file fails and Node's error
+ * names that file as the one it compiled. It parses each file as the module type Node loads it as, and
+ * follows the imports of an ES module only.
+ * @param {string} configFile The config file's real path.
+ * @param {string | null} compiledFile As findCompiledFile gives it.
+ * @returns {Promise<ParseFailure | null>}
  */
-async function findParseFailure(configFile, isImportFollowed) {
+async function findParseFailure(configFile, compiledFile) {
   const pendingFiles = [configFile];
   const seenFiles = new Set();
+  let commonJsFailure = null;
 
   while (pendingFiles.length > 0) {
-    const file = /** @type {string} */ (pendingFiles.pop());
+    // Node's module loader realpaths each module it loads, so it resolves an import against its importer's real path.
+    const file = await realpath(/** @type {string} */ (pendingFiles.pop()));
     if (seenFiles.has(file)) continue;
     seenFiles.add(file);
     const text = normalizeSourceText(await readFile(file, 'utf8'));
-    const { syntaxError, importSpecifiers } = checkModuleSyntax(text, file);
-    if (syntaxError !== null) return { file: formatDisplayPath(file), ...syntaxError };
-    if (!isImportFollowed) return null;
+    const isCommonJs = COMMONJS_ENDINGS.has(extname(file)) && !(await isEsModuleFile(file, text));
+    const { syntaxError, importSpecifiers } = checkModuleSyntax(text, file, !isCommonJs);
+    if (syntaxError !== null && !isCommonJs) return createParseFailure(file, syntaxError, file === configFile, false);
+    if (syntaxError !== null && file === compiledFile) {
+      commonJsFailure = await createParseFailure(file, syntaxError, file === configFile, hasModuleSyntax(text));
+    }
     const importedFiles = importSpecifiers.map((specifier) => findImportedFile(specifier, file)).filter((importedFile) => importedFile !== null);
     pendingFiles.push(...importedFiles.reverse());
   }
 
-  return null;
+  return commonJsFailure;
+}
+
+/**
+ * @typedef {object} ParseFailure
+ * @property {string} file Relative to the real path of the working directory, as a build names each source.
+ * @property {number} line
+ * @property {number} column
+ * @property {string} reason
+ * @property {boolean} isConfigFile
+ * @property {boolean} isTypeFieldIgnored True for a .cjs file, which Node loads as CommonJS whatever the
+ *   package.json "type" sets.
+ * @property {boolean} isModuleSyntaxInCommonJs True for a file that loads as CommonJS and holds module syntax.
+ */
+
+/**
+ * @param {string} file The real path of the file that does not parse.
+ * @param {import('./check-module-syntax.js').ModuleSyntaxError} syntaxError
+ * @param {boolean} isConfigFile
+ * @param {boolean} isModuleSyntaxInCommonJs
+ * @returns {Promise<ParseFailure>}
+ */
+async function createParseFailure(file, syntaxError, isConfigFile, isModuleSyntaxInCommonJs) {
+  return { file: await formatRealDisplayPath(file), ...syntaxError, isConfigFile, isTypeFieldIgnored: extname(file) === '.cjs', isModuleSyntaxInCommonJs };
 }
 
 /**
@@ -222,6 +304,7 @@ function formatPathToken(token) {
     }
   }
   if (process.platform === 'win32' && URL_PATHNAME_DRIVE_PATTERN.test(pathText)) file = pathText.slice(1);
+  if (file.startsWith(WINDOWS_LONG_UNC_PREFIX)) file = `${UNC_PREFIX}${file.slice(WINDOWS_LONG_UNC_PREFIX.length)}`;
   if (file.startsWith(WINDOWS_LONG_PATH_PREFIX)) file = file.slice(WINDOWS_LONG_PATH_PREFIX.length);
   if (!isPathOnDisk(file)) return token;
 
@@ -246,22 +329,20 @@ function isPathOnDisk(file) {
 }
 
 /**
- * @param {string} configFile
- * @returns {Promise<boolean>} True for a file that Node loads as an ES module: a `.mjs` file, a `.js` file
- *   whose nearest package.json sets `"type": "module"`, or one of a package with no "type" that holds
- *   module syntax.
+ * @param {string} file A `.js` or `.cjs` file.
+ * @param {string} text The file's normalized text.
+ * @returns {Promise<boolean>} True for a file that Node loads as an ES module: a `.js` file whose nearest
+ *   package.json sets `"type": "module"`, or one of a package with no "type" that holds module syntax.
  */
-async function isEsModuleFile(configFile) {
-  const extension = extname(configFile);
+async function isEsModuleFile(file, text) {
   let packageType = null;
 
-  if (extension === '.mjs') return true;
-  if (extension === '.cjs') return false;
-  packageType = await findPackageType(dirname(configFile));
+  if (extname(file) === '.cjs') return false;
+  packageType = await findPackageType(dirname(file));
   if (packageType !== null) return packageType === 'module';
   if (!IS_MODULE_SYNTAX_DETECTED) return false;
 
-  return hasModuleSyntax(normalizeSourceText(await readFile(configFile, 'utf8')));
+  return hasModuleSyntax(text);
 }
 
 /**

@@ -97,12 +97,12 @@ export function joinModules({ entry, sources, bannerPath }) {
 
   if (bannerPath !== null) {
     const separator = head.endsWith('\n') ? '' : '\n';
-    pieces.push(addedPiece(`${separator}${BANNER_START}${formatCommentText(bannerPath)}${BANNER_END}\n`, null));
+    pieces.push(createAddedPiece(`${separator}${BANNER_START}${formatCommentText(bannerPath)}${BANNER_END}\n`, null));
   }
   for (const source of sources.filter((each) => each.kind === 'text')) pieces.push(...formatTextFile(source, sourceNames));
   for (const source of sources.filter((each) => each.kind === 'json')) pieces.push(...formatJsonFile(source, sourceNames));
   for (const source of sources.filter((each) => each.kind === 'module')) pieces.push(...formatScope(source, sourceNames));
-  if (entryBindings !== '') pieces.push(addedPiece(`${entryBindings}\n`, entry.file));
+  if (entryBindings !== '') pieces.push(createAddedPiece(`${entryBindings}\n`, entry.file));
   pieces.push({ text: entryText.slice(splitOffset), findOrigin: (line) => findEntryOrigin(metaLastLine + line), mapping: { ...entryMapping, offset: splitOffset } });
   const scriptLines = mapScriptLines(pieces);
 
@@ -188,7 +188,7 @@ function findSourceOffset(sourceText, edits, builtOffset) {
  * @param {string | null} file
  * @returns {ScriptPiece}
  */
-function addedPiece(text, file) {
+function createAddedPiece(text, file) {
   return { text, findOrigin: () => ({ file, line: null }), mapping: null };
 }
 
@@ -198,7 +198,7 @@ function addedPiece(text, file) {
  * @param {Edit[]} edits The edits that give `text` from the source's text.
  * @returns {ScriptPiece}
  */
-function sourcePiece(text, source, edits) {
+function createSourcePiece(text, source, edits) {
   const findOrigin = (line) => ({ file: source.file, line });
   return { text, findOrigin, mapping: { sourceText: source.text, edits, offset: 0, findOrigin } };
 }
@@ -250,9 +250,9 @@ function formatTemplateConstant(source, before, after) {
   const escapes = Array.from(source.text.matchAll(TEMPLATE_SPECIAL_TEXT), (match) => ({ start: match.index, end: match.index + match[0].length, text: TEMPLATE_ESCAPES[match[0]] }));
 
   return [
-    addedPiece(`// ${formatCommentText(source.path)}\n${before}\`\\\n`, source.file),
-    sourcePiece(applyEdits(source.text, escapes), source, escapes),
-    addedPiece(`\`${after}\n`, source.file),
+    createAddedPiece(`// ${formatCommentText(source.path)}\n${before}\`\\\n`, source.file),
+    createSourcePiece(applyEdits(source.text, escapes), source, escapes),
+    createAddedPiece(`\`${after}\n`, source.file),
   ];
 }
 
@@ -270,7 +270,7 @@ function formatScope(module, sourceNames) {
   const opening = `// ${formatCommentText(module.path)}\nconst ${sourceNames.get(module.file)} = Object.freeze(Object.defineProperty((() => {${bindings === '' ? '' : ` ${bindings}`}\n`;
   const closing = `return { __proto__: null${exportNames === '' ? '' : `, ${exportNames}`} }; })(), Symbol.toStringTag, { value: 'Module' }));\n`;
 
-  return [addedPiece(opening, module.file), sourcePiece(closedBody, module, module.analysis.edits), addedPiece(closing, module.file)];
+  return [createAddedPiece(opening, module.file), createSourcePiece(closedBody, module, module.analysis.edits), createAddedPiece(closing, module.file)];
 }
 
 /**

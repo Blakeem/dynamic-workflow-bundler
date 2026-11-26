@@ -41,6 +41,7 @@ export const FIXES = Object.freeze({
   'module-top-level-await': 'Move it into a function, or into the entry',
   'module-top-level-return': 'Move it into a function, or into the entry',
   'module-top-level-this': 'Use undefined in its place, or move it into a function',
+  'module-top-level-arguments': 'Read the values as named parameters, or move the code into a function',
   'module-direct-eval': 'Replace the eval call with code, since in the built script it can read the entry\'s names',
   'module-reads-entry-name': 'Rename the entry\'s declaration, since an ES module would read the global of that name',
   'reserved-name': 'Rename it, since the build reserves that name',

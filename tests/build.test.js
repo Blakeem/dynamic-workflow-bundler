@@ -156,6 +156,7 @@ describe('build findings', () => {
     { rule: 'module-top-level-this', file: 'context.js', line: 1 },
     { rule: 'module-top-level-this', file: 'context.js', line: 2 },
     { rule: 'module-top-level-this', file: 'context.js', line: 11 },
+    { rule: 'module-top-level-arguments', file: 'context.js', line: 4 },
     { rule: 'module-direct-eval', file: 'reader.js', line: 2 },
     { rule: 'module-reads-entry-name', file: 'reader.js', line: 2 },
     { rule: 'reserved-name', file: 'entry.js', line: 2 },
