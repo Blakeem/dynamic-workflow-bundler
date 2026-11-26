@@ -1,5 +1,4 @@
-import { parse } from 'acorn';
-import { PARSE_OPTIONS } from './parse-source.js';
+import { PARSE_OPTIONS, parseSource } from './parse-source.js';
 
 /** The banner comment's text before the entry's path. */
 export const BANNER_START = '// Built by dynamic-workflow-bundler from ';
@@ -19,7 +18,7 @@ export function findBanner(script) {
   let program = null;
 
   try {
-    program = parse(script, { ...PARSE_OPTIONS, onComment: comments });
+    program = parseSource(script, { ...PARSE_OPTIONS, onComment: comments });
   } catch (error) {
     if (error instanceof SyntaxError) return { path: null, hasSyntaxError: true };
     throw error;

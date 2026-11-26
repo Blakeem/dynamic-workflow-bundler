@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'dynamic-workflow-bundler';
 import { checkContract, SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { findPosition } from '../src/source-position.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const META = "export const meta = { name: 'p', description: 'd' }\n";
@@ -113,6 +114,12 @@ describe('checkContract', () => {
     assert.equal(parserFindings[0].message, 'The script nests code deeper than the parser can read');
     assert.deepEqual(checkContract(treeDeepText, 'script.js').map((finding) => `${finding.rule} ${finding.line}:${finding.column} ${finding.message}`), [
       'source-too-deep 3:18 The script nests code deeper than dwfb can read',
+    ]);
+  });
+
+  it('reports source-too-deep at 1:1 for a script whose first token nests past the parser', () => {
+    assert.deepEqual(checkContract(`${DEEP_REGEXP_LITERAL};\n`, 'script.js').map((finding) => `${finding.rule} ${finding.line}:${finding.column} ${finding.message}`), [
+      'source-too-deep 1:1 The script nests code deeper than the parser can read',
     ]);
   });
 

@@ -1,3 +1,6 @@
+import { Parser } from 'acorn';
+import { isStackOverflowError } from './syntax-tree.js';
+
 // The runtime runs the body inside an async function (Claude Code 2.1.332), so a top-level return and await parse.
 // A probe parsed seven production workflow scripts of 20 KB to 344 KB with these options.
 export const PARSE_OPTIONS = Object.freeze({
@@ -13,6 +16,25 @@ export const PARSER_DEPTH_MESSAGE = 'The file nests code deeper than the parser 
 // Acorn quotes the character it refuses as it is, and a terminal shows none of these: the control and format
 // characters, the line separator (Zl) and the paragraph separator (Zp).
 const HIDDEN_CHARACTER_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * Parses a text with acorn, and gives acorn's stack space error for a stack overflow anywhere in the parse.
+ * @param {string} text
+ * @param {import('acorn').Options} options
+ * @param {typeof Parser} [ParserClass] Acorn's Parser or a class that extends it.
+ * @returns {import('acorn').Program}
+ */
+export function parseSource(text, options, ParserClass = Parser) {
+  const parser = new ParserClass(options, text);
+
+  try {
+    return parser.parse();
+  } catch (error) {
+    // Acorn 8.19.0 reads the first token outside its own stack overflow guard.
+    if (isStackOverflowError(error)) parser.raise(parser.start, STACK_SPACE_REASON);
+    throw error;
+  }
+}
 
 /**
  * Gives acorn's reason for a syntax error without the line and column it appends, which a finding states.

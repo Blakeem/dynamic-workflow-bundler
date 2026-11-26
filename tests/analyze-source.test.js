@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { analyzeSource, DEFAULT_EXPORT_LOCAL } from '../src/analyze-source.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 const META = 'export const meta = {};\n';
 
@@ -96,6 +97,12 @@ describe('analyzeSource rules', () => {
     assert.deepEqual(listDeepFindings(`const x = 1;\n\nexport const v = typeof a${'.b'.repeat(depth)};\n`, false), [`source-too-deep 3:25 ${message}`]);
     assert.deepEqual(listDeepFindings(`${META}const v = typeof a${'.b'.repeat(depth)};\n`, true), [`source-too-deep 2:18 ${message}`]);
     assert.deepEqual(listRules(`export const v = typeof a${'.b'.repeat(100)};\n`, false), []);
+  });
+
+  it('reports source-too-deep at 1:1 for a first token nested past the parser stack', () => {
+    const findings = analyzeSource(`${DEEP_REGEXP_LITERAL};\n`, '/work/file.js', false, true).findings;
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line}:${finding.column} ${finding.message}`), ['source-too-deep 1:1 The file nests code deeper than the parser can read']);
   });
 
   it('reports statement-crosses-part for a statement that runs on across the start of a part, and not for one a semicolon ends', () => {

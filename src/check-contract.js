@@ -1,10 +1,9 @@
-import { parse } from 'acorn';
 import { RUNTIME_GLOBAL_NAMES } from './contract.js';
 import { listFreeReferences } from './find-free-names.js';
 import { createFinding } from './finding.js';
 import { readMetaObject } from './meta-statement.js';
 import { BYTE_ORDER_MARK } from './normalize-source-text.js';
-import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS } from './parse-source.js';
+import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, parseSource } from './parse-source.js';
 import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listPatternIdentifiers, listPatternTargets } from './syntax-tree.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
@@ -52,7 +51,7 @@ export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'u
   findings.push(...checkScriptSize(byteCount, file));
 
   try {
-    program = parse(text, PARSE_OPTIONS);
+    program = parseSource(text, PARSE_OPTIONS);
   } catch (error) {
     if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') throw error;
     if (isStackSpaceError(error)) addFinding('source-too-deep', SCRIPT_PARSER_DEPTH_MESSAGE, error.pos);

@@ -1,7 +1,7 @@
 import { extname } from 'node:path';
-import { Parser, parse } from 'acorn';
+import { Parser } from 'acorn';
 import { findJsonError } from './find-json-error.js';
-import { formatSyntaxErrorReason } from './parse-source.js';
+import { formatSyntaxErrorReason, parseSource } from './parse-source.js';
 import { findPosition } from './source-position.js';
 
 // An ES module allows no top-level return, unlike the body of a workflow script.
@@ -106,7 +106,7 @@ function findParseReason(text, isCommonJs) {
  * @returns {import('acorn').Program}
  */
 function parseFile(text, isCommonJs) {
-  return isCommonJs ? CommonJsParser.parse(text, COMMONJS_PARSE_OPTIONS) : parse(text, MODULE_PARSE_OPTIONS);
+  return parseSource(text, isCommonJs ? COMMONJS_PARSE_OPTIONS : MODULE_PARSE_OPTIONS, isCommonJs ? CommonJsParser : Parser);
 }
 
 /**

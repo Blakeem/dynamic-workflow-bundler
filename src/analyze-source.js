@@ -1,11 +1,11 @@
 import { posix } from 'node:path';
-import { parse, tokenizer, tokTypes } from 'acorn';
+import { tokenizer, tokTypes } from 'acorn';
 import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
 import { readMetaObject } from './meta-statement.js';
-import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE } from './parse-source.js';
+import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE, parseSource } from './parse-source.js';
 import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
 
 /** @typedef {import('./expand-parts.js').IncludedPart} IncludedPart */
@@ -118,7 +118,7 @@ export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
   let program = null;
 
   try {
-    program = parse(text, { ...PARSE_OPTIONS, onComment: comments, onToken });
+    program = parseSource(text, { ...PARSE_OPTIONS, onComment: comments, onToken });
   } catch (error) {
     if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') throw error;
     if (isStackSpaceError(error)) addFinding('source-too-deep', PARSER_DEPTH_MESSAGE, error.pos);

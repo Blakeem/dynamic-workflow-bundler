@@ -1,11 +1,30 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parse } from 'acorn';
-import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS } from '../src/parse-source.js';
+import { Parser, parse } from 'acorn';
+import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, parseSource } from '../src/parse-source.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('PARSE_OPTIONS', () => {
   it('parses a top-level return and await, as the runtime body allows', () => {
     assert.doesNotThrow(() => parse('await 1;\nreturn 2;\n', PARSE_OPTIONS));
+  });
+});
+
+describe('parseSource', () => {
+  it('gives the stack space error at offset 0 for a first token that overflows the stack', () => {
+    assert.throws(() => parseSource(`${DEEP_REGEXP_LITERAL};\n`, PARSE_OPTIONS), (error) => error instanceof SyntaxError && isStackSpaceError(error) && error.pos === 0);
+  });
+
+  it('parses with the parser class it is given, and rethrows a syntax error as it is', () => {
+    const NamedParser = Parser.extend((BaseParser) => class extends BaseParser {
+      parseTopLevel(node) {
+        node.parsedBy = 'NamedParser';
+        return super.parseTopLevel(node);
+      }
+    });
+
+    assert.equal(parseSource('return 1;\n', PARSE_OPTIONS, NamedParser).parsedBy, 'NamedParser');
+    assert.throws(() => parseSource('const = 1;', PARSE_OPTIONS), (error) => error instanceof SyntaxError && formatSyntaxErrorReason(error) === 'Unexpected token' && error.pos === 6);
   });
 });
 

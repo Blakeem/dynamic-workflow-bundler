@@ -1,7 +1,6 @@
-import { parse } from 'acorn';
 import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-directives.js';
-import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE } from './parse-source.js';
+import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE, parseSource } from './parse-source.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
 
@@ -28,7 +27,7 @@ export function checkPart(text, file) {
   let program = null;
 
   try {
-    program = parse(text, { ...PART_PARSE_OPTIONS, onComment: comments });
+    program = parseSource(text, { ...PART_PARSE_OPTIONS, onComment: comments });
   } catch (error) {
     if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') throw error;
     if (isStackSpaceError(error)) addFinding('source-too-deep', PARSER_DEPTH_MESSAGE, error.pos);

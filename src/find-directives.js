@@ -1,5 +1,4 @@
-import { parse } from 'acorn';
-import { PARSE_OPTIONS } from './parse-source.js';
+import { PARSE_OPTIONS, parseSource } from './parse-source.js';
 
 /**
  * @typedef {object} Directive
@@ -43,7 +42,7 @@ export function findDirectives(text) {
   // Every `// @include` comment holds this text, so an entry without it needs no second parse.
   if (!text.includes('@include')) return { directives, misplaced };
   try {
-    program = parse(text, { ...PARSE_OPTIONS, onComment: comments });
+    program = parseSource(text, { ...PARSE_OPTIONS, onComment: comments });
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     return { directives, misplaced };

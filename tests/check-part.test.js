@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { checkPart } from '../src/check-part.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 /**
  * @param {string} text
@@ -20,6 +21,10 @@ describe('checkPart', () => {
     const findings = listFindings(`const v = ${'{ a: '.repeat(depth)}1${' }'.repeat(depth)};\n`);
     assert.equal(findings.length, 1);
     assert.match(findings[0], /^source-too-deep 1:\d+ The file nests code deeper than the parser can read$/);
+  });
+
+  it('reports source-too-deep at 1:1 for a first token nested past the parser stack', () => {
+    assert.deepEqual(listFindings(`${DEEP_REGEXP_LITERAL};\n`), ['source-too-deep 1:1 The file nests code deeper than the parser can read']);
   });
 
   it('reports part-not-plain in place of syntax-error for a part that does not parse on its own', () => {

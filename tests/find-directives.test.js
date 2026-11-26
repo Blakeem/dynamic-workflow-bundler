@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { findDirectives, isIncludeComment } from '../src/find-directives.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('isIncludeComment', () => {
   it('reads a line comment that starts with @include, and no other comment', () => {
@@ -60,5 +61,9 @@ describe('findDirectives', () => {
 
   it('reads nothing from an entry that does not parse, whose analysis reports the syntax error', () => {
     assert.deepEqual(findDirectives('export const meta = {};\n// @include ./a.js\nconst = 1;\n'), { directives: [], misplaced: [] });
+  });
+
+  it('reads nothing from an entry whose first token is nested past the parser stack', () => {
+    assert.deepEqual(findDirectives(`${DEEP_REGEXP_LITERAL};\n// @include ./a.js\n`), { directives: [], misplaced: [] });
   });
 });

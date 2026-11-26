@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BANNER_END, BANNER_START, findBanner } from '../src/banner.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('findBanner', () => {
   it('reads the entry path of a banner on the line after the meta statement', () => {
@@ -24,5 +25,9 @@ describe('findBanner', () => {
 
   it('gives no path and a syntax error for a script that does not parse', () => {
     assert.deepEqual(findBanner(`export const meta = {;\n${BANNER_START}entry.js${BANNER_END}\n`), { path: null, hasSyntaxError: true });
+  });
+
+  it('gives no path and a syntax error for a script whose first token is nested past the parser stack', () => {
+    assert.deepEqual(findBanner(`${DEEP_REGEXP_LITERAL};\n${BANNER_START}entry.js${BANNER_END}\n`), { path: null, hasSyntaxError: true });
   });
 });

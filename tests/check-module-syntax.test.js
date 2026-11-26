@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { checkModuleSyntax, hasModuleSyntax } from '../src/check-module-syntax.js';
+import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('checkModuleSyntax', () => {
   it('lists the relative specifiers of the static imports and re-exports, in source order', () => {
@@ -44,6 +45,15 @@ describe('checkModuleSyntax', () => {
   it('parses a .cjs file as CommonJS whatever module type it is given', () => {
     assert.deepEqual(checkModuleSyntax('if (true) return;\n', 'a.cjs'), { syntaxError: null, importSpecifiers: [] });
     assert.deepEqual(checkModuleSyntax('module.exports = ;\n', 'a.cjs').syntaxError, { line: 1, column: 18, reason: 'Unexpected token' });
+  });
+
+  it('gives the stack space reason at 1:1 for a first token nested past the parser stack, as an ES module and as CommonJS', () => {
+    const text = `${DEEP_REGEXP_LITERAL};\n`;
+
+    for (const file of ['a.mjs', 'a.cjs']) {
+      assert.deepEqual(checkModuleSyntax(text, file).syntaxError, { line: 1, column: 1, reason: 'Not enough stack space to parse input' }, file);
+    }
+    assert.equal(hasModuleSyntax(text), false);
   });
 
   it('gives the place where a .json file breaks the JSON grammar', () => {
