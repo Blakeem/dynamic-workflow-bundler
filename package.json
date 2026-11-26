@@ -1,0 +1,26 @@
+{
+  "name": "dynamic-workflow-bundler",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build, validate and simulate dynamic workflow scripts for Claude Code from several source files.",
+  "keywords": [
+    "dynamic-workflows",
+    "workflow",
+    "bundler",
+    "simulator",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "author": "Blake McDonald",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Blakeem/dynamic-workflow-bundler.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
