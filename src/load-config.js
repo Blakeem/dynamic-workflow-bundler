@@ -22,6 +22,7 @@ const TRAILING_PUNCTUATION_PATTERN = /^(.*?)([.,;:)]*)$/s;
 // Node quotes the pathname of a file URL for an invalid specifier, which on Windows puts a slash before the drive.
 const URL_PATHNAME_DRIVE_PATTERN = /^\/[A-Za-z]:\//;
 const WINDOWS_LONG_PATH_PREFIX = '\\\\?\\';
+const TEXTLESS_THROW_CAUSE = 'Its code threw a value that has no text';
 const [NODE_MAJOR_VERSION, NODE_MINOR_VERSION] = process.versions.node.split('.').map(Number);
 // Node.js 22.7.0 unflagged syntax detection, which loads a .js file of a package with no "type" as an ES
 // module when the file holds module syntax.
@@ -31,7 +32,7 @@ export const IS_MODULE_SYNTAX_DETECTED = NODE_MAJOR_VERSION > 22 || (NODE_MAJOR_
  * Loads a config file as an ES module and checks its default export. Node keeps each module it loads, so
  * a later call in the same process reads the file as the first call loaded it.
  * Rejects with a UsageError for a path that is not a string, a missing file, a folder, a file that fails
- * to load, and every problem that checkConfig names.
+ * to load, a default export that throws as checkConfig reads it, and every problem that checkConfig names.
  * @param {string} path The config file, relative to the working directory or absolute.
  * @returns {Promise<Config>} Every path absolute.
  */
@@ -53,8 +54,33 @@ export async function loadConfig(path) {
   } catch (error) {
     throw new UsageError(await formatLoadFailure(error, configFile, path));
   }
+  try {
+    return checkConfig(configModule.default, configFile, path);
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    // A read of the default export can run the config file's code, such as a getter that throws.
+    throw new UsageError(`The config file ${path} does not load. ${formatErrorCause(error)}`);
+  }
+}
 
-  return checkConfig(configModule.default, configFile, path);
+/**
+ * @param {unknown} error What the import of the config file rejected with, or what its code threw.
+ * @returns {string} The error's message with no absolute path and no closing period, or a fixed cause for a
+ *   value with no text.
+ */
+function formatErrorCause(error) {
+  let message = '';
+  let cause = '';
+
+  try {
+    message = String(error instanceof Error ? error.message : error);
+  } catch {
+    // String() throws for a value with no primitive form, such as Object.create(null).
+    return TEXTLESS_THROW_CAUSE;
+  }
+  cause = message.replace(ABSOLUTE_PATH_PATTERN, formatPathToken).replace(/\.$/, '');
+
+  return cause.trim() === '' ? TEXTLESS_THROW_CAUSE : cause;
 }
 
 /**
@@ -64,8 +90,7 @@ export async function loadConfig(path) {
  * @returns {Promise<string>}
  */
 async function formatLoadFailure(error, configFile, path) {
-  const message = error instanceof Error ? error.message : String(error);
-  const cause = message.replace(ABSOLUTE_PATH_PATTERN, formatPathToken).replace(/\.$/, '');
+  const cause = formatErrorCause(error);
   const isSyntaxError = error instanceof SyntaxError;
   const isEsModule = isSyntaxError ? await isEsModuleFile(configFile) : true;
   const parseFailure = isSyntaxError ? await findParseFailure(configFile, isEsModule) : null;

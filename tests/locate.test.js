@@ -185,6 +185,28 @@ describe('locate', () => {
     });
   });
 
+  it('asks for the entry when the banner names a path with a root of the platform, even one that names the entry', async () => {
+    const { entry, script, lines } = await writeBuiltFixture();
+    const windowsRootedPaths = ['C:/entry.js', 'C:entry.js', '\\entry.js'];
+    const isWindows = process.platform === 'win32';
+    const rootedPaths = [entry.split('\\').join('/'), '/entry.js', ...(isWindows ? windowsRootedPaths : [])];
+    const posixRelativePaths = isWindows ? [] : windowsRootedPaths;
+
+    for (const rootedPath of rootedPaths) {
+      await writeFile(script, lines.with(4, lines[4].replace('../entry.js', rootedPath)).join('\n'));
+
+      await assert.rejects(locate({ script, line: 1 }), {
+        name: 'UsageError',
+        message: /^The banner of the script .*workflow\.js names no relative path, so name the entry it is built from with --entry <file>$/,
+      }, rootedPath);
+    }
+    for (const relativePath of posixRelativePaths) {
+      await writeFile(script, lines.with(4, lines[4].replace('../entry.js', relativePath)).join('\n'));
+
+      await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /, which does not exist, so name the entry/ }, relativePath);
+    }
+  });
+
   it('says that a script does not parse in place of that it has no banner, and finds script-stale for it with the entry option', async () => {
     const { entry, script, lines } = await writeBuiltFixture();
     await writeFile(script, ['export const meta = {;', ...lines.slice(1)].join('\n'));

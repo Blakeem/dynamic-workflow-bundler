@@ -20,6 +20,8 @@ const RULE_CASES = [
   { rule: 'entry-export', isEntry: true, breaking: `${META}export const other = 1;\n`, passing: `${META}const other = 1;\n` },
   { rule: 'entry-export', isEntry: true, breaking: `${META}export {};\n`, passing: `${META}({});\n` },
   { rule: 'import-not-relative', isEntry: false, breaking: "import 'lib/a.js';\n", passing: "import './lib/a.js';\n" },
+  { rule: 'import-not-found', isEntry: false, breaking: "import './lib/';\n", passing: "import './lib/a.js';\n" },
+  { rule: 'import-not-found', isEntry: false, breaking: "import a from './..' with { type: 'text' };\n", passing: "import a from '../a.md';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import { a } from './a.md';\n", passing: "import a from './a.md';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import * as a from './a.json';\n", passing: "import a from './a.json';\n" },
   { rule: 'import-not-default', isEntry: false, breaking: "import { default as a } from './a.json';\n", passing: "import a from './a.json';\n" },

@@ -81,6 +81,8 @@ const HASHBANG = '#!';
 // Acorn reads `<!--` in a module as code, where Node.js 24.22.1 refuses the module and a script reads a comment.
 const HTML_OPEN_COMMENT = '<!--';
 const RELATIVE_PREFIXES = ['./', '../'];
+// Any folder URL works, since a relative specifier's own segments decide whether its path ends in `/`.
+const FOLDER_SPECIFIER_BASE = 'file:///folder/';
 const MODULE_ENDINGS = ['.js', '.mjs'];
 const JSON_ENDING = '.json';
 // Node.js 24.22.1 imports each ending as code or JSON and refuses it in another letter case, so none gives a string.
@@ -282,6 +284,8 @@ function readImport(statement, text, analysis, addFinding) {
 
   if (!RELATIVE_PREFIXES.some((prefix) => specifier.startsWith(prefix))) {
     addFinding('import-not-relative', `The specifier ${JSON.stringify(specifier)} does not start with ./ or ../`, offset);
+  } else if (isFolderSpecifier(specifier)) {
+    addFinding('import-not-found', `The specifier ${JSON.stringify(specifier)} names a folder`, offset);
   } else if ('message' in kindRead) {
     addFinding(kindRead.rule, kindRead.message, kindRead.offset);
   } else if (kindRead.kind !== 'module' && otherSpecifier !== undefined) {
@@ -292,6 +296,15 @@ function readImport(statement, text, analysis, addFinding) {
   } else {
     analysis.imports.push({ specifier, offset, bindings, kind: kindRead.kind });
   }
+}
+
+/**
+ * @param {string} specifier A relative specifier.
+ * @returns {boolean} True for a specifier whose URL path ends in `/`, such as `./`, `./lib/` or `./..`, which
+ *   names a folder and no file.
+ */
+function isFolderSpecifier(specifier) {
+  return new URL(specifier, FOLDER_SPECIFIER_BASE).pathname.endsWith('/');
 }
 
 /**

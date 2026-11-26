@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, parse, relative, resolve } from 'node:path';
 import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
 import { formatBuildCommand } from './build-command.js';
@@ -127,7 +127,11 @@ async function findScriptWorkflow(script, banner, config) {
   const noBannerReason = banner.hasSyntaxError ? 'does not parse' : 'has no banner';
 
   if (banner.path !== null) {
-    // The build gives the banner path relative to the real path of the script's folder.
+    // The build gives the banner path relative to the real path of the script's folder, so a path with a root
+    // of this platform names no entry of a build. On POSIX a folder may be named C:x, so C:x/entry.js is relative.
+    if (parse(banner.path).root !== '') {
+      throw new UsageError(`The banner of the script ${script} names no relative path, so name the entry it is built from with --entry <file>`);
+    }
     const bannerEntry = resolve(await findRealPath(dirname(resolve(script))), banner.path);
     if (!existsSync(bannerEntry)) {
       throw new UsageError(`The banner of the script ${script} names the entry ${formatDisplayPath(bannerEntry)}, which does not exist, so name the entry it is built from with --entry <file>`);
