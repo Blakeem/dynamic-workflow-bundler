@@ -7,7 +7,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'acorn';
 import { build } from 'dynamic-workflow-bundler';
 import { compileBuiltScript } from '../src/build.js';
+import { FIXES } from '../src/finding.js';
+import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { runBuiltScript } from './support/run-built-script.js';
+import { writeSizedFile } from './support/write-sized-file.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const MODULES_ENTRY = join(FIXTURES, 'modules', 'entry.js');
@@ -189,6 +192,66 @@ describe('build findings', () => {
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
     assert.equal(result.findings[0].message, 'Unexpected token');
     assert.equal(result.findings[0].column, 7);
+  });
+
+  it('reports source-too-large alone for an entry larger than READ_BYTE_LIMIT, and writes nothing', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    await writeSizedFile(entry, READ_BYTE_LIMIT + 1);
+    const entryPath = formatForwardSlashes(relative(await realpath(process.cwd()), await realpath(entry)));
+
+    const result = await build({ entry, out: join(folder, 'out.js') });
+
+    assert.deepEqual(result, {
+      ok: false,
+      status: 'failed',
+      script: null,
+      sources: [entryPath],
+      findings: [{
+        rule: 'source-too-large',
+        message: `The entry is ${READ_BYTE_LIMIT + 1} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads`,
+        fix: FIXES['source-too-large'],
+        file: entryPath,
+        line: 1,
+        column: 1,
+      }],
+    });
+    assert.ok(!(await readdir(folder)).includes('out.js'));
+  });
+
+  it('builds a script of READ_BYTE_LIMIT bytes, and reports script-too-large alone on the entry for one byte more', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    await writeFile(entry, "export const meta = {};\nimport notes from './notes.txt';\nreturn notes;\n");
+    await writeFile(join(folder, 'notes.txt'), '');
+    const emptyScript = (await build({ entry, out, write: false })).script;
+    const workFolder = await realpath(process.cwd());
+    const entryPath = formatForwardSlashes(relative(workFolder, await realpath(entry)));
+    const notesPath = formatForwardSlashes(relative(workFolder, await realpath(join(folder, 'notes.txt'))));
+
+    await writeFile(join(folder, 'notes.txt'), 'a'.repeat(READ_BYTE_LIMIT - Buffer.byteLength(emptyScript)));
+    const limitResult = await build({ entry, out, write: false });
+    await writeFile(join(folder, 'notes.txt'), 'a'.repeat(READ_BYTE_LIMIT - Buffer.byteLength(emptyScript) + 1));
+    const largeResult = await build({ entry, out });
+
+    assert.equal(Buffer.byteLength(limitResult.script), READ_BYTE_LIMIT);
+    assert.equal(limitResult.status, 'built');
+    assert.deepEqual(largeResult, {
+      ok: false,
+      status: 'failed',
+      script: null,
+      sources: [entryPath, notesPath],
+      findings: [{
+        rule: 'script-too-large',
+        message: `The built script is ${READ_BYTE_LIMIT + 1} bytes, which is more than the 524288 bytes the runtime reads`,
+        fix: FIXES['script-too-large'],
+        file: entryPath,
+        line: 1,
+        column: 1,
+      }],
+    });
+    assert.ok(!(await readdir(folder)).includes('out.js'));
   });
 });
 
@@ -824,7 +887,7 @@ describe('build check', () => {
     assert.deepEqual(bannerResult.firstDifference, { line: bannerLine + 1, file: null, sourceLine: null });
   });
 
-  it('finds a script with other line endings or extra lines stale, and a missing script missing', async () => {
+  it('finds a script with other line endings, extra lines or a missing last byte stale, the built script fresh, and a missing script missing', async () => {
     const { folder, entry, out } = await writeBuiltProject();
     const script = await readFile(out, 'utf8');
     const lastLine = script.split('\n').length;
@@ -833,11 +896,20 @@ describe('build check', () => {
     const crlf = await build({ entry, out, check: true });
     await writeFile(out, `${script}// more\n`);
     const longer = await build({ entry, out, check: true });
+    await writeFile(out, `${script}${'x'.repeat(READ_BYTE_LIMIT)}`);
+    const muchLonger = await build({ entry, out, check: true });
+    await writeFile(out, script.slice(0, -1));
+    const shorter = await build({ entry, out, check: true });
+    await writeFile(out, script);
+    const fresh = await build({ entry, out, check: true });
     await rm(out);
     const missing = await build({ entry, out, check: true });
 
     assert.equal(crlf.firstDifference.line, 1);
     assert.deepEqual(longer.firstDifference, { line: lastLine, file: formatPath(await realpath(folder), 'entry.js'), sourceLine: 7 });
+    assert.deepEqual(muchLonger.firstDifference, longer.firstDifference);
+    assert.equal(shorter.firstDifference.line, lastLine - 1);
+    assert.equal(fresh.status, 'fresh');
     assert.deepEqual({ ok: missing.ok, status: missing.status, firstDifference: missing.firstDifference }, { ok: false, status: 'missing', firstDifference: undefined });
     assert.equal(crlf.ok, false);
     assert.equal((await readdir(folder)).includes('out.js'), false);

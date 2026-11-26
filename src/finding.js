@@ -11,6 +11,9 @@ import { findPosition } from './source-position.js';
  * @property {number} column 1-based.
  */
 
+// A source larger than dwfb reads would also build a script larger than the runtime reads.
+const SCRIPT_SIZE_FIX = 'Pass long text through args, or move part of the work into a workflow that the script runs with workflow()';
+
 /** How to fix the finding of each rule that a source or a workflow script breaks. */
 export const FIXES = Object.freeze({
   'syntax-error': 'Correct the syntax',
@@ -30,6 +33,7 @@ export const FIXES = Object.freeze({
   'include-misplaced': 'Put the directive alone on its line at the top level of the entry, below the meta statement',
   'include-twice': 'Name each part in one directive, name no part that is the entry, and import no part as a module',
   'source-encoding-invalid': 'Save the file as UTF-8',
+  'source-too-large': SCRIPT_SIZE_FIX,
   'part-not-plain': 'Make the part a list of complete statements with no import and no export',
   'statement-crosses-part': 'End the statement on the line above, such as with a semicolon, so that each part holds complete statements',
   'import-not-exported': 'Import a name that the module exports',
@@ -45,7 +49,7 @@ export const FIXES = Object.freeze({
   'module-direct-eval': 'Replace the eval call with code, since in the built script it can read the entry\'s names',
   'module-reads-entry-name': 'Rename the entry\'s declaration, since an ES module would read the global of that name',
   'reserved-name': 'Rename it, since the build reserves that name',
-  'script-too-large': 'Pass long text through args, or move part of the work into a workflow that the script runs with workflow()',
+  'script-too-large': SCRIPT_SIZE_FIX,
   'meta-not-literal': 'Write the value as a literal, such as a string, a number, or an array or object of literals, and rename a key named __proto__, constructor or prototype',
   'meta-name-invalid': 'Give meta a name that is a string of 1 or more characters',
   'meta-description-invalid': 'Give meta a description that is a string of 1 or more characters',

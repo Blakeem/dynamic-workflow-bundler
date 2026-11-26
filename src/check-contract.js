@@ -76,14 +76,22 @@ export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'u
 /**
  * Checks the size of a workflow script file against the runtime's limit, which the runtime of Claude Code 2.1.332
  * applies before it decodes the file. This rule alone needs no text, so it also serves a file larger than
- * VALIDATE_READ_BYTE_LIMIT, which is too large to parse.
+ * READ_BYTE_LIMIT, which is too large to parse.
  * @param {number} byteCount The size of the script file in bytes.
  * @param {string} file The path the finding names.
  * @returns {Finding[]} The script-too-large finding at line 1, column 1, or none.
  */
 export function checkScriptSize(byteCount, file) {
   if (byteCount <= SCRIPT_BYTE_LIMIT) return [];
-  return [createFinding('script-too-large', `The script is ${byteCount} bytes, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`, file, '', 0)];
+  return [createFinding('script-too-large', `The script is ${formatScriptOversizeReason(byteCount)}`, file, '', 0)];
+}
+
+/**
+ * @param {number} byteCount The size in bytes of a script larger than SCRIPT_BYTE_LIMIT.
+ * @returns {string} The size and the runtime's limit, as a message that names the script puts them after it.
+ */
+export function formatScriptOversizeReason(byteCount) {
+  return `${byteCount} bytes, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`;
 }
 
 /**

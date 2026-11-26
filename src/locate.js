@@ -1,4 +1,3 @@
-import { constants } from 'node:buffer';
 import { stat } from 'node:fs/promises';
 import { dirname, parse, resolve } from 'node:path';
 import { findBanner } from './banner.js';
@@ -9,6 +8,7 @@ import { formatDisplayPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
+import { formatOversizeReason } from './read-byte-limit.js';
 import { readScript } from './read-script.js';
 import { findRealPath, formatRealDisplayPath } from './real-path.js';
 import { countLines } from './source-position.js';
@@ -24,8 +24,6 @@ import { UsageError } from './usage-error.js';
 
 // A misspelled key such as `Entry` would otherwise be dropped, and the entry found another way.
 const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entry', 'config']);
-// A file of more bytes may decode to a string longer than Node holds, and the decode then throws ERR_STRING_TOO_LONG.
-export const LOCATE_READ_BYTE_LIMIT = constants.MAX_STRING_LENGTH;
 
 /**
  * @typedef {object} LocateOptions
@@ -57,7 +55,7 @@ export const LOCATE_READ_BYTE_LIMIT = constants.MAX_STRING_LENGTH;
  * Maps a line of a built script to its source file, line and column. Builds the script in memory from its
  * entry, and writes and prints nothing.
  * Rejects with a UsageError for options of another shape, a script that does not exist, is not a file or is
- * larger than LOCATE_READ_BYTE_LIMIT, a line or column that is not a whole number of 1 or more or
+ * larger than READ_BYTE_LIMIT, a line or column that is not a whole number of 1 or more or
  * lies past the script's text, with `runtime` a line that the runtime's numbering cannot convert, an entry it
  * cannot find, a banner that names a folder, a link that loops or the script itself as the entry, two config
  * files in the working directory when it needs one, and every usage error of the build.
@@ -78,8 +76,8 @@ export async function locate(options = /** @type {LocateOptions} */ ({})) {
   if (entry !== undefined && (typeof entry !== 'string' || entry === '')) throw new UsageError('locate() takes entry as the path of an entry file');
   if (config !== undefined && (typeof config !== 'string' || config === '')) throw new UsageError('locate() takes config as the path of a config file');
 
-  const { size, bytes } = await readScript(script, LOCATE_READ_BYTE_LIMIT);
-  if (bytes === null) throw new UsageError(`The script ${script} is ${size} bytes, which is more than the ${LOCATE_READ_BYTE_LIMIT} bytes dwfb reads`);
+  const { size, bytes } = await readScript(script);
+  if (bytes === null) throw new UsageError(`The script ${script} is ${formatOversizeReason(size)}`);
   const scriptText = bytes.toString('utf8');
   const banner = findBanner(scriptText);
   const scriptWorkflow = entry === undefined ? await findScriptWorkflow(script, banner, config) : { entry, banner: banner.hasSyntaxError || banner.path !== null };

@@ -10,14 +10,20 @@ export const PARSE_OPTIONS = Object.freeze({
 const STACK_SPACE_REASON = 'Not enough stack space to parse input';
 /** The message of the source-too-deep finding for a source that acorn cannot parse. */
 export const PARSER_DEPTH_MESSAGE = 'The file nests code deeper than the parser can read';
+// Acorn quotes the character it refuses as it is, and a terminal shows none of these: the control and format
+// characters, the line separator (Zl) and the paragraph separator (Zp).
+const HIDDEN_CHARACTER_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /**
  * Gives acorn's reason for a syntax error without the line and column it appends, which a finding states.
+ * Each character a terminal does not show reads as U+ and its code point, such as U+0000.
  * @param {SyntaxError} error
  * @returns {string}
  */
 export function formatSyntaxErrorReason(error) {
-  return error.message.replace(/ \(\d+:\d+\)$/, '');
+  const reason = error.message.replace(/ \(\d+:\d+\)$/, '');
+
+  return reason.replace(HIDDEN_CHARACTER_PATTERN, (character) => `U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
 }
 
 /**

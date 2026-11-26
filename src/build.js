@@ -1,12 +1,15 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { formatScriptOversizeReason } from './check-contract.js';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes, isFolderPath } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
 import { findDifferentLine } from './find-different-line.js';
+import { createFinding } from './finding.js';
 import { joinModules } from './join-modules.js';
 import { linkModules } from './link-modules.js';
 import { loadSources, MISSING_FILE_CODES } from './load-sources.js';
+import { READ_BYTE_LIMIT } from './read-byte-limit.js';
 import { findRealPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
 import { writeScript } from './write-script.js';
@@ -105,21 +108,28 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   if (bannerPath !== null && isAbsolute(bannerPath)) {
     throw new UsageError(`The out file ${out} is on another drive than the entry, so the banner cannot name the entry by a relative path`);
   }
+  const sourcePaths = sourceFiles.map(formatSourcePath);
+  const formatFindingPath = (finding) => ({ ...finding, file: formatSourcePath(finding.file) });
+  // loadSources parses no entry larger than READ_BYTE_LIMIT, alone or with its parts, so such an entry has no source to link.
+  if (!sources.has(entryFile)) return createFailedBuild(sourcePaths, loadFindings.map(formatFindingPath));
   const { order, findings: linkFindings } = linkModules(sources, entryFile, formatSourcePath);
 
   const entrySource = /** @type {LoadedSource} */ (sources.get(entryFile));
-  const sourcePaths = sourceFiles.map(formatSourcePath);
   const placedFindings = [...loadFindings, ...linkFindings].map((finding) => placeEntryFinding(finding, entrySource));
-  const findings = sortFindings(placedFindings, sourceFiles).map((finding) => ({
-    ...finding,
-    file: formatSourcePath(finding.file),
-  }));
-  if (findings.length > 0) return { result: { ok: false, status: 'failed', script: null, sources: sourcePaths, findings }, findSourcePosition: null, metaEnd: null };
+  const findings = sortFindings(placedFindings, sourceFiles).map(formatFindingPath);
+  if (findings.length > 0) return createFailedBuild(sourcePaths, findings);
 
   const entryFolder = dirname(entryFile);
   const joinedSources = order.map((file) => ({ ...sources.get(file), path: formatForwardSlashes(relative(entryFolder, file)) }));
   const joined = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
   const { script, lineOrigins } = joined;
+  const scriptByteCount = Buffer.byteLength(script, 'utf8');
+  // compileBuiltScript parses the built script, and a parse past READ_BYTE_LIMIT may exhaust Node's heap.
+  if (scriptByteCount > READ_BYTE_LIMIT) {
+    // The message names the runtime's limit, since the runtime also refuses a smaller script larger than SCRIPT_BYTE_LIMIT.
+    const message = `The built script is ${formatScriptOversizeReason(scriptByteCount)}`;
+    return createFailedBuild(sourcePaths, [formatFindingPath(createFinding('script-too-large', message, entryFile, '', 0))]);
+  }
   // The entry's edits all follow its meta statement, so the offset holds in the built script.
   const metaEnd = entrySource.analysis.metaEnd;
   const findSourcePosition = (line, column) => {
@@ -138,6 +148,15 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
 }
 
 /**
+ * @param {string[]} sourcePaths
+ * @param {Finding[]} findings Each with its path as BuildResult gives it.
+ * @returns {MappedBuild}
+ */
+function createFailedBuild(sourcePaths, findings) {
+  return { result: { ok: false, status: 'failed', script: null, sources: sourcePaths, findings }, findSourcePosition: null, metaEnd: null };
+}
+
+/**
  * @param {string} outFile
  * @param {string} script
  * @param {import('./join-modules.js').LineOrigin[]} lineOrigins
@@ -145,15 +164,17 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
  * @returns {Promise<{ status: 'fresh' | 'stale' | 'missing', firstDifference?: FirstDifference }>}
  */
 async function compareOutFile(outFile, script, lineOrigins, formatSourcePath) {
+  const builtBytes = Buffer.from(script, 'utf8');
   let diskBytes = null;
 
   try {
-    diskBytes = await readFile(outFile);
+    // A file longer than the built script differs from it within one byte past its end, so no more is read.
+    diskBytes = await readFileStart(outFile, builtBytes.length + 1);
   } catch (error) {
     if (MISSING_FILE_CODES.has(error.code)) return { status: 'missing' };
     throw error;
   }
-  const line = findDifferentLine(Buffer.from(script, 'utf8'), diskBytes);
+  const line = findDifferentLine(builtBytes, diskBytes);
   if (line === null) return { status: 'fresh' };
   const origin = lineOrigins[line - 1];
 
@@ -161,6 +182,30 @@ async function compareOutFile(outFile, script, lineOrigins, formatSourcePath) {
     status: 'stale',
     firstDifference: { line, file: origin.file === null ? null : formatSourcePath(origin.file), sourceLine: origin.line },
   };
+}
+
+/**
+ * @param {string} file
+ * @param {number} byteCount
+ * @returns {Promise<Buffer>} The file's first byteCount bytes, or all of a shorter file.
+ */
+async function readFileStart(file, byteCount) {
+  const handle = await open(file, 'r');
+  const buffer = Buffer.alloc(byteCount);
+  let totalCount = 0;
+  let readCount = -1;
+
+  try {
+    // A read may give fewer bytes than it was asked for before the file ends.
+    while (totalCount < byteCount && readCount !== 0) {
+      ({ bytesRead: readCount } = await handle.read(buffer, totalCount, byteCount - totalCount, totalCount));
+      totalCount += readCount;
+    }
+  } finally {
+    await handle.close();
+  }
+
+  return buffer.subarray(0, totalCount);
 }
 
 /**

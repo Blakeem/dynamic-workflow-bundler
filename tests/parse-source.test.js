@@ -20,6 +20,33 @@ describe('formatSyntaxErrorReason', () => {
 
     assert.equal(reason, 'Unexpected token');
   });
+
+  it('names each character a terminal does not show by U+ and its code point, and keeps every other character', () => {
+    // Each case is a code point that acorn refuses, and the reason formatSyntaxErrorReason gives for it.
+    const cases = [
+      [0x0, "Unexpected character 'U+0000'"],
+      [0x1b, "Unexpected character 'U+001B'"],
+      [0x200b, "Unexpected character 'U+200B'"],
+      [0x1d173, "Unexpected character 'U+1D173'"],
+      [0xa7, `Unexpected character '${String.fromCodePoint(0xa7)}'`],
+    ];
+    const reasons = [];
+    for (const [codePoint] of cases) {
+      try {
+        parse(String.fromCodePoint(codePoint), PARSE_OPTIONS);
+      } catch (error) {
+        reasons.push(formatSyntaxErrorReason(error));
+      }
+    }
+
+    assert.deepEqual(reasons, cases.map(([, reason]) => reason));
+  });
+
+  it('names a line separator and a paragraph separator by their code points', () => {
+    const message = `Unexpected character '${String.fromCodePoint(0x2028, 0x2029)}' (1:0)`;
+
+    assert.equal(formatSyntaxErrorReason(new SyntaxError(message)), "Unexpected character 'U+2028U+2029'");
+  });
 });
 
 describe('isStackSpaceError', () => {

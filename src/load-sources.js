@@ -1,15 +1,17 @@
 import { realpath as realpathByCallback } from 'node:fs';
-import { readdir, readFile, realpath } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { analyzeSource, SOURCE_KIND_NAMES } from './analyze-source.js';
+import { formatScriptOversizeReason } from './check-contract.js';
 import { checkPart } from './check-part.js';
 import { expandParts, findExpandedOffset } from './expand-parts.js';
 import { findDirectives } from './find-directives.js';
 import { checkJsonFile } from './find-json-error.js';
 import { createFinding } from './finding.js';
 import { normalizeSourceText, normalizeTextFile } from './normalize-source-text.js';
+import { formatOversizeReason, READ_BYTE_LIMIT } from './read-byte-limit.js';
 
 /** @typedef {import('./analyze-source.js').ImportRecord} ImportRecord */
 /** @typedef {import('./analyze-source.js').SourceAnalysis} SourceAnalysis */
@@ -40,10 +42,12 @@ import { normalizeSourceText, normalizeTextFile } from './normalize-source-text.
 /**
  * @typedef {object} LoadedGraph
  * @property {Map<string, LoadedSource>} sources Keyed by real path, in the order they were read, entry first.
+ *   Empty for an entry larger than READ_BYTE_LIMIT, alone or with its parts, which it does not parse.
  * @property {string[]} parts The real path of each part that a directive names, in directive order.
  * @property {Finding[]} findings The findings of every source and part, one per import that resolveImport
  *   refuses, one per directive that includeParts refuses, one per module import of a part, and one for an
- *   entry that is not valid UTF-8.
+ *   entry that is not valid UTF-8. For an entry larger than READ_BYTE_LIMIT, its source-too-large finding alone,
+ *   and for an entry larger than READ_BYTE_LIMIT with its parts, its script-too-large finding alone.
  */
 
 /**
@@ -69,7 +73,7 @@ const STRICT_UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: t
  * fragment. So resolveImport refuses a specifier whose case differs from its file's, one that holds a query
  * or a fragment, and one that names a source already read under another loader path. resolveImport and
  * readPart refuse a source on another drive than the entry, which the built script cannot name by a relative path.
- * @param {string} entryPath The entry's absolute path, as the caller spells it.
+ * @param {string} entryPath The entry's absolute path, as the caller spells it. It names a file, not a device, a pipe or a socket.
  * @param {boolean} hasBanner Whether the build puts the banner line after the entry's meta statement.
  * @returns {Promise<LoadedGraph>}
  */
@@ -101,7 +105,16 @@ export async function loadSources(entryPath, hasBanner) {
   };
 
   const entryRead = await readSourceFile(entryFile);
+  if ('size' in entryRead) {
+    return { sources, parts: [], findings: [createFinding('source-too-large', `The entry is ${formatOversizeReason(entryRead.size)}`, entryFile, '', 0)] };
+  }
   const included = await includeParts(entryFile, normalizeSourceText(entryRead.content));
+  const includedByteCount = Buffer.byteLength(included.text, 'utf8');
+  // Parts within READ_BYTE_LIMIT each can still expand the entry past what a parse holds in memory.
+  if (includedByteCount > READ_BYTE_LIMIT) {
+    const message = `The entry with its parts is ${formatScriptOversizeReason(includedByteCount)}`;
+    return { sources, parts: included.parts, findings: [createFinding('script-too-large', message, entryFile, '', 0)] };
+  }
   if (!entryRead.isUtf8) findings.push(createFinding('source-encoding-invalid', 'The entry is not valid UTF-8', entryFile, included.text, 0));
   findings.push(...included.findings);
   await loadSource(entryFile, entryLoaderFile, 'module', included.text, included.includes);
@@ -209,6 +222,8 @@ async function readPart(path, entryFolder) {
     if (error.code === 'ELOOP') return reportNotFound(`The path ${quotedPath} names a link that loops`);
     throw error;
   }
+  if ('isFile' in read) return reportNotFound(`The path ${quotedPath} names a device, a pipe or a socket, not a file`);
+  if ('size' in read) return { rule: 'source-too-large', message: `The path ${quotedPath} names a file of ${formatOversizeReason(read.size)}` };
   if (!read.isUtf8) return { rule: 'source-encoding-invalid', message: `The path ${quotedPath} names a file that is not valid UTF-8` };
   return { file, text: normalizeSourceText(read.content) };
 }
@@ -273,18 +288,28 @@ async function resolveImport(record, importer, loadedSources, entryFolder) {
     if (error.code === 'ELOOP') return reportNotFound(`The specifier ${quotedSpecifier} names a link that loops`);
     throw error;
   }
+  if ('isFile' in read) return reportNotFound(`The specifier ${quotedSpecifier} names a device, a pipe or a socket, not a file`);
+  if ('size' in read) return report('source-too-large', `The specifier ${quotedSpecifier} names a file of ${formatOversizeReason(read.size)}`);
   if (!read.isUtf8) return report('source-encoding-invalid', `The specifier ${quotedSpecifier} names a file that is not valid UTF-8`);
   return { file, loaderFile, content: read.content };
 }
 
 /**
  * @param {string} file
- * @returns {Promise<{ content: string, isUtf8: boolean }>} `content` is the file's text as readFile decodes
- *   it, which holds U+FFFD for each byte sequence that is not UTF-8.
+ * @returns {Promise<{ content: string, isUtf8: boolean } | { size: number } | { isFile: false }>} `content` is
+ *   the file's text as readFile decodes it, which holds U+FFFD for each byte sequence that is not UTF-8. `size`
+ *   alone for a file larger than READ_BYTE_LIMIT, and `isFile` alone for a path that names neither a file nor
+ *   a folder, such as a device, a pipe or a socket, neither of which it reads.
  */
 async function readSourceFile(file) {
-  const bytes = await readFile(file);
+  const fileStats = await stat(file);
+  let bytes = null;
 
+  // A device or a pipe reports a size of 0, and its read may never end.
+  if (!fileStats.isFile() && !fileStats.isDirectory()) return { isFile: false };
+  // A folder reaches readFile, whose EISDIR error readPart and resolveImport report.
+  if (fileStats.isFile() && fileStats.size > READ_BYTE_LIMIT) return { size: fileStats.size };
+  bytes = await readFile(file);
   try {
     return { content: STRICT_UTF8_DECODER.decode(bytes), isUtf8: true };
   } catch (error) {

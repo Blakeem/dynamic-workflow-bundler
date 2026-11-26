@@ -133,6 +133,11 @@ export const OUTCOME_CASES = [
   createCase('validate a file that holds only a comment', { 'x.js': '// only a comment\n' }, validateFinding('meta-not-first')),
   createCase('validate a file of only a byte order mark', { 'x.js': '﻿' }, validateFinding('meta-not-first')),
   createCase('validate a binary file', { 'x.js': Buffer.from([0, 159, 146, 150, 255, 254, 0, 0]) }, validateFinding('syntax-error')),
+  createCase(
+    'validate a script with a NUL outside a string',
+    { 'x.js': `${META}const a = 1;\u0000\n` },
+    { ...validateFinding('syntax-error'), message: /^x\.js:2:13 syntax-error Unexpected character 'U\+0000'\. / },
+  ),
   createCase('validate a script with a byte that is not UTF-8 in a string', { 'x.js': Buffer.concat([Buffer.from(`${META}return '`), Buffer.from([255]), Buffer.from("';\n")]) }, VALIDATED),
   // U+FFFD cannot sit in a name, where the latin1 reading of 0xFF, ÿ, can.
   createCase('validate a script with a byte that is not UTF-8 in a name', { 'x.js': Buffer.concat([Buffer.from(`${META}const a`), Buffer.from([255]), Buffer.from(' = 1;\n')]) }, validateFinding('syntax-error')),

@@ -7,6 +7,7 @@ import { checkModuleSyntax, hasModuleSyntax } from './check-module-syntax.js';
 import { formatDisplayPath, isFolderPath } from './display-path.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 import { normalizeSourceText } from './normalize-source-text.js';
+import { formatOversizeReason, READ_BYTE_LIMIT } from './read-byte-limit.js';
 import { findRealPath, formatRealDisplayPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
 
@@ -166,6 +167,9 @@ async function formatLoadFailure(error, configFile, path, isFoundFile) {
   // Node's module loader realpaths the config file, so it reads the imports and the package.json of a link's target.
   parseFailure = await findParseFailure(await realpath(configFile), await findCompiledFile(error));
   if (parseFailure === null) return `The config file ${path} does not load. ${cause}`;
+  if ('size' in parseFailure) {
+    return `The config file ${path} does not load. ${cause}. The file ${parseFailure.file} is ${formatOversizeReason(parseFailure.size)}, so the place of the syntax error is unknown`;
+  }
   place = `${parseFailure.file}:${parseFailure.line}:${parseFailure.column} ${parseFailure.reason}`;
   if (!parseFailure.isModuleSyntaxInCommonJs) return `The config file ${path} does not load. ${place}`;
   // Node loaded the file as CommonJS, where an `import` or `export` statement is a syntax error.
@@ -213,28 +217,47 @@ async function findCompiledFile(error) {
 
 /**
  * Finds the file of a config file's static imports that does not parse, since Node's syntax error names no
- * file and no line (Node.js 24.22.1). A syntax error that a module throws as it runs, such as from
- * JSON.parse, gives null.
+ * file and no line (Node.js 24.22.1).
  * Node compiles each ES module and parses each JSON file depth first in source order as it loads the graph,
  * and stops at the first that fails. It compiles a CommonJS file only as it runs it, after the entire graph
  * loaded, so a module that runs before it can throw first. So the search takes that order, reads only files
  * that Node read, and gives a CommonJS failure only when no ES module or JSON file fails and Node's error
  * names that file as the one it compiled. It parses each file as the module type Node loads it as, and
- * follows the imports of an ES module only.
+ * follows the imports of an ES module only. It skips a device or a pipe, and reads no file larger than
+ * READ_BYTE_LIMIT. Of those larger files it skips each one that loads as CommonJS, other than the one Node's
+ * error names, and gives the first other one it reaches. When Node's error names a compiled file, it gives
+ * such a file other than that one only when it finds no CommonJS failure.
+ * A syntax error that a module throws as it runs, such as from JSON.parse, names no compiled file, so the
+ * search cannot tell it from an ES module's compile error. It then gives the first larger file it reaches
+ * that it does not skip, and null when it reaches none.
  * @param {string} configFile The config file's real path.
  * @param {string | null} compiledFile As findCompiledFile gives it.
- * @returns {Promise<ParseFailure | null>}
+ * @returns {Promise<ParseFailure | OversizedFile | null>}
  */
 async function findParseFailure(configFile, compiledFile) {
   const pendingFiles = [configFile];
   const seenFiles = new Set();
   let commonJsFailure = null;
+  let oversizedFile = null;
 
   while (pendingFiles.length > 0) {
     // Node's module loader realpaths each module it loads, so it resolves an import against its importer's real path.
     const file = await realpath(/** @type {string} */ (pendingFiles.pop()));
     if (seenFiles.has(file)) continue;
     seenFiles.add(file);
+    const fileStats = await stat(file);
+    // A device or a pipe reports a size of 0, and its read may never end.
+    if (!fileStats.isFile()) continue;
+    const { size } = fileStats;
+    if (size > READ_BYTE_LIMIT) {
+      // A CommonJS file that Node's error does not name is not the file that fails, and the search follows none of its imports.
+      if (file !== compiledFile && COMMONJS_ENDINGS.has(extname(file)) && (await findSetModuleType(file)) === 'commonjs') continue;
+      const oversized = { file: await formatRealDisplayPath(file), size };
+      // Node compiles the CommonJS file its error names after every ES module and JSON file, so no other file fails.
+      if (compiledFile === null || file === compiledFile) return oversized;
+      oversizedFile ??= oversized;
+      continue;
+    }
     const text = normalizeSourceText(await readFile(file, 'utf8'));
     const isCommonJs = COMMONJS_ENDINGS.has(extname(file)) && !(await isEsModuleFile(file, text));
     const { syntaxError, importSpecifiers } = checkModuleSyntax(text, file, !isCommonJs);
@@ -246,7 +269,7 @@ async function findParseFailure(configFile, compiledFile) {
     pendingFiles.push(...importedFiles.reverse());
   }
 
-  return commonJsFailure;
+  return commonJsFailure ?? oversizedFile;
 }
 
 /**
@@ -259,6 +282,12 @@ async function findParseFailure(configFile, compiledFile) {
  * @property {boolean} isTypeFieldIgnored True for a .cjs file, which Node loads as CommonJS whatever the
  *   package.json "type" sets.
  * @property {boolean} isModuleSyntaxInCommonJs True for a file that loads as CommonJS and holds module syntax.
+ */
+
+/**
+ * @typedef {object} OversizedFile A file larger than READ_BYTE_LIMIT, which findParseFailure does not read.
+ * @property {string} file Relative to the real path of the working directory, as ParseFailure names it.
+ * @property {number} size In bytes.
  */
 
 /**
@@ -352,14 +381,27 @@ function isPathOnDisk(file) {
  *   package.json sets `"type": "module"`, or one of a package with no "type" that holds module syntax.
  */
 async function isEsModuleFile(file, text) {
-  let packageType = null;
+  const moduleType = await findSetModuleType(file);
 
-  if (extname(file) === '.cjs') return false;
-  packageType = await findPackageType(dirname(file));
-  if (packageType !== null) return packageType === 'module';
-  if (!IS_MODULE_SYNTAX_DETECTED) return false;
+  if (moduleType !== null) return moduleType === 'module';
 
   return hasModuleSyntax(text);
+}
+
+/**
+ * @param {string} file A `.js` or `.cjs` file.
+ * @returns {Promise<'module' | 'commonjs' | null>} The module type Node loads the file as whatever its text
+ *   holds: 'commonjs' for a `.cjs` file, and for a `.js` file the "type" of its nearest package.json. Null for a
+ *   `.js` file of a package with no "type", which Node loads as an ES module when the file holds module syntax.
+ */
+async function findSetModuleType(file) {
+  let packageType = null;
+
+  if (extname(file) === '.cjs') return 'commonjs';
+  packageType = await findPackageType(dirname(file));
+  if (packageType !== null) return packageType;
+
+  return IS_MODULE_SYNTAX_DETECTED ? null : 'commonjs';
 }
 
 /**

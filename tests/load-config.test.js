@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from 'dynamic-workflow-bundler';
 import { formatForwardSlashes } from '../src/display-path.js';
 import { IS_MODULE_SYNTAX_DETECTED } from '../src/load-config.js';
+import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
+import { writeSizedFile } from './support/write-sized-file.js';
 
 const CONFIG_FIXTURES = fileURLToPath(new URL('./fixtures/config/', import.meta.url));
 
@@ -217,6 +219,90 @@ throw new Error(['a', cwd + sep + 'a.js', 'b', sep + sep + '?' + sep + 'UNC' + c
       await writeFile(join(folder, 'bad.js'), 'export const x = ;\n');
       await writeFile(join(folder, 'b.js'), "import './missing.js';\n");
       await assert.rejects(loadConfig(join(folder, 'dwfb.config.js')), (error) => error.message.endsWith(`does not load. ${displayFolder}/bad.js:1:18 Unexpected token`));
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('reads an import of READ_BYTE_LIMIT bytes to find the syntax error, and names an import one byte larger with its size', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+    const configText = "import './a.mjs';\n\nexport default { workflows: [] };\n";
+
+    try {
+      await mkdir(join(folder, 'limit'));
+      await mkdir(join(folder, 'large'));
+      await writeFile(join(folder, 'limit', 'dwfb.config.mjs'), configText);
+      await writeFile(join(folder, 'large', 'dwfb.config.mjs'), configText);
+      await writeSizedFile(join(folder, 'limit', 'a.mjs'), READ_BYTE_LIMIT);
+      await writeSizedFile(join(folder, 'large', 'a.mjs'), READ_BYTE_LIMIT + 1);
+      await assert.rejects(loadConfig(join(folder, 'limit', 'dwfb.config.mjs')), isUsageError(new RegExp(`does not load\\. ${displayFolder}/limit/a\\.mjs:1:1 Unexpected character 'U\\+0000'$`)));
+      await assert.rejects(
+        loadConfig(join(folder, 'large', 'dwfb.config.mjs')),
+        isUsageError(new RegExp(`does not load\\. .+\\. The file ${displayFolder}/large/a\\.mjs is ${READ_BYTE_LIMIT + 1} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads, so the place of the syntax error is unknown$`)),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('passes an import larger than READ_BYTE_LIMIT to name the CommonJS file Node compiled, and names that file with its size when it is larger', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+    const largeModuleText = `export const a = '${'a'.repeat(READ_BYTE_LIMIT)}';\n`;
+    const largeCommonJsText = `const = ;\n//${'a'.repeat(READ_BYTE_LIMIT)}\n`;
+
+    try {
+      await writeFile(join(folder, 'large.mjs'), largeModuleText);
+      await writeFile(join(folder, 'small.cjs'), 'const = ;\n');
+      await writeFile(join(folder, 'large.cjs'), largeCommonJsText);
+      await writeFile(join(folder, 'imports-small.mjs'), "import './large.mjs';\nimport './small.cjs';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'imports-large.mjs'), "import './large.mjs';\nimport './large.cjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(loadConfig(join(folder, 'imports-small.mjs')), isUsageError(new RegExp(`does not load\\. ${displayFolder}/small\\.cjs:1:7 Unexpected token$`)));
+      await assert.rejects(
+        loadConfig(join(folder, 'imports-large.mjs')),
+        isUsageError(new RegExp(`does not load\\. .+\\. The file ${displayFolder}/large\\.cjs is ${Buffer.byteLength(largeCommonJsText)} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads, so the place of the syntax error is unknown$`)),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('names an ES module larger than READ_BYTE_LIMIT when the search reaches no CommonJS file that fails', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+    const largeModuleText = `import './bad.cjs';\nexport const a = '${'a'.repeat(READ_BYTE_LIMIT)}';\n`;
+
+    try {
+      await writeFile(join(folder, 'large.mjs'), largeModuleText);
+      await writeFile(join(folder, 'bad.cjs'), 'const = ;\n');
+      await writeFile(join(folder, 'dwfb.config.mjs'), "import './large.mjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(
+        loadConfig(join(folder, 'dwfb.config.mjs')),
+        isUsageError(new RegExp(`does not load\\. .+\\. The file ${displayFolder}/large\\.mjs is ${Buffer.byteLength(largeModuleText)} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads, so the place of the syntax error is unknown$`)),
+      );
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('passes a CommonJS import larger than READ_BYTE_LIMIT that Node\'s error does not name, and names no such file', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'dwfb-config-'));
+    const displayFolder = formatForwardSlashes(relative(process.cwd(), folder));
+    const largeCommonJsText = `module.exports = '${'a'.repeat(READ_BYTE_LIMIT)}';\n`;
+
+    try {
+      await mkdir(join(folder, 'sub'));
+      await writeFile(join(folder, 'sub', 'package.json'), '{ "type": "commonjs" }\n');
+      await writeFile(join(folder, 'large.cjs'), largeCommonJsText);
+      await writeFile(join(folder, 'sub', 'large.js'), largeCommonJsText);
+      await writeFile(join(folder, 'bad.mjs'), 'const = ;\n');
+      await writeFile(join(folder, 'requires-bad.cjs'), "require('./bad.cjs');\n");
+      await writeFile(join(folder, 'bad.cjs'), 'const = ;\n');
+      await writeFile(join(folder, 'imports-module.mjs'), "import './large.cjs';\nimport './sub/large.js';\nimport './bad.mjs';\n\nexport default { workflows: [] };\n");
+      await writeFile(join(folder, 'imports-required.mjs'), "import './large.cjs';\nimport './requires-bad.cjs';\n\nexport default { workflows: [] };\n");
+      await assert.rejects(loadConfig(join(folder, 'imports-module.mjs')), isUsageError(new RegExp(`does not load\\. ${displayFolder}/bad\\.mjs:1:7 Unexpected token$`)));
+      await assert.rejects(loadConfig(join(folder, 'imports-required.mjs')), isUsageError(/does not load\. Unexpected token '='$/));
     } finally {
       await rm(folder, { recursive: true, force: true });
     }

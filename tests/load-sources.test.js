@@ -4,7 +4,10 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, describe, it } from 'node:test';
+import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { loadSources } from '../src/load-sources.js';
+import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
+import { writeSizedFile } from './support/write-sized-file.js';
 
 const temporaryFolders = [];
 after(async () => {
@@ -71,6 +74,73 @@ describe('loadSources', () => {
     assert.deepEqual(imported.parts, []);
     assert.deepEqual([...imported.sources.keys()], [join(folder, 'entry.js')]);
     assert.deepEqual(entry.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['source-encoding-invalid', 1, 1]]);
+  });
+
+  it('reads an entry, a part and an imported file of READ_BYTE_LIMIT bytes, and reports source-too-large for each one byte larger', async () => {
+    const entryText = "export const meta = {};\n// @include ./part.js\nimport note from './note.txt';\nimport './module.js';\nimport settings from './settings.json';\nlog(note, settings);\n";
+    const sizedNames = ['part.js', 'note.txt', 'module.js', 'settings.json', 'other.js'];
+    const limitFolder = await writeFolder({ 'entry.js': entryText });
+    const largeFolder = await writeFolder({ 'entry.js': entryText });
+    for (const name of sizedNames) {
+      await writeSizedFile(join(limitFolder, name), READ_BYTE_LIMIT);
+      await writeSizedFile(join(largeFolder, name), READ_BYTE_LIMIT + 1);
+    }
+    const tooLargeReason = `${READ_BYTE_LIMIT + 1} bytes, which is more than the ${READ_BYTE_LIMIT} bytes dwfb reads`;
+
+    const limit = await loadSources(join(limitFolder, 'entry.js'), true);
+    const limitEntry = await loadSources(join(limitFolder, 'other.js'), true);
+    const large = await loadSources(join(largeFolder, 'entry.js'), true);
+    const largeEntry = await loadSources(join(largeFolder, 'other.js'), true);
+
+    // Once read, each file whose bytes are all zero gives the finding of its kind, and a text file gives none.
+    assert.deepEqual(limit.findings.map((finding) => finding.rule), ['part-not-plain', 'syntax-error', 'json-invalid']);
+    assert.deepEqual([...limit.sources.keys()], ['entry.js', 'note.txt', 'module.js', 'settings.json'].map((name) => join(limitFolder, name)));
+    assert.deepEqual(limitEntry.findings.map((finding) => finding.rule), ['syntax-error']);
+    assert.deepEqual(large.findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      `source-too-large 2 The path "./part.js" names a file of ${tooLargeReason}`,
+      `source-too-large 3 The specifier "./note.txt" names a file of ${tooLargeReason}`,
+      `source-too-large 4 The specifier "./module.js" names a file of ${tooLargeReason}`,
+      `source-too-large 5 The specifier "./settings.json" names a file of ${tooLargeReason}`,
+    ]);
+    assert.deepEqual([...large.sources.keys()], [join(largeFolder, 'entry.js')]);
+    assert.deepEqual(largeEntry.findings.map((finding) => [finding.rule, finding.file, finding.line, finding.column, finding.message]), [
+      ['source-too-large', join(largeFolder, 'other.js'), 1, 1, `The entry is ${tooLargeReason}`],
+    ]);
+    assert.equal(largeEntry.sources.size, 0);
+  });
+
+  it('parses an entry of READ_BYTE_LIMIT bytes with its parts, and reports script-too-large alone for one byte more', async () => {
+    const metaLine = 'export const meta = {};\n';
+    const entryText = `${metaLine}// @include ./one.js\n// @include ./two.js\n`;
+    const createCommentPart = (length) => `//${'a'.repeat(length - 3)}\n`;
+    const oneLength = Math.floor((READ_BYTE_LIMIT - metaLine.length) / 2);
+    const twoLength = READ_BYTE_LIMIT - metaLine.length - oneLength;
+    const limitFolder = await writeFolder({ 'entry.js': entryText, 'one.js': createCommentPart(oneLength), 'two.js': createCommentPart(twoLength) });
+    const largeFolder = await writeFolder({ 'entry.js': entryText, 'one.js': createCommentPart(oneLength), 'two.js': createCommentPart(twoLength + 1) });
+
+    const limit = await loadSources(join(limitFolder, 'entry.js'), true);
+    const large = await loadSources(join(largeFolder, 'entry.js'), true);
+
+    assert.deepEqual(limit.findings, []);
+    assert.equal(Buffer.byteLength(limit.sources.get(join(limitFolder, 'entry.js')).text), READ_BYTE_LIMIT);
+    assert.deepEqual(large.findings.map((finding) => [finding.rule, finding.file, finding.line, finding.column, finding.message]), [
+      ['script-too-large', join(largeFolder, 'entry.js'), 1, 1, `The entry with its parts is ${READ_BYTE_LIMIT + 1} bytes, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`],
+    ]);
+    assert.equal(large.sources.size, 0);
+    assert.deepEqual(large.parts, ['one.js', 'two.js'].map((name) => join(largeFolder, name)));
+  });
+
+  it('reports include-not-found and import-not-found for a part and an import that name a device', async (context) => {
+    if (process.platform === 'win32') return context.skip('no Windows device has a path that a relative part path or specifier names');
+    const folder = await writeFolder({ 'entry.js': "export const meta = {};\n// @include ./device.js\nimport './device.js';\n" });
+    await symlink('/dev/null', join(folder, 'device.js'));
+
+    const { findings } = await loadSources(join(folder, 'entry.js'), true);
+
+    assert.deepEqual(findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
+      'include-not-found 2 The path "./device.js" names a device, a pipe or a socket, not a file',
+      'import-not-found 3 The specifier "./device.js" names a device, a pipe or a socket, not a file',
+    ]);
   });
 
   it('reports include-twice for each module import of a part, and not for a text file import of one', async () => {

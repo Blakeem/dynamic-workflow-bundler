@@ -8,9 +8,6 @@ import { UsageError } from './usage-error.js';
 
 // A misspelled key such as `Script` would otherwise read as a missing script.
 const VALIDATE_OPTION_KEYS = new Set(['script']);
-// The parse and the rule checks of a 2 MiB script of one-name statements peaked at 450 MB of memory on Node 24.22.1.
-// Memory grows with the size, and a 150 MB script exhausted Node's heap.
-export const VALIDATE_READ_BYTE_LIMIT = 2097152;
 
 /**
  * @typedef {object} ValidateOptions
@@ -28,7 +25,7 @@ export const VALIDATE_READ_BYTE_LIMIT = 2097152;
 
 /**
  * Checks a workflow script file against the contract of the runtime, and writes and prints nothing.
- * A file larger than VALIDATE_READ_BYTE_LIMIT gets the script-too-large finding alone, since a parse of a file
+ * A file larger than READ_BYTE_LIMIT gets the script-too-large finding alone, since a parse of a file
  * that large may exhaust Node's memory.
  * Rejects with a UsageError for options of another shape, and for a script that does not exist, that is not a
  * file, or whose path ends in a path separator or a `.` or `..` segment.
@@ -42,7 +39,7 @@ export async function validate(options = /** @type {ValidateOptions} */ ({})) {
   const { script } = options;
   if (typeof script !== 'string' || script === '') throw new UsageError('validate() needs script, the path of a workflow script');
 
-  const { size, bytes } = await readScript(script, VALIDATE_READ_BYTE_LIMIT);
+  const { size, bytes } = await readScript(script);
   const scriptPath = await formatRealDisplayPath(script);
   // The runtime of Claude Code 2.1.332 decodes the file with toString('utf-8'), which reads a byte sequence that
   // is not valid UTF-8 as U+FFFD.

@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { validate } from 'dynamic-workflow-bundler';
 import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
+import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { formatRealDisplayPath } from '../src/real-path.js';
-import { VALIDATE_READ_BYTE_LIMIT } from '../src/validate.js';
 
 const META = "export const meta = { name: 'p', description: 'd' };\n";
 const INVALID_BYTE = 0xff;
@@ -98,9 +98,9 @@ describe('validate', () => {
     ]);
   });
 
-  it('checks every rule up to VALIDATE_READ_BYTE_LIMIT bytes, and reports script-too-large alone for a larger file', async () => {
-    const { script: limitFile } = await writeTemporaryScript(createClockScript(VALIDATE_READ_BYTE_LIMIT));
-    const { script: largeFile } = await writeTemporaryScript(createClockScript(VALIDATE_READ_BYTE_LIMIT + 1));
+  it('checks every rule up to READ_BYTE_LIMIT bytes, and reports script-too-large alone for a larger file', async () => {
+    const { script: limitFile } = await writeTemporaryScript(createClockScript(READ_BYTE_LIMIT));
+    const { script: largeFile } = await writeTemporaryScript(createClockScript(READ_BYTE_LIMIT + 1));
     const largePath = await formatRealDisplayPath(largeFile);
 
     assert.deepEqual((await validate({ script: limitFile })).findings.map((finding) => finding.rule), ['script-too-large', 'clock-unavailable']);
@@ -110,7 +110,7 @@ describe('validate', () => {
       runtime: '2.1.332',
       findings: [{
         rule: 'script-too-large',
-        message: `The script is ${VALIDATE_READ_BYTE_LIMIT + 1} bytes, which is more than the 524288 bytes the runtime reads`,
+        message: `The script is ${READ_BYTE_LIMIT + 1} bytes, which is more than the 524288 bytes the runtime reads`,
         fix: 'Pass long text through args, or move part of the work into a workflow that the script runs with workflow()',
         file: largePath,
         line: 1,
