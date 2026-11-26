@@ -15,6 +15,8 @@ import { SCRIPT_BYTE_LIMIT } from '../../../src/check-contract.js';
 const BUILD_ARGS = ['build', 'entry.js', '--out', 'out/built.js'];
 const META = "export const meta = { name: 'p', description: 'p' };\n";
 const MODULE_PACKAGE = '{"type":"module"}';
+const REQUIRE_ENTRY = `${META}const loaded = require('x');\nreturn loaded;\n`;
+const REQUIRE_SCRIPT = `${META}// Built by dynamic-workflow-bundler from ../entry.js. Edit the source, not this file.\nconst loaded = require('x');\nreturn loaded;\n`;
 const IMPORT_CHAIN_LENGTH = 400;
 
 /**
@@ -41,6 +43,14 @@ function createImportChain() {
     files[`m${index}.js`] = index < IMPORT_CHAIN_LENGTH - 1 ? `import './m${index + 1}.js';\n` : 'export const end = 1;\n';
   }
   return files;
+}
+
+/**
+ * @param {string} field One more field of the config file's one workflow, in source form.
+ * @returns {string} A config file whose one workflow builds entry.js to out/built.js.
+ */
+function formatConfig(field) {
+  return `export default { workflows: [{ entry: 'entry.js', out: 'out/built.js', ${field} }] };\n`;
 }
 
 /**
@@ -100,6 +110,20 @@ export const OUTCOME_CASES = [
   createCase('long import chain', createImportChain(), BUILT),
   createCase('out is the entry', { 'entry.js': META }, { args: ['build', 'entry.js', '--out', 'entry.js'], exit: 2 }),
   createCase('out is a folder', { 'entry.js': META, 'out/x.txt': 'x' }, { args: ['build', 'entry.js', '--out', 'out'], exit: 2 }),
+  createCase('entry that reads require', { 'entry.js': REQUIRE_ENTRY }, buildFinding('global-undefined')),
+  createCase('entry that reads require, with --no-validate', { 'entry.js': REQUIRE_ENTRY }, { args: [...BUILD_ARGS, '--no-validate'], exit: 0 }),
+  createCase('config workflow with validate: false whose entry reads require', { 'dwfb.config.js': formatConfig('validate: false'), 'package.json': MODULE_PACKAGE, 'entry.js': REQUIRE_ENTRY }, { args: ['build'], exit: 0 }),
+  createCase(
+    'config workflow with validate: \'no\'',
+    { 'dwfb.config.js': formatConfig("validate: 'no'"), 'package.json': MODULE_PACKAGE, 'entry.js': META },
+    { ...CONFIG_USAGE_ERROR, message: /takes validate as a boolean\.\n$/ },
+  ),
+  createCase('check of a fresh script that reads require', { 'entry.js': REQUIRE_ENTRY, 'out/built.js': REQUIRE_SCRIPT }, { args: [...BUILD_ARGS, '--check'], exit: 1, rule: 'global-undefined' }),
+  createCase(
+    'check of a fresh script that reads require, with --no-validate',
+    { 'entry.js': REQUIRE_ENTRY, 'out/built.js': REQUIRE_SCRIPT },
+    { args: [...BUILD_ARGS, '--check', '--no-validate'], exit: 0, message: /^out\/built\.js matches its source\.\n$/ },
+  ),
   createCase('config is not an object', { 'dwfb.config.js': 'export default 5;\n', 'package.json': MODULE_PACKAGE }, CONFIG_USAGE_ERROR),
   createCase('config throws', { 'dwfb.config.js': "throw new Error('boom');\n", 'package.json': MODULE_PACKAGE }, CONFIG_USAGE_ERROR),
   createCase('config has a syntax error', { 'dwfb.config.js': 'export default {\n', 'package.json': MODULE_PACKAGE }, CONFIG_USAGE_ERROR),
@@ -167,5 +191,10 @@ export const OUTCOME_CASES = [
     'validate a config file whose out is built',
     { 'dwfb.config.js': 'export default { workflows: [{ entry: "entry.js", out: "out/built.js" }] };\n', 'package.json': MODULE_PACKAGE, 'entry.js': META, 'out/built.js': META },
     { args: ['validate'], exit: 0, message: /^out\/built\.js breaks no rule/ },
+  ),
+  createCase(
+    'validate a config file whose workflow with validate: false has an out that reads require',
+    { 'dwfb.config.js': formatConfig('validate: false'), 'package.json': MODULE_PACKAGE, 'entry.js': REQUIRE_ENTRY, 'out/built.js': REQUIRE_SCRIPT },
+    { args: ['validate'], exit: 1, rule: 'global-undefined' },
   ),
 ];

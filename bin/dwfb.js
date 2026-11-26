@@ -49,6 +49,7 @@ Options:
   --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
   --check           Write nothing, and report each built script that differs from its source.
   --no-banner       Leave out the banner line.
+  --no-validate     Skip the check of the built script against the runtime's contract.
   --json            Print the result as one JSON object.
   --help            Print this help.
 `;
@@ -58,6 +59,7 @@ const BUILD_OPTIONS = Object.freeze({
   config: { type: 'string' },
   check: { type: 'boolean' },
   'no-banner': { type: 'boolean' },
+  'no-validate': { type: 'boolean' },
   json: { type: 'boolean' },
   help: { type: 'boolean' },
 });
@@ -157,8 +159,9 @@ async function runBuild(args) {
   // Every workflow builds before any script is written, so a usage error in a later workflow writes nothing.
   for (const workflow of workflows) {
     const banner = values['no-banner'] ? false : workflow.banner;
+    const validate = values['no-validate'] ? false : workflow.validate;
     try {
-      builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false }), out: null });
+      builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false, validate }), out: null });
     } catch (error) {
       return printCommandFailure('dwfb build', error);
     }
@@ -347,10 +350,10 @@ async function isMissingFile(path) {
  * @param {string | undefined} entry
  * @param {string | undefined} out
  * @param {string | undefined} configPath
- * @returns {Promise<{ entry: string, out: string, banner: boolean }[]>}
+ * @returns {Promise<{ entry: string, out: string, banner: boolean, validate: boolean }[]>}
  */
 async function findWorkflows(entry, out, configPath) {
-  if (out !== undefined) return [{ entry, out, banner: true }];
+  if (out !== undefined) return [{ entry, out, banner: true, validate: true }];
   const commandConfig = await loadCommandConfig(configPath);
   if (commandConfig === null) {
     const missingWhat = entry === undefined ? 'an entry file' : 'the built script with --out <file>';

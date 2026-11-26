@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
 import { tokenizer, tokTypes } from 'acorn';
+import { RUNTIME_RESERVED_PREFIX } from './check-contract.js';
 import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
@@ -493,10 +494,11 @@ function removeText(start, end, text, replacement = '') {
 }
 
 /**
- * Reports `import()`, `import.meta`, variable names with the reserved prefix and, in a module, `await` or
- * `return` outside every function, `this` outside every function that binds its own `this`, and a direct
- * `eval` call. A module's top-level `this` is undefined, and a scope's arrow function takes the `this` of the
- * runtime's arrow function instead (Claude Code 2.1.332). A computed field key takes the `this` around its class.
+ * Reports `import()`, `import.meta`, variable names with the build's or the runtime's reserved prefix and,
+ * in a module, `await` or `return` outside every function, `this` outside every function that binds its own
+ * `this`, and a direct `eval` call. A module's top-level `this` is undefined, and a scope's arrow function
+ * takes the `this` of the runtime's arrow function instead (Claude Code 2.1.332). A computed field key takes
+ * the `this` around its class.
  * A direct `eval` in a module scope reads the entry's top-level names, which an ES module cannot reach.
  * @param {SyntaxNode} program
  * @param {boolean} isEntry
@@ -510,7 +512,10 @@ function checkNodes(program, isEntry, addFinding) {
     if (visitedNodes.has(node)) return;
     visitedNodes.add(node);
     const isTopLevelOfModule = !isEntry && !isInsideFunction;
-    const isReservedName = node.type === 'Identifier' && !nameNodes.has(node) && node.name.startsWith(RESERVED_PREFIX);
+    const isVariableName = node.type === 'Identifier' && !nameNodes.has(node);
+    const isReservedName = isVariableName && node.name.startsWith(RESERVED_PREFIX);
+    // A source's names reach the built script unchanged, and the runtime refuses a name with its prefix (Claude Code 2.1.332).
+    const isRuntimeReservedName = isVariableName && node.name.startsWith(RUNTIME_RESERVED_PREFIX);
     const bindsThis = THIS_BINDING_TYPES.has(node.type);
     const outerThisKey = node.type === 'PropertyDefinition' && node.computed ? node.key : null;
     // Acorn gives `await using` no AwaitExpression node.
@@ -522,6 +527,8 @@ function checkNodes(program, isEntry, addFinding) {
       addFinding('import-meta', 'The file holds import.meta', node.start);
     } else if (isReservedName) {
       addFinding('reserved-name', `The name ${node.name} starts with ${RESERVED_PREFIX}`, node.start);
+    } else if (isRuntimeReservedName) {
+      addFinding('runtime-reserved-name', `The name ${node.name} starts with ${RUNTIME_RESERVED_PREFIX}`, node.start);
     } else if (isTopLevelOfModule && isAwait) {
       addFinding('module-top-level-await', 'The module uses await outside every function', node.start);
     } else if (isTopLevelOfModule && node.type === 'ReturnStatement') {

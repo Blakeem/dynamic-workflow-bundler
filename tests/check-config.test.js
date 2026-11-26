@@ -20,13 +20,13 @@ function assertUsageError(value, message) {
 }
 
 describe('checkConfig', () => {
-  it('resolves each path against the config file folder and defaults banner to true', () => {
-    const config = check({ workflows: [{ entry: 'a/entry.js', out: '../dist/a.js' }, { entry: 'b.js', out: 'b.out.js', banner: false }] });
+  it('resolves each path against the config file folder and defaults banner and validate to true', () => {
+    const config = check({ workflows: [{ entry: 'a/entry.js', out: '../dist/a.js' }, { entry: 'b.js', out: 'b.out.js', banner: false, validate: false }] });
 
     assert.deepEqual(config, {
       workflows: [
-        { entry: join(PROJECT_FOLDER, 'a', 'entry.js'), out: resolve(PROJECT_FOLDER, '..', 'dist', 'a.js'), banner: true },
-        { entry: join(PROJECT_FOLDER, 'b.js'), out: join(PROJECT_FOLDER, 'b.out.js'), banner: false },
+        { entry: join(PROJECT_FOLDER, 'a', 'entry.js'), out: resolve(PROJECT_FOLDER, '..', 'dist', 'a.js'), banner: true, validate: true },
+        { entry: join(PROJECT_FOLDER, 'b.js'), out: join(PROJECT_FOLDER, 'b.out.js'), banner: false, validate: false },
       ],
     });
   });
@@ -48,13 +48,15 @@ describe('checkConfig', () => {
     const label = 'Workflow 2 of the config file dwfb.config.js';
     const first = { entry: 'a.js', out: 'a.out.js' };
 
-    assertUsageError({ workflows: [first, 'b.js'] }, `${label} is not an object of the form { entry, out, banner }`);
-    assertUsageError({ workflows: [first, , first] }, `${label} is not an object of the form { entry, out, banner }`);
+    assertUsageError({ workflows: [first, 'b.js'] }, `${label} is not an object of the form { entry, out, banner, validate }`);
+    assertUsageError({ workflows: [first, , first] }, `${label} is not an object of the form { entry, out, banner, validate }`);
     assertUsageError({ workflows: [first, { entry: 'b.js', output: 'b.out.js' }] }, `${label} has an unknown key output`);
     assertUsageError({ workflows: [first, { out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);
     assertUsageError({ workflows: [first, { entry: '', out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);
     assertUsageError({ workflows: [first, { entry: 'b.js', out: 1 }] }, `${label} needs out, the path of the built script`);
     assertUsageError({ workflows: [first, { entry: 'b.js', out: 'b.out.js', banner: 'no' }] }, `${label} takes banner as a boolean`);
+    assertUsageError({ workflows: [first, { entry: 'b.js', out: 'b.out.js', validate: 'no' }] }, `${label} takes validate as a boolean`);
+    assertUsageError({ workflows: [first, { entry: 'b.js', out: 'b.out.js', validate: null }] }, `${label} takes validate as a boolean`);
   });
 
   it('names an entry or out path that ends in a path separator, . or .., which resolve() would drop or fold', () => {

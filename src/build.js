@@ -1,6 +1,6 @@
 import { open, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { formatScriptOversizeReason } from './check-contract.js';
+import { checkContract, formatScriptOversizeReason, SCRIPT_BYTE_LIMIT } from './check-contract.js';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes, isFolderPath } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
@@ -16,9 +16,10 @@ import { writeScript } from './write-script.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
 /** @typedef {import('./load-sources.js').LoadedSource} LoadedSource */
+/** @typedef {import('./join-modules.js').SourcePosition} SourcePosition */
 
 // A misspelled key such as `Write` would otherwise be dropped, and the build would write `out`.
-const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
+const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check', 'validate']);
 
 /**
  * @typedef {object} BuildOptions
@@ -29,6 +30,8 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
  * @property {boolean} [write] Writes the built script. Defaults to true, and to false with `check`.
  * @property {boolean} [check] Writes nothing, and compares the built script with the file at `out`.
  *   Defaults to false.
+ * @property {boolean} [validate] Checks the built script against the runtime's contract before any write or
+ *   comparison, and fails the build with each finding at the source line it comes from. Defaults to true.
  */
 
 /**
@@ -85,13 +88,14 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('build() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !BUILD_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`build() takes no option ${unknownKey}`);
-  const { entry, out, banner = true, check = false } = options;
+  const { entry, out, banner = true, check = false, validate = true } = options;
   const { write = !check } = options;
   if (typeof entry !== 'string' || entry === '') throw new UsageError('build() needs entry, the path of an entry file');
   if (typeof out !== 'string' || out === '') throw new UsageError('build() needs out, the path of the built script');
   if (typeof banner !== 'boolean') throw new UsageError('build() takes banner as a boolean');
   if (typeof write !== 'boolean') throw new UsageError('build() takes write as a boolean');
   if (typeof check !== 'boolean') throw new UsageError('build() takes check as a boolean');
+  if (typeof validate !== 'boolean') throw new UsageError('build() takes validate as a boolean');
   if (check && write) throw new UsageError('build() writes nothing with check, so it takes no write: true');
   if (isFolderPath(out)) throw new UsageError(`The out path ${out} names a folder. Name the built script's file in it`);
 
@@ -124,12 +128,8 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   const joined = joinModules({ entry: entrySource, sources: joinedSources, bannerPath });
   const { script, lineOrigins } = joined;
   const scriptByteCount = Buffer.byteLength(script, 'utf8');
-  // compileBuiltScript parses the built script, and a parse past READ_BYTE_LIMIT may exhaust Node's heap.
-  if (scriptByteCount > READ_BYTE_LIMIT) {
-    // The message names the runtime's limit, since the runtime also refuses a smaller script larger than SCRIPT_BYTE_LIMIT.
-    const message = `The built script is ${formatScriptOversizeReason(scriptByteCount)}`;
-    return createFailedBuild(sourcePaths, [formatFindingPath(createFinding('script-too-large', message, entryFile, '', 0))]);
-  }
+  // compileBuiltScript and the contract check parse the built script, and a parse past READ_BYTE_LIMIT may exhaust Node's heap.
+  if (scriptByteCount > READ_BYTE_LIMIT) return createFailedBuild(sourcePaths, [formatFindingPath(createScriptSizeFinding(scriptByteCount, entryFile))]);
   // The entry's edits all follow its meta statement, so the offset holds in the built script.
   const metaEnd = entrySource.analysis.metaEnd;
   const findSourcePosition = (line, column) => {
@@ -138,6 +138,9 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   };
 
   compileBuiltScript(script, metaEnd);
+  // sortFindings orders by real path, so the contract findings take joinModules' real-path mapper.
+  const contractFindings = validate ? checkBuiltScript(script, scriptByteCount, entryFile, joined.findSourcePosition) : [];
+  if (contractFindings.length > 0) return createFailedBuild(sourcePaths, sortFindings(contractFindings, sourceFiles).map(formatFindingPath));
   if (check) {
     const comparison = await compareOutFile(outFile, script, lineOrigins, formatSourcePath);
     return { result: { ok: comparison.status === 'fresh', ...comparison, script, sources: sourcePaths, findings: [] }, findSourcePosition, metaEnd };
@@ -221,6 +224,48 @@ export function compileBuiltScript(script, metaEnd) {
     if (!(error instanceof SyntaxError)) throw error;
     throw new Error(`The built script does not compile, which is a defect in dynamic-workflow-bundler. ${error.message}`, { cause: error });
   }
+}
+
+/**
+ * Checks a built script against the runtime's contract. The size finding names the entry, since no source
+ * line makes a script too large, and checkContract's own size finding would repeat it.
+ * @param {string} script A built script of at most READ_BYTE_LIMIT bytes.
+ * @param {number} scriptByteCount
+ * @param {string} entryFile The entry's real path.
+ * @param {(line: number, column: number) => SourcePosition} findSourcePosition As JoinedScript gives it.
+ * @returns {Finding[]} Each with the real path of its source, unsorted.
+ */
+function checkBuiltScript(script, scriptByteCount, entryFile, findSourcePosition) {
+  const sizeFindings = scriptByteCount > SCRIPT_BYTE_LIMIT ? [createScriptSizeFinding(scriptByteCount, entryFile)] : [];
+  const ruleFindings = checkContract(script, '', scriptByteCount).filter((finding) => finding.rule !== 'script-too-large');
+  const placedFindings = ruleFindings.map((finding) => placeContractFinding(finding, findSourcePosition(finding.line, finding.column)));
+
+  return [...sizeFindings, ...placedFindings];
+}
+
+/**
+ * Every source of the script passed its checks, so a contract finding on a line the build adds is a defect
+ * of this tool, not of a source.
+ * @param {Finding} finding A finding of checkContract on the built script.
+ * @param {SourcePosition} position The source position of the finding's line and column.
+ * @returns {Finding} The finding at its source file, line and column.
+ */
+export function placeContractFinding(finding, position) {
+  if (position.line === null || position.column === null || position.file === null) {
+    throw new Error(
+      `The built script breaks the rule ${finding.rule} at line ${finding.line}, column ${finding.column}, on a line the build adds, which is a defect in dynamic-workflow-bundler. Build with --no-validate, or validate: false, until it is fixed`,
+    );
+  }
+  return { ...finding, file: position.file, line: position.line, column: position.column };
+}
+
+/**
+ * @param {number} scriptByteCount The size of a built script larger than SCRIPT_BYTE_LIMIT.
+ * @param {string} entryFile
+ * @returns {Finding} The script-too-large finding at line 1, column 1 of the entry.
+ */
+function createScriptSizeFinding(scriptByteCount, entryFile) {
+  return createFinding('script-too-large', `The built script is ${formatScriptOversizeReason(scriptByteCount)}`, entryFile, '', 0);
 }
 
 /**

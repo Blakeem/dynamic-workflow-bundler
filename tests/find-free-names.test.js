@@ -43,6 +43,7 @@ describe('findFreeNames', () => {
       'label: for (;;) { break label; }',
       'function i() { return new.target; }',
       'export { a as j };',
+      "export { l as m, n } from './n.js';",
     ].join('\n');
 
     assert.deepEqual(listFreeNames(text), []);

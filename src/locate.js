@@ -3,6 +3,7 @@ import { dirname, parse, resolve } from 'node:path';
 import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
 import { formatBuildCommand } from './build-command.js';
+import { checkContract } from './check-contract.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
 import { formatDisplayPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
@@ -83,10 +84,15 @@ export async function locate(options = /** @type {LocateOptions} */ ({})) {
   const scriptWorkflow = entry === undefined ? await findScriptWorkflow(script, banner, config) : { entry, banner: banner.hasSyntaxError || banner.path !== null };
   // A script that does not parse differs from every build, so the in-memory build takes its workflow's banner.
   const hasBanner = banner.hasSyntaxError ? scriptWorkflow.banner : banner.path !== null;
-  const { result, findSourcePosition, metaEnd } = await buildMappedScript({ entry: scriptWorkflow.entry, out: script, banner: hasBanner, check: true });
+  // A script that breaks the contract is the script a user locates a runtime error in, so no rule fails this build.
+  const { result, findSourcePosition, metaEnd } = await buildMappedScript({ entry: scriptWorkflow.entry, out: script, banner: hasBanner, check: true, validate: false });
   if (result.status === 'failed') return createFailedResult(result.findings);
   if (result.status === 'missing') throw new UsageError(`The script file ${script} does not exist`);
-  if (result.status === 'stale') return createFailedResult([await createStaleFinding(script, result.firstDifference.line, scriptWorkflow)]);
+  if (result.status === 'stale') {
+    // A script with no banner may come from a workflow whose build writes one, and the banner's bytes may make that script too large.
+    const commandScript = hasBanner === scriptWorkflow.banner ? result.script : await buildCommandScript(script, scriptWorkflow);
+    return createFailedResult([await createStaleFinding(script, result.firstDifference.line, scriptWorkflow, commandScript)]);
+  }
   const position = runtime ? convertRuntimePosition(scriptText, /** @type {number} */ (metaEnd), line, column) : { line, column };
   checkScriptPosition(scriptText, script, position, runtime ? { line, column } : null);
   const source = /** @type {NonNullable<typeof findSourcePosition>} */ (findSourcePosition)(position.line, position.column);
@@ -181,11 +187,14 @@ function createFailedResult(findings) {
  * @param {string} script
  * @param {number} line The script's first line that differs from the script the build gives.
  * @param {ScriptWorkflow} scriptWorkflow
+ * @param {string | null} commandScript The script the command builds, or null when that build has a finding.
  * @returns {Promise<Finding>} The finding, whose fix names the command that rewrites the script as its
  *   workflow gives it.
  */
-async function createStaleFinding(script, line, scriptWorkflow) {
-  const buildCommand = formatBuildCommand(scriptWorkflow.entry, { out: script, 'no-banner': !scriptWorkflow.banner });
+async function createStaleFinding(script, line, scriptWorkflow, commandScript) {
+  // The command reads no config file, so it runs the contract check whatever the workflow's validate says.
+  const breaksContract = commandScript !== null && checkContract(commandScript, '').length > 0;
+  const buildCommand = formatBuildCommand(scriptWorkflow.entry, { out: script, 'no-banner': !scriptWorkflow.banner, 'no-validate': breaksContract });
   // The script takes the form `dwfb build` gives its out, so both commands name one script one way.
   const scriptPath = await formatRealDisplayPath(script);
 
@@ -197,4 +206,16 @@ async function createStaleFinding(script, line, scriptWorkflow) {
     line,
     column: 1,
   };
+}
+
+/**
+ * @param {string} script
+ * @param {ScriptWorkflow} scriptWorkflow
+ * @returns {Promise<string | null>} The script the command that rewrites the script builds, or null when
+ *   that build has a finding.
+ */
+async function buildCommandScript(script, scriptWorkflow) {
+  // createStaleFinding checks the script itself, and a validating build gives no script that breaks the contract.
+  const { result } = await buildMappedScript({ entry: scriptWorkflow.entry, out: script, banner: scriptWorkflow.banner, write: false, validate: false });
+  return result.script;
 }

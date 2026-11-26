@@ -62,6 +62,14 @@ const RULE_CASES = [
   { rule: 'reserved-name', isEntry: false, breaking: 'export const o = __dwfb_x.y;\n', passing: 'export const o = x.__dwfb_y;\n' },
   { rule: 'reserved-name', isEntry: false, breaking: "import { __dwfb_x } from './a.js';\n", passing: "import { __dwfb_x as x } from './a.js';\nexport { x as __dwfb_y };\n" },
   { rule: 'reserved-name', isEntry: false, breaking: 'const { __dwfb_x } = o;\n', passing: '__dwfb_x: for (const { __dwfb_y: y } of []) break __dwfb_x;\n' },
+  { rule: 'reserved-name', isEntry: false, breaking: 'const __dwfb_x = 1;\nexport { __dwfb_x as y };\n', passing: "export { __dwfb_x as y, __dwfb_z } from './a.js';\n" },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: 'const __wRg$x = 1;\n', passing: 'const wRg$x = 1;\n' },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: 'export const o = { __wRg$x };\n', passing: 'export const o = { __wRg$x: 1, __wRg$y() {} };\n' },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: 'export const o = __wRg$x.y;\n', passing: 'export const o = x.__wRg$y;\n' },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: "import { __wRg$x } from './a.js';\n", passing: "import { __wRg$x as x } from './a.js';\nexport { x as __wRg$y };\n" },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: 'const { __wRg$x } = o;\n', passing: '__wRg$x: for (const { __wRg$y: y } of []) break __wRg$x;\n' },
+  { rule: 'runtime-reserved-name', isEntry: false, breaking: 'const __wRg$x = 1;\nexport { __wRg$x as y };\n', passing: "export { __wRg$x as y, __wRg$z } from './a.js';\n" },
+  { rule: 'runtime-reserved-name', isEntry: true, breaking: `${META}import { a as __wRg$x } from './a.js';\n`, passing: `${META}import { a as x } from './a.js';\n` },
 ];
 
 /**

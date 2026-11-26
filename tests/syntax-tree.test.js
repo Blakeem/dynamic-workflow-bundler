@@ -61,6 +61,15 @@ describe('syntax-tree', () => {
     assert.deepEqual([listNames(labelStatement), listNames(labelStatement.body.body)], [['e'], ['e']]);
     assert.deepEqual([listNames(firstProperty), listNames(firstProperty.value), listNames(computedProperty)], [['f'], ['h'], []]);
   });
+
+  it('lists the local name of each specifier of an export from another file, and none of an export of local names', () => {
+    const [reexportStatement, , exportStatement] = parseBody("export { a as b, c } from './a.js';\nconst d = 1;\nexport { d };\n");
+    const listNames = (node) => listNameChildren(node).map((child) => child.name);
+
+    assert.deepEqual(listNames(reexportStatement), ['a', 'c']);
+    assert.deepEqual(reexportStatement.specifiers.map(listNames), [['b'], []]);
+    assert.deepEqual(listNames(exportStatement), []);
+  });
 });
 
 describe('isStackOverflowError', () => {

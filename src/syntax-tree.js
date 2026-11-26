@@ -67,9 +67,10 @@ export function isStackOverflowError(error) {
 }
 
 /**
- * Lists the identifiers directly below a node that name a property, a label, an import or an export,
- * and that bind and reference no variable.
+ * Lists the identifiers directly below a node, or in the specifiers of an `export { ... } from`, that name a
+ * property, a label, an import or an export, and that bind and reference no variable.
  * Acorn gives `import { a }` and `export { a }` one node for both names, and that node is the variable's.
+ * In `export { a as b } from './m.js'`, `a` names an export of m.js and `b` an export of the file, and neither is a variable.
  * @param {SyntaxNode} node
  * @returns {SyntaxNode[]}
  */
@@ -82,6 +83,7 @@ export function listNameChildren(node) {
   if (node.type === 'ImportAttribute') return [node.key];
   if (node.type === 'ExportSpecifier') return node.exported === node.local ? [] : [node.exported];
   if (node.type === 'ExportAllDeclaration') return node.exported ? [node.exported] : [];
+  if (node.type === 'ExportNamedDeclaration' && node.source) return node.specifiers.map((specifier) => specifier.local);
   return [];
 }
 

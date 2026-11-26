@@ -6,7 +6,8 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'acorn';
 import { build } from 'dynamic-workflow-bundler';
-import { compileBuiltScript } from '../src/build.js';
+import { compileBuiltScript, placeContractFinding } from '../src/build.js';
+import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { FIXES } from '../src/finding.js';
 import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { runBuiltScript } from './support/run-built-script.js';
@@ -219,11 +220,11 @@ describe('build findings', () => {
     assert.ok(!(await readdir(folder)).includes('out.js'));
   });
 
-  it('builds a script of READ_BYTE_LIMIT bytes, and reports script-too-large alone on the entry for one byte more', async () => {
+  it('builds a script of READ_BYTE_LIMIT bytes with validate: false, and reports script-too-large alone on the entry for one byte more, with validate on or off', async () => {
     const folder = await makeTemporaryFolder();
     const entry = join(folder, 'entry.js');
     const out = join(folder, 'out.js');
-    await writeFile(entry, "export const meta = {};\nimport notes from './notes.txt';\nreturn notes;\n");
+    await writeFile(entry, "export const meta = { name: 'p', description: 'd' };\nimport notes from './notes.txt';\nreturn notes;\n");
     await writeFile(join(folder, 'notes.txt'), '');
     const emptyScript = (await build({ entry, out, write: false })).script;
     const workFolder = await realpath(process.cwd());
@@ -231,12 +232,14 @@ describe('build findings', () => {
     const notesPath = formatForwardSlashes(relative(workFolder, await realpath(join(folder, 'notes.txt'))));
 
     await writeFile(join(folder, 'notes.txt'), 'a'.repeat(READ_BYTE_LIMIT - Buffer.byteLength(emptyScript)));
-    const limitResult = await build({ entry, out, write: false });
+    const limitResult = await build({ entry, out, write: false, validate: false });
     await writeFile(join(folder, 'notes.txt'), 'a'.repeat(READ_BYTE_LIMIT - Buffer.byteLength(emptyScript) + 1));
     const largeResult = await build({ entry, out });
+    const unvalidatedLargeResult = await build({ entry, out, validate: false });
 
     assert.equal(Buffer.byteLength(limitResult.script), READ_BYTE_LIMIT);
     assert.equal(limitResult.status, 'built');
+    assert.deepEqual(unvalidatedLargeResult, largeResult);
     assert.deepEqual(largeResult, {
       ok: false,
       status: 'failed',
@@ -258,7 +261,7 @@ describe('build findings', () => {
 describe('build text handling', () => {
   it('reads CRLF as LF and drops a byte order mark', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "\uFEFFexport const meta = {};\r\nimport { value } from './value.js';\r\nreturn value;\r\n");
+    await writeFile(join(folder, 'entry.js'), "\uFEFFexport const meta = { name: 'p', description: 'd' };\r\nimport { value } from './value.js';\r\nreturn value;\r\n");
     await writeFile(join(folder, 'value.js'), '\uFEFFexport const value = `a\r\nb`;\r\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js') });
@@ -272,7 +275,7 @@ describe('build text handling', () => {
 
   it('builds an entry with no import to its own text when the banner is off', async () => {
     const folder = await makeTemporaryFolder();
-    const text = "export const meta = {\n  name: 'plain',\n};\n\nconst done = await agent('x');\nreturn `${done}\nend`;";
+    const text = "export const meta = {\n  name: 'plain',\n  description: 'd',\n};\n\nconst done = await agent('x');\nreturn `${done}\nend`;";
     await writeFile(join(folder, 'entry.js'), `\uFEFF${text.replaceAll('\n', '\r\n')}`);
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), banner: false, write: false });
@@ -282,16 +285,16 @@ describe('build text handling', () => {
 
   it('puts the banner on its own line when the meta statement ends the file', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'build', 'out.js'), write: false });
 
-    assert.equal(result.script, 'export const meta = {};\n// Built by dynamic-workflow-bundler from ../entry.js. Edit the source, not this file.\n');
+    assert.equal(result.script, 'export const meta = { name: "p", description: "d" };\n// Built by dynamic-workflow-bundler from ../entry.js. Edit the source, not this file.\n');
   });
 
   it('keeps the line count of a multi-line import and export', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport {\n  value,\n} from './value.js';\nreturn value();\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport {\n  value,\n} from './value.js';\nreturn value();\n");
     await writeFile(join(folder, 'value.js'), 'export default\nfunction named() {\n  return named.name;\n}\nexport {\n  named as value,\n};\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), banner: false, write: false });
@@ -306,7 +309,7 @@ describe('build of text files, JSON files and parts', () => {
   it('imports a text file as its exact content, with each of its lines on a line of the built script', async () => {
     const folder = await makeTemporaryFolder();
     const prompt = "Review `this` change.\nKeep ${literal} and \\n as written.\nimport { nothing } from './nowhere.js';\n// @include ./part.js\nNo line break at the end";
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport prompt from './prompt.md';\nimport again from './prompt.md';\nreturn [prompt, again];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport prompt from './prompt.md';\nimport again from './prompt.md';\nreturn [prompt, again];\n");
     await writeFile(join(folder, 'prompt.md'), prompt);
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -323,7 +326,7 @@ describe('build of text files, JSON files and parts', () => {
 
   it('drops a byte order mark and reads CRLF as LF in a text file, and keeps a lone CR', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport notes from './notes.txt';\nimport empty from './empty.txt' with { type: 'text' };\nreturn [notes, empty];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport notes from './notes.txt';\nimport empty from './empty.txt' with { type: 'text' };\nreturn [notes, empty];\n");
     await writeFile(join(folder, 'notes.txt'), '\uFEFFone\r\ntwo\rthree\n');
     await writeFile(join(folder, 'empty.txt'), '');
 
@@ -335,7 +338,7 @@ describe('build of text files, JSON files and parts', () => {
   it('gives every importer of a JSON file one object, equal to what JSON.parse gives', async () => {
     const folder = await makeTemporaryFolder();
     const json = '{\n  "name": "review",\n  "limits": [1, 2.5, -3e2],\n  "__proto__": { "own": true },\n  "text": "a`b${c}\\\\d"\n}\n';
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { first } from './first.js';\nimport { second } from './second.js';\nimport settings from './settings.json';\nreturn [first === second, first === settings, settings];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { first } from './first.js';\nimport { second } from './second.js';\nimport settings from './settings.json';\nreturn [first === second, first === settings, settings];\n");
     await writeFile(join(folder, 'first.js'), "import settings from './settings.json';\nexport const first = settings;\n");
     await writeFile(join(folder, 'second.js'), "import data from './settings.json' with { type: 'json' };\nexport const second = data;\n");
     await writeFile(join(folder, 'settings.json'), json);
@@ -357,6 +360,7 @@ describe('build of text files, JSON files and parts', () => {
     const original = [
       'export const meta = {',
       "  name: 'cut',",
+      "  description: 'd',",
       '};',
       '',
       'const steps = [];',
@@ -395,7 +399,7 @@ describe('build of text files, JSON files and parts', () => {
   it('puts each part line byte for byte in the built script, and lists every text file, JSON file and part', async () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'parts'));
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { label } from './label.js';\n// @include parts/setup.js\nreturn [label, notes, count];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { label } from './label.js';\n// @include parts/setup.js\nreturn [label, notes, count];\n");
     await writeFile(join(folder, 'label.js'), "import settings from './settings.json';\nexport const label = settings.label;\n");
     await writeFile(join(folder, 'settings.json'), '{ "label": "L" }\n');
     await writeFile(join(folder, 'parts', 'setup.js'), "  const notes = (await readNotes());\n\tconst count = 2; // a comment\nasync function readNotes() { return 'N'; }\n");
@@ -413,9 +417,9 @@ describe('build of text files, JSON files and parts', () => {
 
   it('reports a finding in a part at the part\'s line, and an entry finding below a part at the entry\'s line', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./part.js\nconst ok = 2;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n// @include ./part.js\nconst ok = 2;\n');
     await writeFile(join(folder, 'part.js'), 'log(1);\nconst ok = 1;\n');
-    await writeFile(join(folder, 'clean.js'), "export const meta = {};\n// @include ./clean-part.js\nconst __dwfb_entry = 1;\nimport './missing.js';\n");
+    await writeFile(join(folder, 'clean.js'), "export const meta = { name: 'p', description: 'd' };\n// @include ./clean-part.js\nconst __dwfb_entry = 1;\nimport './missing.js';\n");
     await writeFile(join(folder, 'clean-part.js'), 'const ok = import.meta;\nconst __dwfb_part = 2;\n');
 
     const redeclared = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -433,7 +437,7 @@ describe('build of text files, JSON files and parts', () => {
 
   it('reports source-too-deep in a part at the deep code\'s line in the part', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./part.js\nreturn v;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n// @include ./part.js\nreturn v;\n');
     await writeFile(join(folder, 'part.js'), `const a = { b: 1 };\nconst v = typeof a${'.b'.repeat(20000)};\n`);
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -443,7 +447,7 @@ describe('build of text files, JSON files and parts', () => {
 
   it('reports an import that reads a text file of this build as a module', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport source from './a.js' with { type: 'text' };\nimport { a } from './a.js';\nreturn [a, source];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport source from './a.js' with { type: 'text' };\nimport { a } from './a.js';\nreturn [a, source];\n");
     await writeFile(join(folder, 'a.js'), 'export const a = 1;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -455,7 +459,7 @@ describe('build of text files, JSON files and parts', () => {
 
   it('builds an entry that imports only text files and declares Object, Symbol and JSON', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport prompt from './prompt.md';\nconst Object = 1;\nclass Symbol {}\nconst JSON = 2;\nreturn [prompt, Object, JSON];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport prompt from './prompt.md';\nconst Object = 1;\nclass Symbol {}\nconst JSON = 2;\nreturn [prompt, Object, JSON];\n");
     await writeFile(join(folder, 'prompt.md'), 'p');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -468,8 +472,8 @@ describe('build of text files, JSON files and parts', () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'folder.js'));
     await writeFile(join(folder, 'part.js'), 'log(1);\n');
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./folder.js\n// @include\n// @include ./a\0b.js\n');
-    await writeFile(join(folder, 'with-part.js'), 'export const meta = {};\n// @include ./part.js\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n// @include ./folder.js\n// @include\n// @include ./a\0b.js\n');
+    await writeFile(join(folder, 'with-part.js'), 'export const meta = { name: "p", description: "d" };\n// @include ./part.js\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
@@ -487,7 +491,7 @@ describe('build edge forms', () => {
     const folder = await makeTemporaryFolder();
     await writeFile(
       join(folder, 'entry.js'),
-      "export const meta = {};\nimport anonymous, { 'two words' as spaced, __proto__ as proto } from './names.js';\nreturn [anonymous(), anonymous.name, spaced, proto];\n",
+      "export const meta = { name: 'p', description: 'd' };\nimport anonymous, { 'two words' as spaced, __proto__ as proto } from './names.js';\nreturn [anonymous(), anonymous.name, spaced, proto];\n",
     );
     await writeFile(join(folder, 'names.js'), "const value = 'v';\nexport { value as 'two words', value as __proto__ };\nexport default function () { return 'f'; }\n(0);\n");
 
@@ -498,7 +502,7 @@ describe('build edge forms', () => {
 
   it('binds an import of the string export name "*" to that export, and a namespace import to the namespace', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { '*' as star } from './star.js';\nimport * as all from './star.js';\nreturn [star, Object.keys(all)];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { '*' as star } from './star.js';\nimport * as all from './star.js';\nreturn [star, Object.keys(all)];\n");
     await writeFile(join(folder, 'star.js'), "const a = 1;\nexport { a as '*' };\nexport const other = 2;\n");
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -511,7 +515,7 @@ describe('build edge forms', () => {
     const folder = await makeTemporaryFolder();
     await writeFile(
       join(folder, 'entry.js'),
-      "export const meta = {};\nimport object from './object.js';\nimport run from './run.js';\nimport Exported, { isBound } from './named.js';\nimport three from './three.js';\nreturn [object.a, run(), run.name, Exported.name, isBound, three];\n",
+      "export const meta = { name: 'p', description: 'd' };\nimport object from './object.js';\nimport run from './run.js';\nimport Exported, { isBound } from './named.js';\nimport three from './three.js';\nreturn [object.a, run(), run.name, Exported.name, isBound, three];\n",
     );
     await writeFile(join(folder, 'object.js'), 'export default ({ a: 1 });\n');
     await writeFile(join(folder, 'run.js'), 'export default (function () { return 2; });\n');
@@ -529,7 +533,7 @@ describe('build edge forms', () => {
     await writeFile(
       join(folder, 'entry.js'),
       [
-        'export const meta = {};',
+        'export const meta = { name: "p", description: "d" };',
         'const calls = [];',
         'const run = (value) => { calls.push(value); return run; };',
         "const f = () => 'f'",
@@ -563,17 +567,17 @@ describe('build edge forms', () => {
 
   it('reports a block comment that opens on the meta line and ends on a later line', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {}; /* note\n */\nimport { a } from './a.js';\nreturn a;\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' }; /* note\n */\nimport { a } from './a.js';\nreturn a;\n");
     await writeFile(join(folder, 'a.js'), 'export const a = 1;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
-    assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['meta-not-alone', 1, 25]]);
+    assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['meta-not-alone', 1, 54]]);
   });
 
   it('escapes a line terminator in a module path inside its comment line', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { a } from './a\\u2028b.js';\nreturn a;\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a\\u2028b.js';\nreturn a;\n");
     await writeFile(join(folder, 'a\u2028b.js'), 'export const a = 1;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -584,7 +588,7 @@ describe('build edge forms', () => {
 
   it('reports a module that starts with a #! line, which cannot sit inside a script', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport './tool.js';\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport './tool.js';\n");
     await writeFile(join(folder, 'tool.js'), '#!/usr/bin/env node\nlog(1);\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -594,9 +598,9 @@ describe('build edge forms', () => {
 
   it('freezes and tags a module namespace when the module declares its own Object and Symbol, and refuses an entry that does', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport * as shadow from './shadow.js';\nreturn [Object.isFrozen(shadow), shadow.keys, Object.prototype.toString.call(shadow)];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport * as shadow from './shadow.js';\nreturn [Object.isFrozen(shadow), shadow.keys, Object.prototype.toString.call(shadow)];\n");
     await writeFile(join(folder, 'shadow.js'), 'const Object = { freeze: () => null, defineProperty: () => null };\nconst Symbol = {};\nexport const keys = Object.freeze();\n');
-    await writeFile(join(folder, 'shadowing-entry.js'), "export const meta = {};\nimport './shadow.js';\nif (true) { var Object = 1; }\nfunction Symbol() {}\n");
+    await writeFile(join(folder, 'shadowing-entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport './shadow.js';\nif (true) { var Object = 1; }\nfunction Symbol() {}\n");
 
     const built = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
     const refused = await build({ entry: join(folder, 'shadowing-entry.js'), out: join(folder, 'out.js'), write: false });
@@ -609,7 +613,7 @@ describe('build edge forms', () => {
     const folder = await makeTemporaryFolder();
     await writeFile(
       join(folder, 'entry.js'),
-      "export const meta = {};\nimport * as values from './values.mjs';\nreturn [Object.prototype.toString.call(values), Object.getOwnPropertyDescriptor(values, Symbol.toStringTag), Reflect.ownKeys(values)];\n",
+      "export const meta = { name: 'p', description: 'd' };\nimport * as values from './values.mjs';\nreturn [Object.prototype.toString.call(values), Object.getOwnPropertyDescriptor(values, Symbol.toStringTag), Reflect.ownKeys(values)];\n",
     );
     await writeFile(join(folder, 'values.mjs'), 'export const b = 2;\nexport const a = 1;\n');
 
@@ -625,7 +629,7 @@ describe('build edge forms', () => {
 
   it('allows code on the meta line of an entry that imports nothing', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {}; const value = 2;\nreturn value;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" }; const value = 2;\nreturn value;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
@@ -634,20 +638,20 @@ describe('build edge forms', () => {
 
   it('reports a template literal that spans the meta line break of an entry with no import, unless the banner is off', async () => {
     const folder = await makeTemporaryFolder();
-    const text = 'export const meta = {}; const p = `one\ntwo`;\nreturn p;\n';
+    const text = 'export const meta = { name: "p", description: "d" }; const p = `one\ntwo`;\nreturn p;\n';
     await writeFile(join(folder, 'entry.js'), text);
 
     const withBanner = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
     const withoutBanner = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), banner: false, write: false });
 
-    assert.deepEqual(withBanner.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['meta-not-alone', 1, 36]]);
+    assert.deepEqual(withBanner.findings.map((finding) => [finding.rule, finding.line, finding.column]), [['meta-not-alone', 1, 65]]);
     assert.equal(withoutBanner.script, text);
   });
 
   it('reports an import of a folder, of a path with an encoded slash, and of the entry', async () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'folder.js'));
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport './folder.js';\nimport './a%2Fb.js';\nimport './back.js';\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport './folder.js';\nimport './a%2Fb.js';\nimport './back.js';\n");
     await writeFile(join(folder, 'back.js'), "import './entry.js';\n");
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
@@ -664,11 +668,11 @@ describe('build edge forms', () => {
 describe('build output and usage errors', () => {
   it('leaves an earlier built script in place when the build has a finding', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
     await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js') });
     const earlier = await readFile(join(folder, 'out.js'), 'utf8');
 
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport x from 'package';\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport x from 'package';\n");
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js') });
 
     assert.equal(result.ok, false);
@@ -678,7 +682,7 @@ describe('build output and usage errors', () => {
 
   it('creates the folder of out and leaves no temporary file', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
 
     await build({ entry: join(folder, 'entry.js'), out: join(folder, 'dist', 'nested', 'out.js') });
 
@@ -687,7 +691,7 @@ describe('build output and usage errors', () => {
 
   it('writes nothing with write: false', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'dist', 'out.js'), write: false });
 
@@ -699,7 +703,7 @@ describe('build output and usage errors', () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'dist'));
     await writeFile(join(folder, 'notes.txt'), 'notes\n');
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nreturn a;\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a.js';\nreturn a;\n");
     await writeFile(join(folder, 'a.js'), 'export const a = 1;\n');
     const entry = join(folder, 'entry.js');
     const isUsageError = (pattern) => (error) => error.name === 'UsageError' && pattern.test(error.message);
@@ -732,7 +736,7 @@ describe('build output and usage errors', () => {
   it('rejects an out on another drive than the entry while the banner is on', async (context) => {
     const folder = await makeTemporaryFolder();
     if (hasSameRoot(folder, FIXTURES)) return context.skip('the fixtures sit on the drive of the temporary folder');
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
     const out = join(FIXTURES, 'never-written.js');
 
     await assert.rejects(build({ entry: join(folder, 'entry.js'), out, write: false }), (error) => error.name === 'UsageError' && /another drive/.test(error.message));
@@ -743,7 +747,7 @@ describe('build output and usage errors', () => {
     const folder = await makeTemporaryFolder();
     if (hasSameRoot(folder, FIXTURES)) return context.skip('the fixtures sit on the drive of the temporary folder');
     await symlink(join(FIXTURES, 'modules', 'lib'), join(folder, 'linked'), 'junction');
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport './linked/side-effect.js';\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport './linked/side-effect.js';\n");
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
@@ -755,7 +759,7 @@ describe('build output and usage errors', () => {
     const folder = await makeTemporaryFolder();
     if (hasSameRoot(folder, FIXTURES)) return context.skip('the fixtures sit on the drive of the temporary folder');
     await symlink(join(FIXTURES, 'modules', 'lib'), join(folder, 'linked'), 'junction');
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n// @include ./linked/side-effect.js\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n// @include ./linked/side-effect.js\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
@@ -768,7 +772,7 @@ describe('build output and usage errors', () => {
     await mkdir(join(folder, 'project'));
     await mkdir(join(folder, 'shared'));
     await writeFile(join(folder, 'shared', 'm.js'), 'export const m = 1;\n');
-    await writeFile(join(folder, 'project', 'entry.js'), "export const meta = {};\nimport { m } from './lib/m.js';\nreturn m;\n");
+    await writeFile(join(folder, 'project', 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { m } from './lib/m.js';\nreturn m;\n");
     try {
       await symlink(join(folder, 'shared'), join(folder, 'project', 'lib'), 'junction');
     } catch (error) {
@@ -784,7 +788,7 @@ describe('build output and usage errors', () => {
   it('evaluates a module that two different specifiers reach once', async () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'lib'));
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { count } from './lib/count.js';\nimport { again } from './lib/../lib/again.js';\nreturn [count, again];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { count } from './lib/count.js';\nimport { again } from './lib/../lib/again.js';\nreturn [count, again];\n");
     await writeFile(join(folder, 'lib', 'count.js'), "log('count');\nexport const count = 1;\n");
     await writeFile(join(folder, 'lib', 'again.js'), "import { count } from '../lib/count.js';\nexport const again = count;\n");
 
@@ -798,7 +802,7 @@ describe('build output and usage errors', () => {
 
   it('reports entry-export for an empty export list in the entry instead of a script that does not compile', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nexport {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nexport {};\nreturn 1;\n');
 
     const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
 
@@ -813,7 +817,7 @@ describe('build check', () => {
    */
   async function writeBuiltProject() {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n");
     await writeFile(join(folder, 'part.js'), 'const p = 1;\nconst q = 2;\n');
     await writeFile(join(folder, 'a.js'), 'export const a = 1;\nconst b = 2;\n');
     await writeFile(join(folder, 'notes.md'), 'first\nsecond\n');
@@ -854,7 +858,7 @@ describe('build check', () => {
       { name: 'a.js', text: 'export const a = 1;\nconst b = 3;\n', sourceLine: 2 },
       { name: 'notes.md', text: 'first\nsecond line\n', sourceLine: 2 },
       { name: 'settings.json', text: '{ "s": 2 }\n', sourceLine: 1 },
-      { name: 'entry.js', text: "export const meta = { name: 'x' };\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n", sourceLine: 1 },
+      { name: 'entry.js', text: "export const meta = { name: 'x', description: 'd' };\nimport { a } from './a.js';\nimport notes from './notes.md';\nimport settings from './settings.json';\n// @include ./part.js\nreturn [a, notes, settings, p];\n", sourceLine: 1 },
     ];
 
     for (const { name, text, sourceLine } of edits) {
@@ -935,9 +939,171 @@ describe('build check', () => {
   });
 });
 
+describe('build contract check', () => {
+  const META = "export const meta = { name: 'p', description: 'd' };\n";
+
+  /**
+   * @param {string} folder
+   * @param {string} name
+   * @returns {Promise<string>} The path as a build reports it.
+   */
+  async function formatBuildPath(folder, name) {
+    return formatForwardSlashes(relative(await realpath(process.cwd()), await realpath(join(folder, name))));
+  }
+
+  it('reports the clock in a module, the random source in a part and an undefined name in the entry at their source positions, and leaves the earlier script in place', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    await writeFile(entry, `${META}import { stamp } from './clock.js';\n// @include ./part.js\nconst loaded = require('x');\nreturn [stamp(), pick, loaded];\n`);
+    await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  return Date.now();\n}\n');
+    await writeFile(join(folder, 'part.js'), 'const first = 1;\nconst pick = Math.random();\n');
+    await writeFile(out, 'earlier script\n');
+
+    const result = await build({ entry, out });
+    const filesAfterFailure = (await readdir(folder)).sort();
+    const outAfterFailure = await readFile(out, 'utf8');
+    const unvalidated = await build({ entry, out, validate: false });
+
+    assert.deepEqual(filesAfterFailure, ['clock.js', 'entry.js', 'out.js', 'part.js']);
+    assert.equal(outAfterFailure, 'earlier script\n');
+
+    assert.deepEqual(result, {
+      ok: false,
+      status: 'failed',
+      script: null,
+      sources: [await formatBuildPath(folder, 'entry.js'), await formatBuildPath(folder, 'part.js'), await formatBuildPath(folder, 'clock.js')],
+      findings: [
+        {
+          rule: 'global-undefined',
+          message: 'The script reads require, which the runtime does not define',
+          fix: FIXES['global-undefined'].default,
+          file: await formatBuildPath(folder, 'entry.js'),
+          line: 4,
+          column: 16,
+        },
+        {
+          rule: 'random-unavailable',
+          message: 'The script uses Math.random, which throws in the runtime when called',
+          fix: FIXES['random-unavailable'],
+          file: await formatBuildPath(folder, 'part.js'),
+          line: 2,
+          column: 14,
+        },
+        {
+          rule: 'clock-unavailable',
+          message: 'The script uses Date.now, which throws in the runtime when called',
+          fix: FIXES['clock-unavailable'],
+          file: await formatBuildPath(folder, 'clock.js'),
+          line: 2,
+          column: 10,
+        },
+      ],
+    });
+    assert.equal(unvalidated.status, 'written');
+    assert.equal(await readFile(out, 'utf8'), unvalidated.script);
+  });
+
+  it('reports meta-name-invalid at the opening brace of a meta object with no name', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), "export const meta =\n  { description: 'd' };\nreturn 1;\n");
+
+    const result = await build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), write: false });
+
+    assert.deepEqual(result.findings.map(({ rule, file, line, column }) => ({ rule, file, line, column })), [
+      { rule: 'meta-name-invalid', file: await formatBuildPath(folder, 'entry.js'), line: 2, column: 3 },
+    ]);
+  });
+
+  it('builds a script of SCRIPT_BYTE_LIMIT bytes, reports script-too-large on the entry for one byte more, and every other finding beside it', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    const requireEntry = join(folder, 'require-entry.js');
+    await writeFile(entry, `${META}import notes from './notes.txt';\nreturn notes;\n`);
+    await writeFile(requireEntry, `${META}import notes from './notes.txt';\nconst loaded = require('x');\nreturn [notes, loaded];\n`);
+    await writeFile(join(folder, 'notes.txt'), '');
+    const emptyScript = (await build({ entry, out, write: false })).script;
+    const emptyRequireScript = (await build({ entry: requireEntry, out, write: false, validate: false })).script;
+    const entryPath = await formatBuildPath(folder, 'entry.js');
+    const requireEntryPath = await formatBuildPath(folder, 'require-entry.js');
+    const sizeMessage = `The built script is ${SCRIPT_BYTE_LIMIT + 1} bytes, which is more than the ${SCRIPT_BYTE_LIMIT} bytes the runtime reads`;
+
+    await writeFile(join(folder, 'notes.txt'), 'a'.repeat(SCRIPT_BYTE_LIMIT - Buffer.byteLength(emptyScript)));
+    const limitResult = await build({ entry, out, write: false });
+    await writeFile(join(folder, 'notes.txt'), 'a'.repeat(SCRIPT_BYTE_LIMIT - Buffer.byteLength(emptyScript) + 1));
+    const largeResult = await build({ entry, out, write: false });
+    const unvalidatedLargeResult = await build({ entry, out, write: false, validate: false });
+    await writeFile(join(folder, 'notes.txt'), 'a'.repeat(SCRIPT_BYTE_LIMIT - Buffer.byteLength(emptyRequireScript) + 1));
+    const requireResult = await build({ entry: requireEntry, out, write: false });
+
+    assert.equal(Buffer.byteLength(limitResult.script), SCRIPT_BYTE_LIMIT);
+    assert.equal(limitResult.status, 'built');
+    assert.deepEqual(largeResult.findings, [{ rule: 'script-too-large', message: sizeMessage, fix: FIXES['script-too-large'], file: entryPath, line: 1, column: 1 }]);
+    assert.equal(unvalidatedLargeResult.status, 'built');
+    assert.deepEqual(requireResult.findings.map(({ rule, file, line, column }) => ({ rule, file, line, column })), [
+      { rule: 'script-too-large', file: requireEntryPath, line: 1, column: 1 },
+      { rule: 'global-undefined', file: requireEntryPath, line: 3, column: 16 },
+    ]);
+    assert.equal(requireResult.findings[0].message, sizeMessage);
+  });
+
+  it('reports runtime-reserved-name at an import alias in its source, with validate on or off', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    await writeFile(entry, `${META}import { a as __wRg$x } from './m.js';\n`);
+    await writeFile(join(folder, 'm.js'), 'export const a = 1;\n');
+
+    const results = [await build({ entry, out: join(folder, 'out.js'), write: false }), await build({ entry, out: join(folder, 'out.js'), write: false, validate: false })];
+
+    for (const result of results) {
+      assert.deepEqual(result.findings, [{
+        rule: 'runtime-reserved-name',
+        message: 'The name __wRg$x starts with __wRg$',
+        fix: FIXES['runtime-reserved-name'],
+        file: await formatBuildPath(folder, 'entry.js'),
+        line: 2,
+        column: 15,
+      }]);
+    }
+  });
+
+  it('checks the built script before the comparison of check, and compares with validate: false', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    await writeFile(entry, `${META}return Date.now();\n`);
+    await build({ entry, out, validate: false });
+
+    const checked = await build({ entry, out, check: true });
+    const compared = await build({ entry, out, check: true, validate: false });
+
+    assert.deepEqual({ status: checked.status, rules: checked.findings.map((finding) => finding.rule), firstDifference: checked.firstDifference }, { status: 'failed', rules: ['clock-unavailable'], firstDifference: undefined });
+    assert.equal(compared.status, 'fresh');
+  });
+
+  it('rejects validate that is not a boolean', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), `${META}return 1;\n`);
+
+    await assert.rejects(build({ entry: join(folder, 'entry.js'), out: join(folder, 'out.js'), validate: 'no' }), (error) => error.name === 'UsageError' && error.message === 'build() takes validate as a boolean');
+  });
+
+  it('throws a defect of the tool for a contract finding on a line the build adds', () => {
+    const finding = { rule: 'runtime-reserved-name', message: 'The script names __wRg$x, which starts with __wRg$', fix: FIXES['runtime-reserved-name'], file: '', line: 3, column: 9 };
+
+    assert.throws(
+      () => placeContractFinding(finding, { file: '/work/entry.js', line: null, column: null, text: null }),
+      (error) => error.name === 'Error'
+        && error.message === 'The built script breaks the rule runtime-reserved-name at line 3, column 9, on a line the build adds, which is a defect in dynamic-workflow-bundler. Build with --no-validate, or validate: false, until it is fixed',
+    );
+    assert.deepEqual(placeContractFinding(finding, { file: '/work/entry.js', line: 2, column: 15, text: 'x' }), { ...finding, file: '/work/entry.js', line: 2, column: 15 });
+  });
+});
+
 describe('compileBuiltScript', () => {
   it('reports a built script that does not compile as a defect of the tool, with the syntax error as its cause', () => {
-    const meta = 'export const meta = {};';
+    const meta = 'export const meta = { name: "p", description: "d" };';
 
     assert.doesNotThrow(() => compileBuiltScript(`${meta}\nreturn 1;`, meta.length));
     assert.throws(

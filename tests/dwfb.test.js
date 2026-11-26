@@ -57,6 +57,7 @@ describe('dwfb', () => {
     assert.equal(buildHelp.status, 0);
     assert.match(buildHelp.stdout, /^Usage: dwfb build \[<entry>\] \[--out <file>\]/);
     assert.match(buildHelp.stdout, /--config <path> {3}Read this config file in place of dwfb\.config\.js or dwfb\.config\.mjs\./);
+    assert.match(buildHelp.stdout, /\n {2}--no-banner {7}Leave out the banner line\.\n {2}--no-validate {5}Skip the check of the built script against the runtime's contract\.\n/);
   });
 
   it('prints usage to stderr and exits 2 with no command, an unknown command or an unknown option', () => {
@@ -107,7 +108,7 @@ describe('dwfb build', () => {
     const realFolder = join(folder, 'real');
     const linkFolder = join(folder, 'link');
     await mkdir(realFolder);
-    await writeFile(join(realFolder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nreturn a;\n");
+    await writeFile(join(realFolder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a.js';\nreturn a;\n");
     await writeFile(join(realFolder, 'a.js'), 'export const a = 1;\n');
     await symlink(realFolder, linkFolder, 'junction');
 
@@ -127,7 +128,7 @@ describe('dwfb build', () => {
     const realFolder = join(folder, 'real');
     const linkFolder = join(folder, 'link');
     await mkdir(realFolder);
-    await writeFile(join(realFolder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nreturn a;\n");
+    await writeFile(join(realFolder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a.js';\nreturn a;\n");
     await writeFile(join(realFolder, 'a.js'), 'export const a = 1;\n');
     await symlink(realFolder, linkFolder, 'junction');
 
@@ -159,7 +160,7 @@ describe('dwfb build', () => {
 
   it('prints one JSON object with --json, with paths relative to the working directory', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport { a } from './a.js';\nreturn a;\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './a.js';\nreturn a;\n");
     await writeFile(join(folder, 'a.js'), 'export const a = 1;\n');
 
     const written = runCommand(['build', 'entry.js', '--out', 'dist/out.js', '--json'], folder);
@@ -237,7 +238,7 @@ describe('dwfb build', () => {
 
   it('names the command that rewrites a missing or differing script, with the paths and --no-banner of the check', async () => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
 
     const missing = runCommand(['build', 'entry.js', '--out', 'my out.js', '--check', '--json'], folder);
     const missingText = runCommand(['build', join(folder, 'entry.js'), '--out', 'my out.js', '--check'], folder);
@@ -253,9 +254,28 @@ describe('dwfb build', () => {
     assert.match(stale.stdout, /^my out\.js:2 differs from the script the build gives\. .* Run dwfb build entry\.js --out "my out\.js" --no-banner\.\n$/);
   });
 
+  it('prints a contract finding of the built script at its source line and exits 1, and builds it with --no-validate', async () => {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\nimport { stamp } from \'./clock.js\';\nreturn stamp();\n');
+    await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  return Date.now();\n}\n');
+
+    const refused = runCommand(['build', 'entry.js', '--out', 'out.js'], folder);
+    const missing = runCommand(['build', 'entry.js', '--out', 'out.js', '--no-validate', '--check'], folder);
+    const built = runCommand(['build', 'entry.js', '--out', 'out.js', '--no-validate'], folder);
+
+    assert.deepEqual(refused, {
+      status: 1,
+      stdout: 'clock.js:2:10 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.\n',
+      stderr: '',
+    });
+    assert.equal(missing.stdout, 'out.js does not exist. Run dwfb build entry.js --out out.js --no-validate.\n');
+    assert.equal(built.status, 0);
+    assert.match(built.stdout, /^Built out\.js from 2 source files, \d+ bytes\.\n$/);
+  });
+
   it('names the file and the cause of a file system failure, exits 2 and prints no stack', async (context) => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), "export const meta = {};\nimport './a.js';\n");
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport './a.js';\n");
     await writeFile(join(folder, 'a.js'), '');
     await writeFile(join(folder, 'out.js'), '');
     // Windows refuses a rename over a read-only file, and POSIX refuses to open a file with no read permission.
@@ -280,7 +300,7 @@ describe('dwfb build', () => {
     if (process.platform === 'win32') return context.skip('Windows has no search permission on a folder');
     if (process.getuid?.() === 0) return context.skip('root searches every folder');
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n');
     await mkdir(join(folder, 'locked', 'dist'), { recursive: true });
     await chmod(join(folder, 'locked'), 0o000);
 
@@ -295,7 +315,7 @@ describe('dwfb build', () => {
 
   it('names the out file and the cause when --check cannot read it, and exits 2', async (context) => {
     const folder = await makeTemporaryFolder();
-    await writeFile(join(folder, 'entry.js'), 'export const meta = {};\n');
+    await writeFile(join(folder, 'entry.js'), 'export const meta = { name: "p", description: "d" };\n');
     await writeFile(join(folder, 'out.js'), '');
     if (process.platform === 'win32') return context.skip('Windows reads every file that chmod changes');
     if (process.getuid?.() === 0) return context.skip('root reads every file');
@@ -395,9 +415,9 @@ describe('dwfb build with a config file', () => {
     const library = 'export const a = 1;\n';
     await mkdir(join(folder, 'w'));
     await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
-    await writeFile(join(folder, 'w', 'b.js'), "export const meta = {};\nimport { a } from './lib.js';\nreturn a;\n");
+    await writeFile(join(folder, 'w', 'b.js'), "export const meta = { name: 'p', description: 'd' };\nimport { a } from './lib.js';\nreturn a;\n");
     await writeFile(join(folder, 'w', 'lib.js'), library);
-    await writeFile(join(folder, 'w', 'a.js'), 'export const meta = {};\nreturn 1;\n');
+    await writeFile(join(folder, 'w', 'a.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
     await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'w/b.js', out: 'dist/b.js' }, { entry: 'w/a.js', out: 'w/lib.js' }] };\n");
     const expected = {
       status: 2,
@@ -419,8 +439,8 @@ describe('dwfb build with a config file', () => {
     await mkdir(join(folder, 'dist'));
     await symlink(join(folder, 'dist'), join(folder, 'linked'), 'junction');
     await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
-    await writeFile(join(folder, 'a.js'), 'export const meta = {};\nreturn 1;\n');
-    await writeFile(join(folder, 'b.js'), 'export const meta = {};\nreturn 2;\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'b.js'), 'export const meta = { name: "p", description: "d" };\nreturn 2;\n');
     await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'dist/out.js' }, { entry: 'b.js', out: 'linked/Out.js' }] };\n");
     const expected = {
       status: 2,

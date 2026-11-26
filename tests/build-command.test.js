@@ -4,10 +4,12 @@ import { describe, it } from 'node:test';
 import { formatBuildCommand, formatCommandPath } from '../src/build-command.js';
 
 describe('build-command', () => {
-  it('names each option it is given, in the order entry, --out, --config, --no-banner', () => {
+  it('names each option it is given, in the order entry, --out, --config, --no-banner, --no-validate', () => {
     assert.equal(formatBuildCommand(undefined, {}), 'dwfb build');
     assert.equal(formatBuildCommand(undefined, { config: 'other.config.js' }), 'dwfb build --config other.config.js');
     assert.equal(formatBuildCommand(join(process.cwd(), 'src', 'entry.js'), { out: 'dist/w.js', 'no-banner': true }), 'dwfb build src/entry.js --out dist/w.js --no-banner');
+    assert.equal(formatBuildCommand(undefined, { 'no-validate': true, 'no-banner': true }), 'dwfb build --no-banner --no-validate');
+    assert.equal(formatBuildCommand(undefined, { 'no-validate': false }), 'dwfb build');
   });
 
   it('quotes a path that holds a character a shell reads', () => {

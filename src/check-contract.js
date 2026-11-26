@@ -21,7 +21,7 @@ const NON_DEFINING_ASSIGNMENT = '&&=';
 // The runtime refuses a script file larger than this.
 export const SCRIPT_BYTE_LIMIT = 524288;
 // The runtime refuses a variable name with this prefix, which its own code uses.
-const RUNTIME_RESERVED_PREFIX = '__wRg$';
+export const RUNTIME_RESERVED_PREFIX = '__wRg$';
 // The runtime refuses a meta object that holds a key of one of these names, at any depth.
 const RESERVED_META_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // The runtime checks these keys of meta and no other, each for a string of 1 or more characters.

@@ -3,13 +3,14 @@ import { isFolderPath } from './display-path.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
-const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner']);
+const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate']);
 
 /**
  * @typedef {object} ConfigWorkflow
  * @property {string} entry The entry file's absolute path.
  * @property {string} out The built script's absolute path.
  * @property {boolean} banner Defaults to true.
+ * @property {boolean} validate Whether the build checks the built script against the contract. Defaults to true.
  */
 
 /**
@@ -55,17 +56,18 @@ export function checkConfig(value, configFile, configPath) {
  * @returns {ConfigWorkflow}
  */
 function checkWorkflow(row, rowLabel, configFolder) {
-  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner }`);
+  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate }`);
   const unknownKey = Object.keys(row).find((key) => !WORKFLOW_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`${rowLabel} has an unknown key ${unknownKey}`);
-  const { entry, out, banner = true } = row;
+  const { entry, out, banner = true, validate = true } = row;
   if (typeof entry !== 'string' || entry === '') throw new UsageError(`${rowLabel} needs entry, the path of an entry file`);
   if (typeof out !== 'string' || out === '') throw new UsageError(`${rowLabel} needs out, the path of the built script`);
   if (typeof banner !== 'boolean') throw new UsageError(`${rowLabel} takes banner as a boolean`);
+  if (typeof validate !== 'boolean') throw new UsageError(`${rowLabel} takes validate as a boolean`);
   if (isFolderPath(entry)) throw new UsageError(`${rowLabel} gives the entry ${entry}, which is not a file`);
   if (isFolderPath(out)) throw new UsageError(`${rowLabel} gives the out path ${out}, which names a folder`);
 
-  return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner };
+  return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner, validate };
 }
 
 /**

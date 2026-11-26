@@ -5,6 +5,7 @@ import { join, relative } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { build, locate } from 'dynamic-workflow-bundler';
 import { formatCommandPath } from '../src/build-command.js';
+import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { writeSizedFile } from './support/write-sized-file.js';
 
@@ -205,6 +206,91 @@ describe('locate', () => {
     const [finding] = (await locate({ script, line: 1, config })).findings;
 
     assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(join(folder, 'entry.js'))} --out ${formatCommandPath(script)} --no-banner, since the line numbers may not match the source`);
+  });
+
+  it('names --no-validate in the script-stale fix of a script whose build breaks the contract, and that command rewrites the script', async () => {
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'dwfb-locate-')));
+    temporaryFolders.push(folder);
+    const entry = join(folder, 'entry.js');
+    const script = join(folder, 'dist', 'workflow.js');
+    await writeFile(entry, "export const meta = { name: 'clock', description: 'Reads the clock' };\nimport { stamp } from './clock.js';\nreturn stamp();\n");
+    await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  return Date.now();\n}\n');
+    await build({ entry, out: script, validate: false });
+    await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  const now = Date.now();\n  return now;\n}\n');
+
+    const [finding] = (await locate({ script, line: 1 })).findings;
+    const rewrite = await build({ entry, out: script, validate: false });
+
+    assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)} --no-validate, since the line numbers may not match the source`);
+    assert.equal(rewrite.status, 'written');
+    assert.equal((await locate({ script, line: 1 })).ok, true);
+  });
+
+  it('names no --no-validate in the script-stale fix of a script whose build breaks no rule, though its workflow has validate: false', async () => {
+    const { folder, script } = await writeBuiltFixture(false);
+    const config = join(folder, 'dwfb.config.mjs');
+    await writeFile(config, "export default { workflows: [{ entry: 'entry.js', out: 'dist/workflow.js', banner: false, validate: false }] };\n");
+    await writeFile(join(folder, 'part.js'), 'const partValue = 3;\n');
+
+    const [finding] = (await locate({ script, line: 1, config })).findings;
+
+    assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(join(folder, 'entry.js'))} --out ${formatCommandPath(script)} --no-banner, since the line numbers may not match the source`);
+  });
+
+  it('names --no-validate in the script-stale fix of a script with no banner whose workflow\'s banner makes its build too large', async () => {
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'dwfb-locate-')));
+    temporaryFolders.push(folder);
+    const entry = join(folder, 'entry.js');
+    const script = join(folder, 'dist', 'workflow.js');
+    const notes = join(folder, 'notes.txt');
+    const config = join(folder, 'dwfb.config.mjs');
+    await writeFile(entry, "export const meta = { name: 'notes', description: 'Returns the notes' };\nimport notes from './notes.txt';\nreturn notes;\n");
+    await writeFile(notes, '');
+    await writeFile(config, "export default { workflows: [{ entry: 'entry.js', out: 'dist/workflow.js' }] };\n");
+    const emptyScript = (await build({ entry, out: script, banner: false, write: false })).script;
+    await writeFile(notes, 'a'.repeat(SCRIPT_BYTE_LIMIT - Buffer.byteLength(emptyScript)));
+    await build({ entry, out: script, banner: false });
+    await writeFile(script, `${await readFile(script, 'utf8')}// edited\n`);
+
+    const [finding] = (await locate({ script, line: 1, config })).findings;
+    const bannerBuild = await build({ entry, out: script, write: false });
+
+    assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)} --no-validate, since the line numbers may not match the source`);
+    assert.deepEqual(bannerBuild.findings.map((buildFinding) => buildFinding.rule), ['script-too-large']);
+  });
+
+  it('names no --no-validate in the script-stale fix of a script with no banner whose workflow\'s banner gives its build a source finding', async () => {
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'dwfb-locate-')));
+    temporaryFolders.push(folder);
+    const entry = join(folder, 'entry.js');
+    const script = join(folder, 'dist', 'workflow.js');
+    const config = join(folder, 'dwfb.config.mjs');
+    await writeFile(entry, "export const meta = { name: 'comment', description: 'Holds a comment' }; /* first\nsecond */\nreturn 1;\n");
+    await writeFile(config, "export default { workflows: [{ entry: 'entry.js', out: 'dist/workflow.js' }] };\n");
+    await build({ entry, out: script, banner: false });
+    await writeFile(script, `${await readFile(script, 'utf8')}// edited\n`);
+
+    const [finding] = (await locate({ script, line: 1, config })).findings;
+    const bannerBuild = await build({ entry, out: script, write: false });
+
+    assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)}, since the line numbers may not match the source`);
+    assert.deepEqual(bannerBuild.findings.map((buildFinding) => buildFinding.rule), ['meta-not-alone']);
+  });
+
+  it('maps a line of a built script whose module calls Date.now(), which the contract check of a build refuses', async () => {
+    const folder = await realpath(await mkdtemp(join(tmpdir(), 'dwfb-locate-')));
+    temporaryFolders.push(folder);
+    const entry = join(folder, 'entry.js');
+    const script = join(folder, 'dist', 'workflow.js');
+    await writeFile(entry, "export const meta = { name: 'clock', description: 'Reads the clock' };\nimport { stamp } from './clock.js';\nreturn stamp();\n");
+    await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  return Date.now();\n}\n');
+    await build({ entry, out: script, validate: false });
+    const lines = (await readFile(script, 'utf8')).split('\n');
+
+    const result = await locate({ script, line: lines.indexOf('  return Date.now();') + 1, column: 10 });
+
+    assert.deepEqual(result, { ok: true, file: formatPath(folder, 'clock.js'), line: 2, column: 10, text: '  return Date.now();', generated: false, findings: [] });
+    assert.equal((await build({ entry, out: script, check: true })).status, 'failed');
   });
 
   it('names the banner of the config file\'s workflow in the script-stale fix of a script that does not parse or has no banner', async () => {

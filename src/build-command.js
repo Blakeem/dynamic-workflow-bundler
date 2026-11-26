@@ -4,7 +4,7 @@ const SHELL_SAFE_PATH_PATTERN = /^[\w./:@+-]+$/;
 
 /**
  * @param {string | undefined} entry
- * @param {{ out?: string, config?: string, 'no-banner'?: boolean }} values The `dwfb build` options.
+ * @param {{ out?: string, config?: string, 'no-banner'?: boolean, 'no-validate'?: boolean }} values The `dwfb build` options.
  * @returns {string} The `dwfb build` command with these options, which a message names as the command that
  *   rewrites a script.
  */
@@ -15,6 +15,7 @@ export function formatBuildCommand(entry, values) {
   if (values.out !== undefined) args.push('--out', formatCommandPath(values.out));
   if (values.config !== undefined) args.push('--config', formatCommandPath(values.config));
   if (values['no-banner']) args.push('--no-banner');
+  if (values['no-validate']) args.push('--no-validate');
 
   return args.join(' ');
 }
