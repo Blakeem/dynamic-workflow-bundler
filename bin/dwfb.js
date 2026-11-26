@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -8,9 +8,9 @@ import { formatBuildCommand } from '../src/build-command.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatFinding } from '../src/format-finding.js';
-import { CONFIG_FILE, loadConfig } from '../src/load-config.js';
+import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
 import { locate } from '../src/locate.js';
-import { findRealPath } from '../src/real-path.js';
+import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
 import { writeScript } from '../src/write-script.js';
 
@@ -41,7 +41,7 @@ workflow of the config file that has this entry. With an entry and --out, reads 
 
 Options:
   --out <file>      Write the built script to this file.
-  --config <path>   Read this config file in place of ${CONFIG_FILE}.
+  --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
   --check           Write nothing, and report each built script that differs from its source.
   --no-banner       Leave out the banner line.
   --json            Print the result as one JSON object.
@@ -66,7 +66,7 @@ workflow of the config file whose out is the script.
 Options:
   --runtime         Read the line and column as the runtime reports them, as in workflow.js:5:9.
   --entry <file>    Build the script from this entry.
-  --config <path>   Read this config file in place of ${CONFIG_FILE}.
+  --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
   --json            Print the result as one JSON object.
   --help            Print this help.
 `;
@@ -137,7 +137,7 @@ async function runBuild(args) {
   for (const workflow of workflows) {
     const banner = values['no-banner'] ? false : workflow.banner;
     try {
-      builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false }) });
+      builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false }), out: null });
     } catch (error) {
       return printCommandFailure('dwfb build', error);
     }
@@ -148,15 +148,17 @@ async function runBuild(args) {
     return printCommandFailure('dwfb build', error);
   }
   for (const builtWorkflow of builtWorkflows) {
-    if (builtWorkflow.result.status === 'built') {
-      try {
+    try {
+      if (builtWorkflow.result.status === 'built') {
         await writeScript(resolve(builtWorkflow.workflow.out), builtWorkflow.result.script);
-      } catch (error) {
-        return printCommandFailure('dwfb build', error);
+        builtWorkflow.result = { ...builtWorkflow.result, status: 'written' };
       }
-      builtWorkflow.result = { ...builtWorkflow.result, status: 'written' };
+      // The out path takes the base of the source paths, so that one output names each file one way.
+      builtWorkflow.out = await formatRealDisplayPath(builtWorkflow.workflow.out);
+    } catch (error) {
+      return printCommandFailure('dwfb build', error);
     }
-    if (!values.json) process.stdout.write(formatBuildText(builtWorkflow.workflow, builtWorkflow.result, buildCommand));
+    if (!values.json) process.stdout.write(formatBuildText(builtWorkflow.out, builtWorkflow.result, buildCommand));
   }
 
   const isSuccess = builtWorkflows.every(({ result }) => SUCCESS_STATUSES.has(result.status));
@@ -231,17 +233,17 @@ function formatLocateText(result) {
  */
 async function findWorkflows(entry, out, configPath) {
   if (out !== undefined) return [{ entry, out, banner: true }];
-  if (configPath === undefined && !existsSync(CONFIG_FILE)) {
+  const commandConfig = await loadCommandConfig(configPath);
+  if (commandConfig === null) {
     const missingWhat = entry === undefined ? 'an entry file' : 'the built script with --out <file>';
-    throw new UsageError(`No config file ${CONFIG_FILE} exists here, so name ${missingWhat}`);
+    throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name ${missingWhat}`);
   }
 
-  const config = await loadConfig(configPath ?? CONFIG_FILE);
-  const configWorkflows = config.workflows.map((workflow) => ({ ...workflow, entry: formatDisplayPath(workflow.entry), out: formatDisplayPath(workflow.out) }));
+  const configWorkflows = commandConfig.config.workflows.map((workflow) => ({ ...workflow, entry: formatDisplayPath(workflow.entry), out: formatDisplayPath(workflow.out) }));
   if (entry === undefined) return configWorkflows;
 
   const entryWorkflows = await findConfigWorkflows(configWorkflows, 'entry', entry);
-  if (entryWorkflows.length === 0) throw new UsageError(`The config file ${configPath ?? CONFIG_FILE} has no workflow whose entry is ${entry}`);
+  if (entryWorkflows.length === 0) throw new UsageError(`The config file ${commandConfig.file} has no workflow whose entry is ${entry}`);
 
   return entryWorkflows;
 }
@@ -280,14 +282,12 @@ async function checkOutFiles(builtWorkflows) {
 }
 
 /**
- * @param {{ out: string }} workflow
+ * @param {string} out The built script, as formatRealDisplayPath gives it.
  * @param {import('../src/build.js').BuildResult} result
  * @param {string} buildCommand The command that rewrites a script that differs or is missing.
  * @returns {string} The lines a person reads for one workflow.
  */
-function formatBuildText(workflow, result, buildCommand) {
-  const out = formatDisplayPath(workflow.out);
-
+function formatBuildText(out, result, buildCommand) {
   if (result.status === 'failed') return result.findings.map((finding) => `${formatFinding(finding)}\n`).join('');
   if (result.status === 'fresh') return `${out} matches its source.\n`;
   if (result.status === 'missing') return `${out} does not exist. Run ${buildCommand}.\n`;
@@ -309,16 +309,19 @@ function formatLineSource({ file, sourceLine }) {
 }
 
 /**
- * @param {{ workflow: { entry: string, out: string }, result: import('../src/build.js').BuildResult }[]} builtWorkflows
+ * @param {{ result: import('../src/build.js').BuildResult, out: string }[]} builtWorkflows Each `out` as
+ *   formatRealDisplayPath gives it.
  * @param {boolean} isSuccess
- * @returns {object} The `--json` shape, which is part of the public interface.
+ * @returns {object} The `--json` shape, which is part of the public interface. Every path takes the form
+ *   BuildResult gives it, except `out`, which takes the form formatRealDisplayPath gives it.
  */
 function formatBuildJson(builtWorkflows, isSuccess) {
   return {
     ok: isSuccess,
-    workflows: builtWorkflows.map(({ workflow, result }) => ({
-      entry: formatDisplayPath(workflow.entry),
-      out: formatDisplayPath(workflow.out),
+    workflows: builtWorkflows.map(({ result, out }) => ({
+      // A build reads the entry first, so its first source names the entry against the base of the other paths.
+      entry: result.sources[0],
+      out,
       status: result.status,
       bytes: result.script === null ? null : Buffer.byteLength(result.script, 'utf8'),
       sources: result.sources,
@@ -331,16 +334,29 @@ function formatBuildJson(builtWorkflows, isSuccess) {
 /**
  * @param {string} label The command, such as `dwfb build`.
  * @param {unknown} error
- * @returns {number}
+ * @returns {Promise<number>}
  */
-function printCommandFailure(label, error) {
+async function printCommandFailure(label, error) {
   if (error instanceof UsageError) return printUsageError(label, `${error.message}.\n`);
   if (isFileSystemError(error)) {
-    process.stderr.write(`${label}: Could not read or write ${formatDisplayPath(error.path)} (${error.syscall} ${error.code}).\n`);
+    process.stderr.write(`${label}: Could not read or write ${await formatFailedPath(error.path)} (${error.syscall} ${error.code}).\n`);
     return EXIT_FAILURE;
   }
   process.stderr.write(`${label}: internal failure.\n${error.stack ?? error}\n`);
   return EXIT_FAILURE;
+}
+
+/**
+ * @param {string} path The path a file system call failed on.
+ * @returns {Promise<string>} The path as formatRealDisplayPath gives it, or as formatDisplayPath gives it when
+ *   the folders above it cannot be read, since that error would hide the failure the message reports.
+ */
+async function formatFailedPath(path) {
+  try {
+    return await formatRealDisplayPath(path);
+  } catch {
+    return formatDisplayPath(path);
+  }
 }
 
 /**

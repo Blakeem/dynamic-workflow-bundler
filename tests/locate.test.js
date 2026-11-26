@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -132,6 +132,23 @@ describe('locate', () => {
     assert.deepEqual(failed.findings.map(({ rule, file }) => ({ rule, file })), [{ rule: 'export-not-constant', file: formatPath(folder, 'greet.js') }]);
   });
 
+  it('names a script that is a file link by its own name in the script-stale finding, as dwfb build names its out', async (context) => {
+    const { folder, script } = await writeBuiltFixture();
+    const linkScript = join(folder, 'dist', 'link.js');
+    try {
+      await symlink(script, linkScript, 'file');
+    } catch (error) {
+      // Windows refuses a file link to a user without the privilege to create one.
+      if (error.code === 'EPERM') return context.skip('this user cannot create a file link');
+      throw error;
+    }
+    await writeFile(join(folder, 'greet.js'), 'export function greet(name) {\n  return `Hi ${name}`;\n}\n');
+
+    const [finding] = (await locate({ script: linkScript, line: 1 })).findings;
+
+    assert.deepEqual({ rule: finding.rule, file: finding.file }, { rule: 'script-stale', file: formatPath(folder, 'dist/link.js') });
+  });
+
   it('finds the entry of a script with no banner from the config file\'s workflow whose out is the script', async () => {
     const { folder, script, lines } = await writeBuiltFixture(false);
     const config = join(folder, 'dwfb.config.mjs');
@@ -143,7 +160,38 @@ describe('locate', () => {
 
     assert.deepEqual({ file: result.file, line: result.line }, { file: formatPath(folder, 'part.js'), line: 1 });
     await assert.rejects(locate({ script, line: 1, config: otherConfig }), { name: 'UsageError', message: /has no banner, and the config file .* has no workflow whose out is the script, so name the entry it is built from with --entry <file>$/ });
-    await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /has no banner, and no config file dwfb\.config\.js exists here/ });
+    await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /has no banner, and no config file dwfb\.config\.js or dwfb\.config\.mjs exists here/ });
+  });
+
+  it('reads dwfb.config.mjs from the working directory, refuses it beside dwfb.config.js, and needs neither for a script with a banner', async () => {
+    const { folder, entry, script, lines } = await writeBuiltFixture(false);
+    const bannerScript = join(folder, 'dist', 'banner.js');
+    const partLine = lines.indexOf('const partValue = 2;') + 1;
+    const configText = "export default { workflows: [{ entry: 'entry.js', out: 'dist/workflow.js', banner: false }] };\n";
+    const workFolder = process.cwd();
+    await build({ entry, out: bannerScript });
+    const bannerPartLine = (await readFile(bannerScript, 'utf8')).split('\n').indexOf('const partValue = 2;') + 1;
+    // A CommonJS package loads only the .mjs config file as an ES module.
+    await writeFile(join(folder, 'package.json'), '{ "type": "commonjs" }\n');
+    await writeFile(join(folder, 'dwfb.config.mjs'), configText);
+
+    process.chdir(folder);
+    try {
+      const fromModuleConfig = await locate({ script, line: partLine });
+      await writeFile(join(folder, 'dwfb.config.js'), configText);
+      await assert.rejects(locate({ script, line: partLine }), {
+        name: 'UsageError',
+        message: 'The config files dwfb.config.js and dwfb.config.mjs both exist here, so remove one or name one with --config <path>',
+      });
+      const fromBanner = await locate({ script: bannerScript, line: bannerPartLine });
+      const fromNamedConfig = await locate({ script, line: partLine, config: 'dwfb.config.mjs' });
+
+      assert.deepEqual({ file: fromModuleConfig.file, line: fromModuleConfig.line }, { file: 'part.js', line: 1 });
+      assert.deepEqual({ file: fromBanner.file, line: fromBanner.line }, { file: 'part.js', line: 1 });
+      assert.deepEqual({ file: fromNamedConfig.file, line: fromNamedConfig.line }, { file: 'part.js', line: 1 });
+    } finally {
+      process.chdir(workFolder);
+    }
   });
 
   it('names --no-banner in the script-stale fix of a script with no banner', async () => {
@@ -211,7 +259,7 @@ describe('locate', () => {
     const { entry, script, lines } = await writeBuiltFixture();
     await writeFile(script, ['export const meta = {;', ...lines.slice(1)].join('\n'));
 
-    await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /^The script .*workflow\.js does not parse, and no config file dwfb\.config\.js exists here, so name the entry it is built from with --entry <file>$/ });
+    await assert.rejects(locate({ script, line: 1 }), { name: 'UsageError', message: /^The script .*workflow\.js does not parse, and no config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name the entry it is built from with --entry <file>$/ });
     const [finding] = (await locate({ script, line: 1, entry })).findings;
 
     assert.deepEqual({ rule: finding.rule, line: finding.line, fix: finding.fix }, {

@@ -46,7 +46,8 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check']);
  *   then each module, text file and JSON file in the order its first import reached it.
  * @property {Finding[]} findings
  * @property {FirstDifference} [firstDifference] Present when `status` is `stale`.
- * Every path is relative to the real path of the working directory, with forward slashes.
+ * Every path is relative to the real path of the working directory, with forward slashes. A file on another
+ * drive than the working directory gets its absolute real path, since no relative path reaches that drive.
  */
 
 /**

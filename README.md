@@ -98,7 +98,7 @@ A part is a list of complete statements with no `import` or `export`. One `// @i
 
 ### Config file
 
-A project with several workflows lists them in `dwfb.config.js` in the folder the command runs in. The file is an ES module whose default export names the entry and the built script of each workflow. Node loads a `.js` file as an ES module when the nearest `package.json` sets `"type": "module"`, so set it there, or name a `.mjs` config file with `--config`. Each path is relative to the config file's folder.
+A project with several workflows lists them in `dwfb.config.js` or `dwfb.config.mjs` in the folder the command runs in. The file is an ES module whose default export names the entry and the built script of each workflow. Node loads a `.js` file as CommonJS when the nearest `package.json` sets `"type": "commonjs"`, and before Node 22.7 when it sets no type. So a project whose package is not an ES module package names its config file `dwfb.config.mjs`. When both files exist, a command that needs the config file stops until one is removed or `--config <path>` names one. Each path is relative to the config file's folder.
 
 ```js
 export default {

@@ -1,15 +1,15 @@
 import { existsSync } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, parse, relative, resolve } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { dirname, parse, resolve } from 'node:path';
 import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
 import { formatBuildCommand } from './build-command.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
-import { formatDisplayPath, formatForwardSlashes } from './display-path.js';
+import { formatDisplayPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
-import { CONFIG_FILE, loadConfig } from './load-config.js';
+import { CONFIG_FILES_TEXT, loadCommandConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
-import { findRealPath } from './real-path.js';
+import { findRealPath, formatRealDisplayPath } from './real-path.js';
 import { countLines } from './source-position.js';
 import { UsageError } from './usage-error.js';
 
@@ -33,7 +33,7 @@ const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entr
  *   Defaults to false.
  * @property {string} [entry] The entry the script is built from. Wins over the banner and the config file.
  * @property {string} [config] The config file whose workflow with this `out` names the entry of a script with
- *   no banner. Defaults to dwfb.config.js in the working directory.
+ *   no banner. Defaults to the one of dwfb.config.js and dwfb.config.mjs that exists in the working directory.
  */
 
 /**
@@ -55,7 +55,8 @@ const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entr
  * entry, and writes and prints nothing.
  * Rejects with a UsageError for options of another shape, a script that does not exist, a line or column
  * that is not a whole number of 1 or more or lies past the script's text, with `runtime` a line that the
- * runtime's numbering cannot convert, an entry it cannot find, and every usage error of the build.
+ * runtime's numbering cannot convert, an entry it cannot find, two config files in the working directory
+ * when it needs one, and every usage error of the build.
  * @param {LocateOptions} options
  * @returns {Promise<LocateResult>}
  */
@@ -123,8 +124,8 @@ async function readScript(script) {
  *   file's workflow, or true for an entry the banner names.
  */
 async function findScriptWorkflow(script, banner, config) {
-  const configPath = config ?? CONFIG_FILE;
   const noBannerReason = banner.hasSyntaxError ? 'does not parse' : 'has no banner';
+  let commandConfig = null;
 
   if (banner.path !== null) {
     // The build gives the banner path relative to the real path of the script's folder, so a path with a root
@@ -138,14 +139,15 @@ async function findScriptWorkflow(script, banner, config) {
     }
     return { entry: formatDisplayPath(bannerEntry), banner: true };
   }
-  if (config === undefined && !existsSync(CONFIG_FILE)) {
-    throw new UsageError(`The script ${script} ${noBannerReason}, and no config file ${CONFIG_FILE} exists here, so name the entry it is built from with --entry <file>`);
+  // A script whose banner names its entry needs no config file, so two config files do not stop it.
+  commandConfig = await loadCommandConfig(config);
+  if (commandConfig === null) {
+    throw new UsageError(`The script ${script} ${noBannerReason}, and no config file ${CONFIG_FILES_TEXT} exists here, so name the entry it is built from with --entry <file>`);
   }
-  const { workflows } = await loadConfig(configPath);
-  const [scriptWorkflow] = await findConfigWorkflows(workflows, 'out', script);
+  const [scriptWorkflow] = await findConfigWorkflows(commandConfig.config.workflows, 'out', script);
   if (scriptWorkflow !== undefined) return { entry: formatDisplayPath(scriptWorkflow.entry), banner: scriptWorkflow.banner };
 
-  throw new UsageError(`The script ${script} ${noBannerReason}, and the config file ${configPath} has no workflow whose out is the script, so name the entry it is built from with --entry <file>`);
+  throw new UsageError(`The script ${script} ${noBannerReason}, and the config file ${commandConfig.file} has no workflow whose out is the script, so name the entry it is built from with --entry <file>`);
 }
 
 /**
@@ -183,8 +185,8 @@ function createFailedResult(findings) {
  */
 async function createStaleFinding(script, line, scriptWorkflow) {
   const buildCommand = formatBuildCommand(scriptWorkflow.entry, { out: script, 'no-banner': !scriptWorkflow.banner });
-  // A build gives every path relative to the real path of the working directory.
-  const scriptPath = formatForwardSlashes(relative(await realpath(process.cwd()), await findRealPath(script)));
+  // The script takes the form `dwfb build` gives its out, so both commands name one script one way.
+  const scriptPath = await formatRealDisplayPath(script);
 
   return {
     rule: 'script-stale',

@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { formatDisplayPath, formatForwardSlashes } from './display-path.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 
 /**
@@ -23,4 +24,23 @@ export async function findRealPath(path) {
   }
 
   return join(realPath, relative(existingPath, absolutePath));
+}
+
+/**
+ * Gives a path relative to the real path of the working directory, with forward slashes, as a build gives
+ * each source. The last name keeps its spelling, since a write replaces a link at the path and leaves its target.
+ * @param {string} path A path that may not exist yet. Relative paths resolve against the working directory.
+ * @returns {Promise<string>} `.` for the real path of the working directory. A path whose real folder is on
+ *   another drive than the working directory gets the form formatDisplayPath gives, since no relative path
+ *   reaches that drive.
+ */
+export async function formatRealDisplayPath(path) {
+  const absolutePath = resolve(path);
+  const workFolder = await realpath(process.cwd());
+  const realFolder = await findRealPath(dirname(absolutePath));
+  const realRelativePath = relative(workFolder, join(realFolder, basename(absolutePath)));
+
+  if (isAbsolute(realRelativePath)) return formatDisplayPath(path);
+
+  return formatForwardSlashes(realRelativePath) || '.';
 }
