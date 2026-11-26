@@ -5,7 +5,7 @@ import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
 import { formatBuildCommand } from './build-command.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
-import { formatDisplayPath, formatForwardSlashes, formatOptionPath } from './display-path.js';
+import { formatDisplayPath, formatForwardSlashes } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
 import { CONFIG_FILE, loadConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
@@ -119,7 +119,7 @@ async function readScript(script) {
  * @param {string} script
  * @param {{ path: string | null, hasSyntaxError: boolean }} banner The script's banner, as findBanner gives it.
  * @param {string | undefined} config
- * @returns {Promise<ScriptWorkflow>} The entry, as formatOptionPath gives it, and the banner of the config
+ * @returns {Promise<ScriptWorkflow>} The entry, as formatDisplayPath gives it, and the banner of the config
  *   file's workflow, or true for an entry the banner names.
  */
 async function findScriptWorkflow(script, banner, config) {
@@ -132,14 +132,14 @@ async function findScriptWorkflow(script, banner, config) {
     if (!existsSync(bannerEntry)) {
       throw new UsageError(`The banner of the script ${script} names the entry ${formatDisplayPath(bannerEntry)}, which does not exist, so name the entry it is built from with --entry <file>`);
     }
-    return { entry: formatOptionPath(bannerEntry), banner: true };
+    return { entry: formatDisplayPath(bannerEntry), banner: true };
   }
   if (config === undefined && !existsSync(CONFIG_FILE)) {
     throw new UsageError(`The script ${script} ${noBannerReason}, and no config file ${CONFIG_FILE} exists here, so name the entry it is built from with --entry <file>`);
   }
   const { workflows } = await loadConfig(configPath);
   const [scriptWorkflow] = await findConfigWorkflows(workflows, 'out', script);
-  if (scriptWorkflow !== undefined) return { entry: formatOptionPath(scriptWorkflow.entry), banner: scriptWorkflow.banner };
+  if (scriptWorkflow !== undefined) return { entry: formatDisplayPath(scriptWorkflow.entry), banner: scriptWorkflow.banner };
 
   throw new UsageError(`The script ${script} ${noBannerReason}, and the config file ${configPath} has no workflow whose out is the script, so name the entry it is built from with --entry <file>`);
 }

@@ -152,7 +152,7 @@ function formatPathToken(token) {
   if (file.startsWith(WINDOWS_LONG_PATH_PREFIX)) file = file.slice(WINDOWS_LONG_PATH_PREFIX.length);
   if (!isPathOnDisk(file)) return token;
 
-  return `${formatDisplayPath(file) || '.'}${punctuation}`;
+  return `${formatDisplayPath(file)}${punctuation}`;
 }
 
 /**

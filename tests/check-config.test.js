@@ -31,8 +31,8 @@ describe('checkConfig', () => {
     });
   });
 
-  it('accepts an empty workflows list', () => {
-    assert.deepEqual(check({ workflows: [] }), { workflows: [] });
+  it('names a config file that lists no workflow', () => {
+    assertUsageError({ workflows: [] }, 'The config file dwfb.config.js lists no workflow');
   });
 
   it('names a value of another shape, an unknown key and a missing workflows list', () => {

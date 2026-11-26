@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
 import { formatBuildCommand } from '../src/build-command.js';
-import { formatDisplayPath, formatOptionPath } from '../src/display-path.js';
+import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatFinding } from '../src/format-finding.js';
 import { CONFIG_FILE, loadConfig } from '../src/load-config.js';
@@ -147,7 +147,6 @@ async function runBuild(args) {
   } catch (error) {
     return printCommandFailure('dwfb build', error);
   }
-  if (!values.json && builtWorkflows.length === 0) process.stdout.write(`The config file ${values.config ?? CONFIG_FILE} lists no workflow.\n`);
   for (const builtWorkflow of builtWorkflows) {
     if (builtWorkflow.result.status === 'built') {
       try {
@@ -238,7 +237,7 @@ async function findWorkflows(entry, out, configPath) {
   }
 
   const config = await loadConfig(configPath ?? CONFIG_FILE);
-  const configWorkflows = config.workflows.map((workflow) => ({ ...workflow, entry: formatOptionPath(workflow.entry), out: formatOptionPath(workflow.out) }));
+  const configWorkflows = config.workflows.map((workflow) => ({ ...workflow, entry: formatDisplayPath(workflow.entry), out: formatDisplayPath(workflow.out) }));
   if (entry === undefined) return configWorkflows;
 
   const entryWorkflows = await findConfigWorkflows(configWorkflows, 'entry', entry);

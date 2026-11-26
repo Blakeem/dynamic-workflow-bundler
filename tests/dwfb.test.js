@@ -389,17 +389,14 @@ describe('dwfb build with a config file', () => {
     assert.deepEqual(await readdir(join(folder, 'dist')), []);
   });
 
-  it('says that a config file lists no workflow, and exits 0', async () => {
+  it('exits 2 for a config file that lists no workflow', async () => {
     const folder = await makeTemporaryFolder();
     await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
     await writeFile(join(folder, 'dwfb.config.js'), 'export default { workflows: [] };\n');
+    const expected = { status: 2, stdout: '', stderr: 'dwfb build: The config file dwfb.config.js lists no workflow.\n' };
 
-    const text = runCommand(['build', '--check'], folder);
-    const json = runCommand(['build', '--json'], folder);
-
-    assert.deepEqual(text, { status: 0, stdout: 'The config file dwfb.config.js lists no workflow.\n', stderr: '' });
-    assert.equal(json.status, 0);
-    assert.deepEqual(JSON.parse(json.stdout), { ok: true, workflows: [] });
+    assert.deepEqual(runCommand(['build', '--check'], folder), expected);
+    assert.deepEqual(runCommand(['build', '--json'], folder), expected);
   });
 
   it('builds the workflow of a named entry, and lets --no-banner win over the config file', async () => {

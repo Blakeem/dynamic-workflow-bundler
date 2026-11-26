@@ -26,6 +26,7 @@ const CONFIG_ERROR_FIXTURES = Object.freeze({
   'default-not-object': /does not export default an object of the form \{ workflows: \[\.\.\.\] \}$/,
   'unknown-key': /has an unknown key watch$/,
   'workflows-not-list': /has no workflows list$/,
+  'workflows-empty': /lists no workflow$/,
   'workflow-not-object': /^Workflow 2 of the config file .* is not an object of the form \{ entry, out, banner \}$/,
   'workflow-unknown-key': /^Workflow 1 of the config file .* has an unknown key output$/,
   'entry-missing': /^Workflow 1 of the config file .* needs entry, the path of an entry file$/,

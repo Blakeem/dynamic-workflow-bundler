@@ -18,8 +18,8 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner']);
 
 /**
  * Checks the default export of a config file and resolves each path against the config file's folder.
- * Throws a UsageError for a value of another shape, an unknown key, a workflow with a missing or
- * wrong-typed field, and two workflows whose out paths resolve to one path or differ only in letter case.
+ * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
+ * a missing or wrong-typed field, and two workflows whose out paths resolve to one path or differ only in letter case.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -34,6 +34,8 @@ export function checkConfig(value, configFile, configPath) {
   const unknownKey = Object.keys(value).find((key) => !CONFIG_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`${configLabel} has an unknown key ${unknownKey}`);
   if (!Array.isArray(value.workflows)) throw new UsageError(`${configLabel} has no workflows list`);
+  // A check that builds nothing would pass a list emptied by mistake.
+  if (value.workflows.length === 0) throw new UsageError(`${configLabel} lists no workflow`);
 
   // An index loop, since map() skips the holes of a sparse list.
   for (let index = 0; index < value.workflows.length; index += 1) {
