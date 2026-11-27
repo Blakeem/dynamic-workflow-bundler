@@ -35,6 +35,9 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | simulation | One execution of a script against a scenario. A run is a real execution by the runtime. |
 | trace | The record of one simulation. |
 | call | One `agent()` invocation in a trace. |
+| phase | The title the runtime groups a call under. `phase()` sets it for the calls after it, and a call's `phase` option sets it for that call alone. |
+| event | One call, `phase()` invocation or log line of a trace. A trace lists its events in the order the script made them. |
+| inspection | What `dwfb inspect` shows of one trace: its events in order, or one call in full. |
 | scripted return | The value a scenario gives one call. `null` stands for an agent that died. |
 | stop | The end of a simulation that cannot go on: at a call that gets no usable scripted return, at the call after the runtime's cap on `agent()` calls, when the script waits on a promise that nothing settles, or before a script that reads a name the running Node lacks. |
 | group | One `parallel()` or `pipeline()` invocation in a simulation. Each call made inside it records the group's index. |
