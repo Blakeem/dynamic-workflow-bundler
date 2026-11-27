@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { listMissingGlobalNames } from '../src/run-simulation.js';
 
 const COMMAND = fileURLToPath(new URL('../bin/dwfb.js', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -445,7 +446,7 @@ describe('dwfb build with a config file', () => {
     const expected = {
       status: 2,
       stdout: '',
-      stderr: 'dwfb build: The out file linked/Out.js of the workflow whose entry is b.js names the same file as the out file dist/out.js of the workflow whose entry is a.js.\n',
+      stderr: 'dwfb build: The out file linked/Out.js of the workflow whose entry is b.js names the same file as the out file dist/out.js of the workflow whose entry is a.js where file names ignore letter case.\n',
     };
 
     const built = runCommand(['build'], folder);
@@ -454,6 +455,50 @@ describe('dwfb build with a config file', () => {
     assert.deepEqual(built, expected);
     assert.deepEqual(checked, expected);
     assert.deepEqual(await readdir(join(folder, 'dist')), []);
+  });
+
+  it('exits 2 and writes nothing when an out names a scenarios file through a link', async () => {
+    const folder = await makeTemporaryFolder();
+    const scenarios = "export default [{ name: 'a' }];\n";
+    await mkdir(join(folder, 'tests'));
+    await symlink(join(folder, 'tests'), join(folder, 'linked'), 'junction');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'tests', 's.js'), scenarios);
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'linked/s.js', scenarios: 'tests/s.js' }] };\n");
+    const expected = {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb build: The out file linked/s.js of the workflow whose entry is a.js names the scenarios file tests/s.js of the workflow whose entry is a.js.\n',
+    };
+
+    const built = runCommand(['build'], folder);
+    const checked = runCommand(['build', '--check'], folder);
+
+    assert.deepEqual(built, expected);
+    assert.deepEqual(checked, expected);
+    assert.equal(await readFile(join(folder, 'tests', 's.js'), 'utf8'), scenarios);
+  });
+
+  it('exits 2 and writes nothing when an out names a scenarios file that is not there yet through a link in another letter case', async () => {
+    const folder = await makeTemporaryFolder();
+    await mkdir(join(folder, 'tests'));
+    await symlink(join(folder, 'tests'), join(folder, 'linked'), 'junction');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'a.js'), 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'linked/S.js', scenarios: 'tests/s.js' }] };\n");
+    const expected = {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb build: The out file linked/S.js of the workflow whose entry is a.js names the scenarios file tests/s.js of the workflow whose entry is a.js where file names ignore letter case.\n',
+    };
+
+    const built = runCommand(['build'], folder);
+    const checked = runCommand(['build', '--check'], folder);
+
+    assert.deepEqual(built, expected);
+    assert.deepEqual(checked, expected);
+    assert.deepEqual(await readdir(join(folder, 'tests')), []);
   });
 
   it('names each script written before a failed write, with and without --json, and exits 2', async (context) => {
@@ -755,6 +800,243 @@ describe('dwfb locate', () => {
   it('prints its usage for locate --help, and the main usage lists it', () => {
     assert.match(runCommand(['locate', '--help']).stdout, /^Usage: dwfb locate <script> <line>\[:<column>\] \[options\]\n/);
     assert.match(runCommand(['--help']).stdout, /\n {2}locate <script> <line>\[:<column>\]\n/);
+  });
+});
+
+describe('dwfb simulate', () => {
+  const META = "export const meta = { name: 'p', description: 'd' };\n";
+  const SIMULATE_FIXTURES = join(FIXTURES, 'simulate');
+  const README_SECTION_HEADING = '\n## dwfb simulate\n';
+  const README_FILE_PATTERN = /^`(?<path>[^`\n]+)`:\n\n```js\n(?<code>[^]*?)```$/gm;
+  const README_RUN_PATTERN = /^\$ dwfb (?<args>simulate [^\n]*)\n(?<output>[^]*?)```$/m;
+  const USED_UP_MESSAGE = 'The list of key "review" holds 1 scripted return, which earlier calls used up, so it has none for call 2 (label "review"). Add a scripted return to the list';
+  const NO_LABEL_MESSAGE = "No key of respond matches call 0 (no label). Add the key '', which matches a call with no label";
+  const CLOCK_FINDING = 'clock.js:2:8 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.';
+  const SCENARIO_FILES = Object.freeze({
+    'review.scenarios.js': "export default [\n  { name: 'passes', respond: { draft: 'the draft', review: { verdict: 'pass' } } },\n  { name: 'used up', respond: { draft: 'the draft', review: [{ verdict: 'fail' }] } },\n];\n",
+    'answer.scenarios.js': "export default [\n  { name: 'answer died', expect: 'threw', respond: { answer: null } },\n  { name: 'answer given', expect: 'threw', respond: { answer: 'yes' } },\n];\n",
+    'unlabeled.scenarios.js': "export default [\n  { name: 'no key', args: { calls: [null] }, respond: {} },\n  { name: 'empty list', args: { calls: [{ label: 'no label' }] }, respond: { '': [] } },\n];\n",
+    'any.scenarios.js': "export default [{ name: 'first' }, { name: 'second' }];\n",
+  });
+
+  /**
+   * @returns {Promise<string>} A new folder of an ES module package that holds the scripts and the scenarios
+   *   files of these tests.
+   */
+  async function writeSimulateFolder() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const name of ['review-loop', 'call-each', 'reads-temporal']) await cp(join(SIMULATE_FIXTURES, `${name}.js`), join(folder, `${name}.js`));
+    await writeFile(join(folder, 'answer.js'), `${META}const answer = await agent('Answer', { label: 'answer' });\nif (answer === null) throw new TypeError('The answer agent died');\nreturn answer;\n`);
+    await writeFile(join(folder, 'clock.js'), `${META}return Date.now();\n`);
+    for (const [file, text] of Object.entries(SCENARIO_FILES)) await writeFile(join(folder, file), text);
+    return folder;
+  }
+
+  it('prints a line per scenario for a return and a stop at a call with a label, then the counts, and exits 1 when one failed', async () => {
+    const folder = await writeSimulateFolder();
+
+    assert.deepEqual(runCommand(['simulate', 'review-loop.js', '--scenarios', 'review.scenarios.js'], folder), {
+      status: 1,
+      stdout: `review-loop.js passes: returned, 2 calls.\nFAILED review-loop.js used up: stopped at call 2 (label "review"): ${USED_UP_MESSAGE}, 3 calls.\n1 passed, 1 failed.\n`,
+      stderr: '',
+    });
+    assert.deepEqual(runCommand(['simulate', 'review-loop.js', '--scenarios', 'review.scenarios.js', '--scenario', 'passes'], folder), {
+      status: 0,
+      stdout: 'review-loop.js passes: returned, 2 calls.\n1 passed, 0 failed.\n',
+      stderr: '',
+    });
+  });
+
+  it('passes a scenario that expects threw when the script throws, and fails it when the script returns', async () => {
+    const folder = await writeSimulateFolder();
+
+    assert.deepEqual(runCommand(['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js'], folder), {
+      status: 1,
+      stdout: 'answer.js answer died: threw TypeError: The answer agent died, 1 call.\nFAILED answer.js answer given: returned, 1 call.\n1 passed, 1 failed.\n',
+      stderr: '',
+    });
+  });
+
+  it('names a stop at a call with no label apart from a stop at a call labeled no label', async () => {
+    const folder = await writeSimulateFolder();
+    const emptyListMessage = 'The list of key "" is empty, so it has none for call 0 (label "no label"). Add a scripted return to the list';
+
+    assert.deepEqual(runCommand(['simulate', 'call-each.js', '--scenarios', 'unlabeled.scenarios.js'], folder), {
+      status: 1,
+      stdout: `FAILED call-each.js no key: stopped at call 0 (no label): ${NO_LABEL_MESSAGE}, 1 call.\nFAILED call-each.js empty list: stopped at call 0 (label "no label"): ${emptyListMessage}, 1 call.\n0 passed, 2 failed.\n`,
+      stderr: '',
+    });
+  });
+
+  it('prints the findings of a refused script once, before its lines', async () => {
+    const folder = await writeSimulateFolder();
+
+    assert.deepEqual(runCommand(['simulate', 'clock.js', '--scenarios', 'any.scenarios.js'], folder), {
+      status: 1,
+      stdout: `${CLOCK_FINDING}\nFAILED clock.js first: refused, 0 calls.\nFAILED clock.js second: refused, 0 calls.\n0 passed, 2 failed.\n`,
+      stderr: '',
+    });
+  });
+
+  const definedName = listMissingGlobalNames().includes('Temporal') ? false : `Node ${process.version} defines Temporal`;
+  it('prints a stop before the script runs with no call', { skip: definedName }, async () => {
+    const folder = await writeSimulateFolder();
+    const message = `The script reads Temporal, which the runtime defines and Node ${process.version} does not, so the simulation cannot run it. Run it on a Node that defines Temporal`;
+
+    assert.deepEqual(runCommand(['simulate', 'reads-temporal.js', '--scenarios', 'any.scenarios.js', '--scenario', 'first'], folder), {
+      status: 1,
+      stdout: `FAILED reads-temporal.js first: stopped: ${message}, 0 calls.\n0 passed, 1 failed.\n`,
+      stderr: '',
+    });
+  });
+
+  it('writes each hidden character of a scenario name as its escape, in a result line and in a usage error', async () => {
+    const folder = await writeSimulateFolder();
+    await writeFile(join(folder, 'tab.scenarios.js'), "export default [{ name: 'a\\tb', expect: 'threw', respond: { answer: null } }];\n");
+
+    assert.deepEqual(runCommand(['simulate', 'answer.js', '--scenarios', 'tab.scenarios.js'], folder), {
+      status: 0,
+      stdout: 'answer.js a\\u{0009}b: threw TypeError: The answer agent died, 1 call.\n1 passed, 0 failed.\n',
+      stderr: '',
+    });
+    assert.deepEqual(runCommand(['simulate', 'answer.js', '--scenarios', 'tab.scenarios.js', '--scenario', 'x\ty'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb simulate: The scenarios file tab.scenarios.js holds no scenario named "x\\u{0009}y".\n',
+    });
+  });
+
+  it('prints one JSON object with --json, with the trace of each simulation', async () => {
+    const folder = await writeSimulateFolder();
+    const { status, stdout, stderr } = runCommand(['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--json'], folder);
+    const answerCall = { index: 0, label: 'answer', prompt: 'Answer', opts: { label: 'answer' }, group: null };
+    const traceHead = { script: 'answer.js', runtime: '2.1.332' };
+
+    assert.deepEqual({ status, stderr }, { status: 1, stderr: '' });
+    assert.deepEqual(JSON.parse(stdout), {
+      ok: false,
+      runtime: '2.1.332',
+      simulations: [
+        {
+          script: 'answer.js',
+          scenario: 'answer died',
+          expect: 'threw',
+          passed: true,
+          trace: { ...traceHead, scenario: 'answer died', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, calls: [{ ...answerCall, returned: null }], groups: [], phases: [], logs: [] },
+        },
+        {
+          script: 'answer.js',
+          scenario: 'answer given',
+          expect: 'threw',
+          passed: false,
+          trace: { ...traceHead, scenario: 'answer given', end: { kind: 'returned', value: 'yes' }, calls: [{ ...answerCall, returned: 'yes' }], groups: [], phases: [], logs: [] },
+        },
+      ],
+    });
+  });
+
+  it('runs the out of each workflow of the config file that has scenarios, and skips the others with no line', async () => {
+    const folder = await writeSimulateFolder();
+    const config = "export default { workflows: [{ entry: 'clock.js', out: 'clock.js', validate: false }, { entry: 'answer.js', out: 'dist/answer.js', scenarios: 'answer.scenarios.js' }] };\n";
+    const expected = { status: 1, stdout: 'dist/answer.js answer died: threw TypeError: The answer agent died, 1 call.\nFAILED dist/answer.js answer given: returned, 1 call.\n1 passed, 1 failed.\n', stderr: '' };
+    await mkdir(join(folder, 'dist'));
+    await cp(join(folder, 'answer.js'), join(folder, 'dist', 'answer.js'));
+    await writeFile(join(folder, 'dwfb.config.js'), config);
+    await writeFile(join(folder, 'other.config.js'), config);
+
+    assert.deepEqual(runCommand(['simulate'], folder), expected);
+    await rm(join(folder, 'dwfb.config.js'));
+    assert.deepEqual(runCommand(['simulate', '--config', 'other.config.js'], folder), expected);
+  });
+
+  it('loads a scenarios file once, so its top-level state carries over to a later workflow that names the same file', async () => {
+    const folder = await writeSimulateFolder();
+    const scenarios = "let calls = 0;\nexport default [{ name: 'first answer', respond: { answer: () => { calls += 1; return calls === 1 ? 'yes' : null; } } }];\n";
+    const config = "export default { workflows: [{ entry: 'answer.js', out: 'answer.js', scenarios: 'counted.scenarios.js' }, { entry: 'answer.js', out: 'dist/answer.js', scenarios: 'counted.scenarios.js' }] };\n";
+    await mkdir(join(folder, 'dist'));
+    await cp(join(folder, 'answer.js'), join(folder, 'dist', 'answer.js'));
+    await writeFile(join(folder, 'counted.scenarios.js'), scenarios);
+    await writeFile(join(folder, 'dwfb.config.js'), config);
+
+    assert.deepEqual(runCommand(['simulate'], folder), {
+      status: 1,
+      stdout: 'answer.js first answer: returned, 1 call.\nFAILED dist/answer.js first answer: threw TypeError: The answer agent died, 1 call.\n1 passed, 1 failed.\n',
+      stderr: '',
+    });
+  });
+
+  it('exits 2 and prints no result for each usage error', async () => {
+    const folder = await writeSimulateFolder();
+    const noScenarioFolder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'syntax.scenarios.js'), "export default [{ name: 'a' ,, }];\n");
+    await writeFile(join(folder, 'unknown.scenarios.js'), "export default [{ name: 'a', expects: 'threw' }];\n");
+    await writeFile(join(folder, 'twice.scenarios.js'), "export default [{ name: 'a' }, { name: 'a' }];\n");
+    await writeFile(join(folder, 'throws.scenarios.js'), "export default [{ name: 'a', respond: () => { throw new Error('No answer written'); } }];\n");
+    await writeFile(join(noScenarioFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(noScenarioFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.js' }] };\n");
+    await writeFile(join(noScenarioFolder, 'missing-out.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'dist/a.js', scenarios: 's.js' }] };\n");
+    await writeFile(join(noScenarioFolder, 'missing-scenarios.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.js', scenarios: 's.js' }] };\n");
+    await writeFile(join(noScenarioFolder, 'a.js'), `${META}return 1;\n`);
+    const cases = [
+      [folder, ['simulate', ''], /^dwfb simulate: Name one workflow script\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', '--config', ''], /^dwfb simulate: Name the config file with --config <path>\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', 'answer.js'], /^dwfb simulate: Name the scenarios file of the script with --scenarios <file>\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', '--scenarios', 'answer.scenarios.js'], /^dwfb simulate: Name the script that --scenarios simulates\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', '--scenario', 'a'], /^dwfb simulate: Name the script that --scenario simulates\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--config', 'dwfb.config.js'], /^dwfb simulate: Name a script or --config, not both, since a named script needs no config file\.\n/],
+      [folder, ['simulate', 'answer.js', 'clock.js', '--scenarios', 'answer.scenarios.js'], /^dwfb simulate: Name one workflow script\.\n/],
+      [folder, ['simulate', 'answer.js', '--scenarios', ''], /^dwfb simulate: Name the scenarios file with --scenarios <file>\.\n/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--verbose'], /^dwfb simulate: Unknown option '--verbose'[^]*\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--scenario', ''], /^dwfb simulate: Name the scenario with --scenario <name>\.\n/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--scenario', 'other'], /^dwfb simulate: The scenarios file answer\.scenarios\.js holds no scenario named "other"\.\n$/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'missing.js'], /^dwfb simulate: The scenarios file missing\.js does not exist\.\n$/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'syntax.scenarios.js'], /^dwfb simulate: The scenarios file syntax\.scenarios\.js does not load\. syntax\.scenarios\.js:1:30 Unexpected token\.\n$/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'unknown.scenarios.js'], /^dwfb simulate: Scenario 1 of the scenarios file unknown\.scenarios\.js has an unknown key expects\.\n$/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'twice.scenarios.js'], /^dwfb simulate: Scenarios 1 and 2 of the scenarios file twice\.scenarios\.js are both named "a"\.\n$/],
+      [
+        folder,
+        ['simulate', 'answer.js', '--scenarios', 'throws.scenarios.js'],
+        /^dwfb simulate: The simulation of answer\.js with the scenario "a" of throws\.scenarios\.js cannot run\. The scenario's respond threw at call 0 \(label "answer"\)\. No answer written\.\n$/,
+      ],
+      [folder, ['simulate'], /^dwfb simulate: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script and --scenarios <file>, or name a config file with --config <path>\.\n$/],
+      [noScenarioFolder, ['simulate'], /^dwfb simulate: The config file dwfb\.config\.js has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>\.\n$/],
+      [noScenarioFolder, ['simulate', '--config', 'missing-out.config.js'], /^dwfb simulate: The out file dist\/a\.js of the workflow whose entry is a\.js does not exist, so run dwfb build a\.js --config missing-out\.config\.js\.\n$/],
+      [noScenarioFolder, ['simulate', '--config', 'missing-scenarios.config.js'], /^dwfb simulate: The scenarios of the workflow whose entry is a\.js cannot load\. The scenarios file s\.js does not exist\.\n$/],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+  });
+
+  it('loads the example scenarios file of README.md, and its example script passes with it as the README shows', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    const sectionStart = readme.indexOf(README_SECTION_HEADING);
+    const section = readme.slice(sectionStart, readme.indexOf('\n## ', sectionStart + README_SECTION_HEADING.length));
+    const exampleFiles = [...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const run = README_RUN_PATTERN.exec(section)?.groups;
+    const folder = await makeTemporaryFolder();
+
+    assert.notEqual(sectionStart, -1, `README.md has no line ${README_SECTION_HEADING.trim()}`);
+    assert.deepEqual(exampleFiles.map(({ path }) => path), ['.claude/workflows/review.js', 'workflows/review/scenarios.js']);
+    assert.ok(run !== undefined, 'The README section on dwfb simulate shows no $ dwfb simulate command');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const { path, code } of exampleFiles) {
+      await mkdir(join(folder, dirname(path)), { recursive: true });
+      await writeFile(join(folder, path), code);
+    }
+    assert.deepEqual(runCommand(run.args.split(' '), folder), { status: 0, stdout: run.output, stderr: '' });
+  });
+
+  it('prints its usage for simulate --help, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['simulate', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb simulate \[<script>\] \[--scenarios <file>\] \[options\]\n[^]*\n {2}--scenario <name> {4}Run only the scenario of this name\.\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}simulate \[<script>\] \[--scenarios <file>\]\n {35}Run a workflow script/);
   });
 });
 

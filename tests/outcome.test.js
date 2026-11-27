@@ -59,7 +59,7 @@ async function checkCase(outcomeCase, context) {
 
   assert.ok(!output.includes(INTERNAL_FAILURE) && !STACK_TRACE_LINE.test(output), `The command ends in an internal failure:\n${output}`);
   assert.equal(status, outcomeCase.exit, `The command exits ${status}, where the case expects ${outcomeCase.exit}:\n${output}`);
-  if (outcomeCase.exit === 1) assert.equal(firstRule, outcomeCase.rule, `The first finding has the rule ${firstRule}:\n${output}`);
+  if (outcomeCase.exit === 1) assert.equal(firstRule, outcomeCase.rule ?? null, `The first finding has the rule ${firstRule}:\n${output}`);
   if (outcomeCase.message !== undefined) assert.match(output, outcomeCase.message);
 }
 

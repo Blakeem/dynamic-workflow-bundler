@@ -31,6 +31,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | rule | One entry of the contract, with an id and the Claude Code version it was measured on. |
 | finding | One place where a script or a source breaks a rule. |
 | scenario | The args and the scripted agent returns for one simulation. |
+| scenarios file | The ES module whose default export lists the scenarios of one script, each with a name and the end that passes it. |
 | simulation | One execution of a script against a scenario. A run is a real execution by the runtime. |
 | trace | The record of one simulation. |
 | call | One `agent()` invocation in a trace. |

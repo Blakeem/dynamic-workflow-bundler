@@ -8,11 +8,15 @@ import { formatBuildCommand } from '../src/build-command.js';
 import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
+import { formatCallName } from '../src/find-scripted-return.js';
 import { formatFinding } from '../src/format-finding.js';
+import { formatHiddenCharacters } from '../src/format-hidden-characters.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
+import { loadScenarios } from '../src/load-scenarios.js';
 import { MISSING_FILE_CODES } from '../src/load-sources.js';
 import { locate } from '../src/locate.js';
 import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
+import { simulate } from '../src/simulate.js';
 import { UsageError } from '../src/usage-error.js';
 import { validate } from '../src/validate.js';
 import { writeScript } from '../src/write-script.js';
@@ -29,6 +33,9 @@ Commands:
                                    text files and JSON files it imports.
   locate <script> <line>[:<column>]
                                    Print the source line that a line of a built script comes from.
+  simulate [<script>] [--scenarios <file>]
+                                   Run a workflow script against each scenario of a scenarios file, with
+                                   no model call, and print how each simulation ended.
   validate [<script>...]           Report each rule of the runtime's contract that a workflow script
                                    breaks.
 
@@ -86,6 +93,29 @@ const LOCATE_OPTIONS = Object.freeze({
   help: { type: 'boolean' },
 });
 
+const SIMULATE_USAGE = `Usage: dwfb simulate [<script>] [--scenarios <file>] [options]
+
+Runs a workflow script against each scenario of a scenarios file with no model call, as the runtime of
+Claude Code ${CONTRACT_RUNTIME_VERSION} runs it, and prints how each simulation ended. A scenario passes
+when its simulation ends as its expect says, which is returned by default. With no script, runs the out of
+each workflow of the config file that has scenarios against its scenarios file.
+
+Options:
+  --scenarios <file>   Read the scenarios of the script from this file.
+  --scenario <name>    Run only the scenario of this name.
+  --config <path>      Read this config file in place of ${CONFIG_FILES_TEXT}.
+  --json               Print the result as one JSON object.
+  --help               Print this help.
+`;
+
+const SIMULATE_OPTIONS = Object.freeze({
+  scenarios: { type: 'string' },
+  scenario: { type: 'string' },
+  config: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean' },
+});
+
 const VALIDATE_USAGE = `Usage: dwfb validate [<script>...] [options]
 
 Reports each rule of the Workflow runtime's contract that a workflow script breaks, as measured on
@@ -117,6 +147,7 @@ async function runCommand(args) {
 
   if (command === 'build') return runBuild(commandArgs);
   if (command === 'locate') return runLocate(commandArgs);
+  if (command === 'simulate') return runSimulate(commandArgs);
   if (command === 'validate') return runValidate(commandArgs);
   if (isMainOption && commandArgs.length > 0) return printUsageError('dwfb', `The option ${command} takes no other argument, and ${JSON.stringify(commandArgs[0])} follows it.\n\n${MAIN_USAGE}`);
   if (command === '--version') return printResult(`${readVersion()}\n`);
@@ -249,6 +280,205 @@ function formatLocateText(result) {
 }
 
 /**
+ * @typedef {object} Simulation One scenario's simulation, as `dwfb simulate` reports it.
+ * @property {string} script The script, as the trace names it.
+ * @property {string} scenario The scenario's name.
+ * @property {'returned' | 'threw'} expect
+ * @property {boolean} passed True when the trace's end kind is `expect`.
+ * @property {import('../src/simulate.js').Trace} trace
+ */
+
+/**
+ * @param {string[]} args
+ * @returns {Promise<number>}
+ */
+async function runSimulate(args) {
+  let parsed = null;
+  let targets = null;
+  const simulations = [];
+
+  try {
+    parsed = parseArgs({ args, options: SIMULATE_OPTIONS, allowPositionals: true, strict: true });
+  } catch (error) {
+    if (!String(error.code).startsWith('ERR_PARSE_ARGS')) throw error;
+    return printUsageError('dwfb simulate', `${error.message}\n\n${SIMULATE_USAGE}`);
+  }
+
+  const { values, positionals } = parsed;
+  const [script] = positionals;
+  if (values.help) return printResult(SIMULATE_USAGE);
+  if (positionals.length > 1 || script === '') return printUsageError('dwfb simulate', `Name one workflow script.\n\n${SIMULATE_USAGE}`);
+  if (values.scenarios === '') return printUsageError('dwfb simulate', `Name the scenarios file with --scenarios <file>.\n\n${SIMULATE_USAGE}`);
+  if (values.scenario === '') return printUsageError('dwfb simulate', `Name the scenario with --scenario <name>.\n\n${SIMULATE_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb simulate', `Name the config file with --config <path>.\n\n${SIMULATE_USAGE}`);
+  if (script !== undefined && values.config !== undefined) {
+    return printUsageError('dwfb simulate', `Name a script or --config, not both, since a named script needs no config file.\n\n${SIMULATE_USAGE}`);
+  }
+  if (script !== undefined && values.scenarios === undefined) return printUsageError('dwfb simulate', `Name the scenarios file of the script with --scenarios <file>.\n\n${SIMULATE_USAGE}`);
+  if (script === undefined && values.scenarios !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenarios simulates.\n\n${SIMULATE_USAGE}`);
+  if (script === undefined && values.scenario !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenario simulates.\n\n${SIMULATE_USAGE}`);
+
+  // Every simulation runs before any result prints, so a usage error in a later simulation prints no result.
+  try {
+    targets = script === undefined ? await findConfigTargets(values.config) : [{ script, scenariosFile: /** @type {string} */ (values.scenarios), entry: null }];
+    for (const target of targets) {
+      const fileScenarios = selectScenarios(await loadTargetScenarios(target), values.scenario, target.scenariosFile);
+      for (const fileScenario of fileScenarios) simulations.push(await simulateScenario(target.script, fileScenario, target.scenariosFile));
+    }
+  } catch (error) {
+    return printCommandFailure('dwfb simulate', error);
+  }
+
+  const isSuccess = simulations.every((simulation) => simulation.passed);
+  const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
+  if (values.json) return printResult(`${JSON.stringify(formatSimulateJson(simulations, isSuccess), null, 2)}\n`, exitCode);
+  return printResult(formatSimulateText(simulations), exitCode);
+}
+
+/**
+ * @typedef {object} SimulationTarget One script and the scenarios file it runs against.
+ * @property {string} script
+ * @property {string} scenariosFile
+ * @property {string | null} entry The entry of the config workflow that names the scenarios file, or null for
+ *   a script the command line names.
+ */
+
+/**
+ * Finds the script and scenarios file of each workflow that `dwfb simulate` with no script runs: the out of
+ * each workflow of the config file that has scenarios, with its scenarios file, in the order the config file
+ * lists them, relative to the working directory.
+ * @param {string | undefined} configPath
+ * @returns {Promise<SimulationTarget[]>}
+ */
+async function findConfigTargets(configPath) {
+  const commandConfig = await loadCommandConfig(configPath);
+  const targets = [];
+
+  if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name a script and --scenarios <file>, or name a config file with --config <path>`);
+  for (const workflow of commandConfig.config.workflows) {
+    if (workflow.scenarios === null) continue;
+    await checkBuiltOut(workflow, configPath);
+    targets.push({ script: formatDisplayPath(workflow.out), scenariosFile: formatDisplayPath(workflow.scenarios), entry: formatDisplayPath(workflow.entry) });
+  }
+  if (targets.length === 0) throw new UsageError(`The config file ${commandConfig.file} has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>`);
+
+  return targets;
+}
+
+/**
+ * @param {SimulationTarget} target
+ * @returns {Promise<import('../src/check-scenarios.js').FileScenario[]>}
+ */
+async function loadTargetScenarios({ scenariosFile, entry }) {
+  try {
+    return await loadScenarios(scenariosFile);
+  } catch (error) {
+    if (!(error instanceof UsageError) || entry === null) throw error;
+    // loadScenarios() names the scenarios file alone, which names no workflow of the config file.
+    const failure = new UsageError(`The scenarios of the workflow whose entry is ${entry} cannot load. ${error.message}`);
+    failure.cause = error;
+    throw failure;
+  }
+}
+
+/**
+ * @param {import('../src/check-scenarios.js').FileScenario[]} fileScenarios
+ * @param {string | undefined} name The name `--scenario` gives.
+ * @param {string} scenariosFile
+ * @returns {import('../src/check-scenarios.js').FileScenario[]} Every scenario when name is undefined, else the
+ *   one scenario of that name.
+ */
+function selectScenarios(fileScenarios, name, scenariosFile) {
+  const namedScenarios = fileScenarios.filter((fileScenario) => fileScenario.name === name);
+
+  if (name === undefined) return fileScenarios;
+  if (namedScenarios.length === 0) throw new UsageError(`The scenarios file ${scenariosFile} holds no scenario named "${formatHiddenCharacters(name)}"`);
+
+  return namedScenarios;
+}
+
+/**
+ * @param {string} script
+ * @param {import('../src/check-scenarios.js').FileScenario} fileScenario
+ * @param {string} scenariosFile
+ * @returns {Promise<Simulation>}
+ */
+async function simulateScenario(script, fileScenario, scenariosFile) {
+  const { name, expect, scenario } = fileScenario;
+  let trace = null;
+
+  try {
+    trace = await simulate({ script, scenario });
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    // simulate() names neither the scenario nor its file, such as for a respond function that throws.
+    const failure = new UsageError(`The simulation of ${script} with the scenario "${formatHiddenCharacters(name)}" of ${scenariosFile} cannot run. ${error.message}`);
+    failure.cause = error;
+    throw failure;
+  }
+
+  return { script: trace.script, scenario: name, expect, passed: trace.end.kind === expect, trace };
+}
+
+/**
+ * @param {Simulation[]} simulations In the order run.
+ * @returns {string} One line per simulation, after the findings of each refused script the first time it is
+ *   refused, then the counts of passed and failed scenarios.
+ */
+function formatSimulateText(simulations) {
+  const refusedScripts = new Set();
+  const passedCount = simulations.filter((simulation) => simulation.passed).length;
+  const lines = [];
+
+  for (const simulation of simulations) {
+    const { end } = simulation.trace;
+    if (end.kind === 'refused' && !refusedScripts.has(simulation.script)) {
+      refusedScripts.add(simulation.script);
+      lines.push(...end.findings.map(formatFinding));
+    }
+    lines.push(formatSimulationLine(simulation));
+  }
+  lines.push(`${passedCount} passed, ${simulations.length - passedCount} failed.`);
+
+  return lines.map((line) => `${line}\n`).join('');
+}
+
+/**
+ * @param {Simulation} simulation
+ * @returns {string} Such as `FAILED review.js no reviewer: stopped at call 1 (label "review"): <message>, 2 calls.`
+ */
+function formatSimulationLine({ script, scenario, passed, trace }) {
+  const callCount = trace.calls.length === 1 ? '1 call' : `${trace.calls.length} calls`;
+
+  return `${passed ? '' : 'FAILED '}${script} ${formatHiddenCharacters(scenario)}: ${formatSimulationEnd(trace)}, ${callCount}.`;
+}
+
+/**
+ * @param {import('../src/simulate.js').Trace} trace
+ * @returns {string} How the simulation ended, such as `returned` or `threw TypeError: <message>`.
+ */
+function formatSimulationEnd({ end, calls }) {
+  if (end.kind === 'returned' || end.kind === 'refused') return end.kind;
+  if (end.kind === 'threw') return `threw ${formatHiddenCharacters(end.name)}: ${formatHiddenCharacters(end.message)}`;
+  // The node-lacks-name stop happens before the script runs, so it names no call.
+  if (!('call' in end)) return `stopped: ${formatHiddenCharacters(end.message)}`;
+  return `stopped at ${formatCallName(calls[end.call])}: ${formatHiddenCharacters(end.message)}`;
+}
+
+/**
+ * @param {Simulation[]} simulations In the order run.
+ * @param {boolean} isSuccess
+ * @returns {object} The `--json` shape, which is part of the public interface.
+ */
+function formatSimulateJson(simulations, isSuccess) {
+  return {
+    ok: isSuccess,
+    runtime: CONTRACT_RUNTIME_VERSION,
+    simulations: simulations.map(({ script, scenario, expect, passed, trace }) => ({ script, scenario, expect, passed, trace })),
+  };
+}
+
+/**
  * @param {string[]} args
  * @returns {Promise<number>}
  */
@@ -334,19 +564,30 @@ async function findConfigScripts(configPath) {
 
   if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name a script, or name a config file with --config <path>`);
   for (const workflow of commandConfig.config.workflows) {
-    const entry = formatDisplayPath(workflow.entry);
-    const out = formatDisplayPath(workflow.out);
     if (!workflow.validate) {
       skipped.push(await formatRealDisplayPath(workflow.out));
       continue;
     }
-    if (await isMissingFile(out)) {
-      throw new UsageError(`The out file ${out} of the workflow whose entry is ${entry} does not exist, so run ${formatBuildCommand(entry, { config: configPath })}`);
-    }
-    scripts.push(out);
+    await checkBuiltOut(workflow, configPath);
+    scripts.push(formatDisplayPath(workflow.out));
   }
 
   return { scripts, skipped };
+}
+
+/**
+ * Throws a UsageError that names the command that builds the out of a config workflow when no file exists
+ * there, since a check of the missing script would name no workflow.
+ * @param {{ entry: string, out: string }} workflow
+ * @param {string | undefined} configPath The path `--config` names, which the build command names too.
+ */
+async function checkBuiltOut(workflow, configPath) {
+  const entry = formatDisplayPath(workflow.entry);
+  const out = formatDisplayPath(workflow.out);
+
+  if (await isMissingFile(out)) {
+    throw new UsageError(`The out file ${out} of the workflow whose entry is ${entry} does not exist, so run ${formatBuildCommand(entry, { config: configPath })}`);
+  }
 }
 
 /**
@@ -369,7 +610,8 @@ async function isMissingFile(path) {
  * @param {string | undefined} entry
  * @param {string | undefined} out
  * @param {string | undefined} configPath
- * @returns {Promise<{ entry: string, out: string, banner: boolean, validate: boolean }[]>}
+ * @returns {Promise<{ entry: string, out: string, banner: boolean, validate: boolean, scenarios?: string | null }[]>} A
+ *   config workflow keeps its absolute scenarios path.
  */
 async function findWorkflows(entry, out, configPath) {
   if (out !== undefined) return [{ entry, out, banner: true, validate: true }];
@@ -391,34 +633,65 @@ async function findWorkflows(entry, out, configPath) {
 /**
  * build() refuses an `out` that is a source of its own workflow. This extends the refusal to the sources of
  * every workflow the command builds, since the command writes each script after every workflow builds. It
- * also refuses two workflows whose `out` paths name one file through a link, which checkConfig cannot see.
- * @param {{ workflow: { entry: string, out: string }, result: import('../src/build.js').BuildResult }[]} builtWorkflows
+ * also refuses two workflows whose `out` paths name one file through a link, and an `out` that names the
+ * scenarios file of a workflow the command builds through a link, which checkConfig cannot see.
+ * @param {{ workflow: { entry: string, out: string, scenarios?: string | null }, result: import('../src/build.js').BuildResult }[]} builtWorkflows
  */
 async function checkOutFiles(builtWorkflows) {
   // build() gives each source relative to the working directory's real path.
   const workFolder = await realpath(process.cwd());
   const sourceWorkflows = new Map();
-  const outWorkflows = new Map();
+  const scenariosFiles = [];
+  const outFiles = [];
 
   for (const { workflow, result } of builtWorkflows) {
     for (const source of result.sources) {
       const sourceFile = resolve(workFolder, source);
       if (!sourceWorkflows.has(sourceFile)) sourceWorkflows.set(sourceFile, workflow);
     }
+    // A workflow that --out names has no scenarios field.
+    if (typeof workflow.scenarios !== 'string') continue;
+    scenariosFiles.push({ file: await findRealPath(workflow.scenarios), workflow });
   }
   for (const { workflow } of builtWorkflows) {
     const outFile = await findRealPath(workflow.out);
-    // checkConfig refuses two out paths that differ only in letter case on every platform, and so does this check.
-    const outKey = outFile.toLowerCase();
     const sourceWorkflow = sourceWorkflows.get(outFile);
-    const outWorkflow = outWorkflows.get(outKey);
+    // checkConfig refuses two out paths that differ only in letter case on every platform, and so does this check.
+    const scenariosFile = findSameFile(scenariosFiles, outFile);
+    const sameOutFile = findSameFile(outFiles, outFile);
     const outLabel = `The out file ${formatDisplayPath(workflow.out)} of the workflow whose entry is ${formatDisplayPath(workflow.entry)}`;
     if (sourceWorkflow !== undefined) throw new UsageError(`${outLabel} is a source of the workflow whose entry is ${formatDisplayPath(sourceWorkflow.entry)}`);
-    if (outWorkflow !== undefined) {
-      throw new UsageError(`${outLabel} names the same file as the out file ${formatDisplayPath(outWorkflow.out)} of the workflow whose entry is ${formatDisplayPath(outWorkflow.entry)}`);
+    if (scenariosFile !== undefined) {
+      const scenariosWorkflow = scenariosFile.workflow;
+      throw new UsageError(`${outLabel} names the scenarios file ${formatDisplayPath(scenariosWorkflow.scenarios)} of the workflow whose entry is ${formatDisplayPath(scenariosWorkflow.entry)}${formatCaseNote(scenariosFile.file, outFile)}`);
     }
-    outWorkflows.set(outKey, workflow);
+    if (sameOutFile !== undefined) {
+      const outWorkflow = sameOutFile.workflow;
+      throw new UsageError(`${outLabel} names the same file as the out file ${formatDisplayPath(outWorkflow.out)} of the workflow whose entry is ${formatDisplayPath(outWorkflow.entry)}${formatCaseNote(sameOutFile.file, outFile)}`);
+    }
+    outFiles.push({ file: outFile, workflow });
   }
+}
+
+/**
+ * @template {{ file: string }} T
+ * @param {T[]} realFiles Each with a real path, in the order the command builds the workflows.
+ * @param {string} file A real path.
+ * @returns {T | undefined} The first entry whose file is `file`, else the first whose file differs from it only in letter case.
+ */
+function findSameFile(realFiles, file) {
+  const fileKey = file.toLowerCase();
+
+  return realFiles.find((realFile) => realFile.file === file) ?? realFiles.find((realFile) => realFile.file.toLowerCase() === fileKey);
+}
+
+/**
+ * @param {string} file A real path.
+ * @param {string} otherFile A real path that names `file` in the same or another letter case.
+ * @returns {string} The end of a message for two paths that name one file only where file names ignore letter case.
+ */
+function formatCaseNote(file, otherFile) {
+  return file === otherFile ? '' : ' where file names ignore letter case';
 }
 
 /**

@@ -13,7 +13,7 @@ import { checkScriptFile } from './validate.js';
 
 // A misspelled key such as `scenarios` would otherwise read as a missing scenario.
 const SIMULATE_OPTION_KEYS = new Set(['script', 'scenario']);
-const SCENARIO_KEYS = new Set(['name', 'args', 'respond', 'budget']);
+export const SCENARIO_KEYS = new Set(['name', 'args', 'respond', 'budget']);
 const BUDGET_KEYS = new Set(['total', 'spent']);
 
 /**
@@ -125,9 +125,10 @@ function readOptions(options) {
 }
 
 /**
+ * Throws a UsageError for a scenario that simulate() rejects.
  * @param {unknown} scenario
  */
-function checkScenario(scenario) {
+export function checkScenario(scenario) {
   if (!isObject(scenario)) throw new UsageError('simulate() takes scenario, an object of name, args, respond and budget');
   const unknownKey = Object.keys(scenario).find((key) => !SCENARIO_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`The scenario takes no key ${unknownKey}`);

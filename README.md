@@ -14,7 +14,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 | `dwfb build` | Build a workflow script from an entry, its parts, and the modules, text files and JSON files it imports, or every workflow of a config file. | available |
 | `dwfb locate` | Find the source file and line that a line of a built script comes from. | available |
 | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | available |
-| `dwfb simulate` | Run a script against scripted agent returns, with no model call. | planned |
+| `dwfb simulate` | Run a script against scripted agent returns, with no model call. | available |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
 
 ## dwfb build
@@ -115,6 +115,8 @@ export default {
 
 `dwfb build` with no entry builds every workflow in order, and `dwfb build <entry>` builds each workflow whose entry is that file. A workflow with a finding does not stop the workflows after it. `banner: false` leaves out the banner line of one workflow, and `--no-banner` leaves it out of every workflow. `validate: false` skips the contract check in the build of one workflow, and `--no-validate` skips it for every workflow. `--config <path>` names another config file. `dwfb build <entry> --out <file>` reads no config file. A config file that does not load, has an unknown key, lists no workflow, gives a field of the wrong type or gives two workflows one `out` stops the command before it writes anything. Two `out` paths that differ only in letter case count as one `out`. Two `out` paths that name one file through a link count as one `out` among the workflows the command builds. A missing entry, or an `out` that the build refuses, such as a folder or a source file of a workflow the command builds, stops the command before it writes anything too.
 
+`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate) runs the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
+
 ### Check
 
 `dwfb build --check` builds each workflow in memory and compares the result with the file at `out`, and it writes nothing. The command exits 0 when every file matches. It exits 1 when a file differs or is missing, or a workflow has a finding. A finding of the contract check counts too, and the command compares no file for that workflow. With `--no-validate`, the command compares the file. For a file that differs, it prints the file's first differing line and the source file and line that this line comes from. This way a commit hook or a CI job can stop a built script that no longer matches its source.
@@ -177,6 +179,63 @@ The command reads a script as the runtime does. A byte sequence that is not vali
 The rules were measured on Claude Code 2.1.332, and a rule may differ on another version.
 
 The command does not check the arguments of `agent`, `parallel`, `pipeline`, `phase`, `log` and `workflow`, the script's return value, or the 30 second limit on code that does not yield. Each depends on values that exist only when the script runs. A rule reads the direct form of the code only. So `Date.now()` gets a finding, and `const { now } = Date; now()` or `(0, eval)('1')` gets none, although each throws. The clock and random rules report each place that names `Date.now` or `Math.random`, called there or not, since the function throws wherever it is called.
+
+## dwfb simulate
+
+`dwfb simulate` runs a workflow script against scripted agent returns, with no model call, and prints how each simulation ended. This way a change to a script's control flow is tested before launch.
+
+`.claude/workflows/review.js`:
+
+```js
+export const meta = { name: 'review', description: 'Review a change until a review passes' };
+
+const VERDICT_SCHEMA = { type: 'object', properties: { verdict: { type: 'string' } }, required: ['verdict'] };
+
+for (let round = 1; round <= 3; round += 1) {
+  const review = await agent(`Review this change.\n${args.change}`, { label: 'review', schema: VERDICT_SCHEMA });
+  if (review === null) throw new Error('The reviewer died');
+  if (review.verdict === 'pass') return { round };
+}
+return { round: null };
+```
+
+`workflows/review/scenarios.js`:
+
+```js
+export default [
+  { name: 'passes', args: { change: 'Fix the typo' }, respond: { review: { verdict: 'pass' } } },
+  { name: 'passes on round 2', args: { change: 'Fix the typo' }, respond: { review: [{ verdict: 'fail' }, { verdict: 'pass' }] } },
+  { name: 'reviewer dies', expect: 'threw', args: { change: 'Fix the typo' }, respond: { review: null } },
+];
+```
+
+```
+$ dwfb simulate .claude/workflows/review.js --scenarios workflows/review/scenarios.js
+.claude/workflows/review.js passes: returned, 1 call.
+.claude/workflows/review.js passes on round 2: returned, 2 calls.
+.claude/workflows/review.js reviewer dies: threw Error: The reviewer died, 1 call.
+3 passed, 0 failed.
+```
+
+A scenarios file is an ES module whose default export is a list of scenarios, and Node loads it as it loads a [config file](#config-file). Each scenario holds these keys:
+
+| Key | Meaning |
+|---|---|
+| `name` | A name that no other scenario of the file has. Required. |
+| `args` | The JSON value the script reads as `args`. |
+| `respond` | The scripted returns of the `agent()` calls. |
+| `budget` | `{ total, spent }`, the numbers the script reads as its budget. `total` can be `null`. |
+| `expect` | `'returned'` or `'threw'`, the end that passes the scenario. Defaults to `'returned'`. |
+
+A scripted return is a string for a call with no schema, a plain JSON object for a call with a schema, or `null` for an agent that died. The script gets a copy of it, so a change the script makes to one return reaches no other call.
+
+`respond` is an object keyed by label prefix, or a function. For an object, the longest key that the call's label starts with decides. The key `''` matches every call, a call with no label included. A key's value is a scripted return, a list of scripted returns or a function. A list gives its first element to the first call the key decides, its second to the second, and no return past its end. A function is called with the call and the list of earlier calls, and it returns the scripted return. A `respond` function is called the same way for every call. Node loads a scenarios file once per command. So a value that the file keeps at its top level, such as a count that a `respond` function raises, carries over to each later scenario that uses the file, a scenario of another workflow that names the same file included.
+
+The simulation stops when a call gets no usable scripted return: no key matches, a list is used up, a function returns `undefined`, or the return has the wrong type or holds a value that JSON cannot carry. The script runs no further, and a `try` around `agent()` does not catch the stop. A script that reads a name the runtime defines and the running Node lacks, such as `Temporal`, stops before it runs. A script that breaks a rule of [`dwfb validate`](#dwfb-validate) is refused and does not run, and the command prints its findings.
+
+The command prints one line per scenario, then the counts of passed and failed scenarios. A line gives how the simulation ended and how many calls it made, and a failed scenario's line starts with `FAILED`. A scenario passes when its simulation ends as `expect` says. A scenario whose simulation stops or whose script is refused fails. `--scenario <name>` runs one scenario of the file. With no script, the command runs the `out` of each workflow of the config file that has `scenarios` against that file, and `--config <path>` names another config file. The command exits 0 when every scenario passed, 1 when one failed and 2 for a usage error, such as a scenarios file that does not load or holds an unknown key. `--json` prints the result as one JSON object, with the trace of each simulation.
+
+The simulator leaves out the check of `agentType` and `model` against the session, any check of a schema other than its root type, the limit on agent calls, and a budget that grows as agents run.
 
 ## License
 

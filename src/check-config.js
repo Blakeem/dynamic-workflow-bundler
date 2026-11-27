@@ -3,7 +3,7 @@ import { isFolderPath } from './display-path.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
-const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate']);
+const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios']);
 
 /**
  * @typedef {object} ConfigWorkflow
@@ -12,6 +12,8 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate']);
  * @property {boolean} banner Defaults to true.
  * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
  *   against the contract. Defaults to true.
+ * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate` with no
+ *   script runs `out` against, or null for a workflow that it skips.
  */
 
 /**
@@ -22,8 +24,9 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate']);
 /**
  * Checks the default export of a config file and resolves each path against the config file's folder.
  * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
- * a missing or wrong-typed field, an entry or out that ends in a path separator or a `.` or `..` segment, and
- * two workflows whose out paths resolve to one path or differ only in letter case.
+ * a missing or wrong-typed field, an entry, out or scenarios that ends in a path separator or a `.` or `..`
+ * segment, two workflows whose out paths resolve to one path or differ only in letter case, and an out path
+ * that names the scenarios file of any workflow by either of those rules.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -46,6 +49,7 @@ export function checkConfig(value, configFile, configPath) {
     workflows.push(checkWorkflow(value.workflows[index], `Workflow ${index + 1} of the config file ${configPath}`, configFolder));
   }
   checkOutFiles(workflows, value.workflows, configPath);
+  checkScenariosFiles(workflows, value.workflows, configPath);
 
   return { workflows };
 }
@@ -57,18 +61,20 @@ export function checkConfig(value, configFile, configPath) {
  * @returns {ConfigWorkflow}
  */
 function checkWorkflow(row, rowLabel, configFolder) {
-  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate }`);
+  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate, scenarios }`);
   const unknownKey = Object.keys(row).find((key) => !WORKFLOW_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`${rowLabel} has an unknown key ${unknownKey}`);
-  const { entry, out, banner = true, validate = true } = row;
+  const { entry, out, banner = true, validate = true, scenarios } = row;
   if (typeof entry !== 'string' || entry === '') throw new UsageError(`${rowLabel} needs entry, the path of an entry file`);
   if (typeof out !== 'string' || out === '') throw new UsageError(`${rowLabel} needs out, the path of the built script`);
   if (typeof banner !== 'boolean') throw new UsageError(`${rowLabel} takes banner as a boolean`);
   if (typeof validate !== 'boolean') throw new UsageError(`${rowLabel} takes validate as a boolean`);
+  if (scenarios !== undefined && (typeof scenarios !== 'string' || scenarios === '')) throw new UsageError(`${rowLabel} takes scenarios as the path of a scenarios file`);
   if (isFolderPath(entry)) throw new UsageError(`${rowLabel} gives the entry ${entry}, which is not a file`);
   if (isFolderPath(out)) throw new UsageError(`${rowLabel} gives the out path ${out}, which names a folder`);
+  if (scenarios !== undefined && isFolderPath(scenarios)) throw new UsageError(`${rowLabel} gives the scenarios ${scenarios}, which is not a file`);
 
-  return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner, validate };
+  return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner, validate, scenarios: scenarios === undefined ? null : resolve(configFolder, scenarios) };
 }
 
 /**
@@ -91,6 +97,27 @@ function checkOutFiles(workflows, rows, configPath) {
     const label = `Workflows ${firstIndex + 1} and ${index + 1} of the config file ${configPath}`;
     if (workflows[firstIndex].out === workflow.out) throw new UsageError(`${label} both write ${rows[index].out}`);
     throw new UsageError(`${label} write ${rows[firstIndex].out} and ${rows[index].out}, which name one file where file names ignore letter case`);
+  });
+}
+
+/**
+ * The build would replace a hand-written scenarios file with the built script, and the build's own source
+ * check cannot see it, since a scenarios file is no source of the build.
+ * @param {ConfigWorkflow[]} workflows
+ * @param {{ out: string, scenarios?: string }[]} rows The workflows as the config file gives them.
+ * @param {string} configPath
+ */
+function checkScenariosFiles(workflows, rows, configPath) {
+  workflows.forEach((workflow, index) => {
+    const outKey = workflow.out.toLowerCase();
+    const sameIndex = workflows.findIndex((other) => other.scenarios === workflow.out);
+    // The user wrote both paths, and Windows and macOS file names ignore letter case by default.
+    const scenariosIndex = sameIndex !== -1 ? sameIndex : workflows.findIndex((other) => other.scenarios?.toLowerCase() === outKey);
+    if (scenariosIndex === -1) return;
+
+    const message = `Workflow ${index + 1} of the config file ${configPath} writes ${rows[index].out}, which names the scenarios file ${rows[scenariosIndex].scenarios} of workflow ${scenariosIndex + 1}`;
+    if (sameIndex !== -1) throw new UsageError(message);
+    throw new UsageError(`${message} where file names ignore letter case`);
   });
 }
 

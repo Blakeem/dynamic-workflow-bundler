@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCRIPT_BYTE_LIMIT } from '../../../src/check-contract.js';
 
@@ -8,7 +9,8 @@ import { SCRIPT_BYTE_LIMIT } from '../../../src/check-contract.js';
  *   takes the absolute path of the case's folder.
  * @property {string[]} args The command's arguments, run in the case's folder.
  * @property {0 | 1 | 2} exit
- * @property {string} [rule] For exit code 1, the rule id of the first finding.
+ * @property {string} [rule] For exit code 1, the rule id of the first finding. Absent for exit code 1 when the
+ *   output opens with no finding, such as for a failed scenario.
  * @property {RegExp} [message] A pattern that the command's output matches.
  */
 
@@ -36,6 +38,15 @@ const VALIDATE_ARGS = ['validate', 'x.js'];
 const validateFinding = (rule) => ({ args: VALIDATE_ARGS, exit: /** @type {const} */ (1), rule });
 const VALIDATED = { args: VALIDATE_ARGS, exit: /** @type {const} */ (0) };
 const SKIPPED_ONLY = /^Skipped out\/built\.js, since its workflow sets validate: false\.\n$/;
+const REVIEW_LOOP_SCRIPT = readFileSync(new URL('../simulate/review-loop.js', import.meta.url), 'utf8');
+const THROW_SCRIPT = `${META}const answer = await agent('Answer', { label: 'answer' });\nif (answer === null) throw new Error('The answer agent died');\nreturn answer;\n`;
+const SIMULATE_ARGS = ['simulate', 'x.js', '--scenarios', 'scenarios.js'];
+/**
+ * @param {string} script
+ * @param {string} scenarios The default export of scenarios.js, in source form.
+ * @returns {Record<string, string>} The files of a simulate case: x.js and scenarios.js in an ES module package.
+ */
+const createSimulateFiles = (script, scenarios) => ({ 'package.json': MODULE_PACKAGE, 'x.js': script, 'scenarios.js': `export default ${scenarios};\n` });
 
 /** @returns {Record<string, string>} An entry that imports a chain of modules, each of which imports the next. */
 function createImportChain() {
@@ -214,5 +225,64 @@ export const OUTCOME_CASES = [
       'out/other.js': META,
     },
     { args: ['validate'], exit: 0, message: /^out\/other\.js breaks no rule[^\n]*\nSkipped out\/built\.js, since its workflow sets validate: false\.\n$/ },
+  ),
+  createCase(
+    'simulate a passing scenario',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes', respond: { draft: 'the draft', review: { verdict: 'pass' } } }]"),
+    { args: SIMULATE_ARGS, exit: 0, message: /^x\.js passes: returned, 2 calls\.\n1 passed, 0 failed\.\n$/ },
+  ),
+  createCase(
+    'simulate a scenario that expects threw and gets it',
+    createSimulateFiles(THROW_SCRIPT, "[{ name: 'died', expect: 'threw', respond: { answer: null } }]"),
+    { args: SIMULATE_ARGS, exit: 0, message: /^x\.js died: threw Error: The answer agent died, 1 call\.\n/ },
+  ),
+  createCase(
+    'simulate a scenario that expects threw and gets a return',
+    createSimulateFiles(THROW_SCRIPT, "[{ name: 'answered', expect: 'threw', respond: { answer: 'yes' } }]"),
+    { args: SIMULATE_ARGS, exit: 1, message: /^FAILED x\.js answered: returned, 1 call\.\n0 passed, 1 failed\.\n$/ },
+  ),
+  createCase(
+    'simulate a scenario that stops at a used up list',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'used up', respond: { draft: 'the draft', review: [{ verdict: 'fail' }] } }]"),
+    { args: SIMULATE_ARGS, exit: 1, message: /^FAILED x\.js used up: stopped at call 2 \(label "review"\): The list of key "review" holds 1 scripted return/ },
+  ),
+  createCase(
+    'simulate a refused script',
+    createSimulateFiles(`${META}return Date.now();\n`, "[{ name: 'any' }]"),
+    { args: SIMULATE_ARGS, exit: 1, rule: 'clock-unavailable', message: /\nFAILED x\.js any: refused, 0 calls\.\n/ },
+  ),
+  createCase(
+    'simulate an unknown scenario name',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes' }]"),
+    { args: [...SIMULATE_ARGS, '--scenario', 'other'], exit: 2, message: /holds no scenario named "other"\.\n$/ },
+  ),
+  createCase(
+    'simulate with a scenarios file that has a syntax error',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, '[{ name: }]'),
+    { args: SIMULATE_ARGS, exit: 2, message: /^dwfb simulate: The scenarios file scenarios\.js does not load\. scenarios\.js:1:25 Unexpected token\.\n$/ },
+  ),
+  createCase(
+    'simulate with a scenarios file that exports no list',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "{ name: 'passes' }"),
+    { args: SIMULATE_ARGS, exit: 2, message: /The scenarios file scenarios\.js does not export default a list of scenarios/ },
+  ),
+  createCase(
+    'simulate with a scenario that has an unknown key',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes', respnd: {} }]"),
+    { args: SIMULATE_ARGS, exit: 2, message: /Scenario 1 of the scenarios file scenarios\.js has an unknown key respnd\.\n$/ },
+  ),
+  createCase(
+    'simulate a config file with one workflow that has scenarios and one that has none',
+    {
+      ...createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes', respond: { draft: 'the draft', review: { verdict: 'pass' } } }]"),
+      'dwfb.config.js': "export default { workflows: [{ entry: 'entry.js', out: 'x.js', scenarios: 'scenarios.js' }, { entry: 'other.js', out: 'out/missing.js' }] };\n",
+    },
+    { args: ['simulate'], exit: 0, message: /^x\.js passes: returned, 2 calls\.\n1 passed, 0 failed\.\n$/ },
+  ),
+  createCase('simulate with --scenarios and no script', createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes' }]"), { args: ['simulate', '--scenarios', 'scenarios.js'], exit: 2 }),
+  createCase(
+    'simulate with --json',
+    createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'passes', respond: { draft: 'the draft', review: { verdict: 'pass' } } }]"),
+    { args: [...SIMULATE_ARGS, '--json'], exit: 0, message: /^\{\n {2}"ok": true,\n {2}"runtime": "2\.1\.332",\n {2}"simulations": \[\n/ },
   ),
 ];
