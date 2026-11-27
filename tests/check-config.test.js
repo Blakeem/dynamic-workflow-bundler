@@ -68,6 +68,19 @@ describe('checkConfig', () => {
     for (const [workflows, message] of cases) assertUsageError({ workflows }, message);
   });
 
+  it('names an out or a map that names the config file, by any spelling or letter case', () => {
+    const row = { entry: 'a.js', out: 'a.out.js', scenarios: 'a.scenarios.js' };
+    const cases = [
+      [{ ...row, out: 'dwfb.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes dwfb.config.js, which names the config file'],
+      [{ ...row, out: 'x/../DWFB.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes x/../DWFB.config.js, which names the config file where file names ignore letter case'],
+      [{ ...row, map: './dwfb.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the map ./dwfb.config.js, which names the config file'],
+      [{ ...row, map: 'Dwfb.Config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the map Dwfb.Config.js, which names the config file where file names ignore letter case'],
+    ];
+
+    for (const [workflow, message] of cases) assertUsageError({ workflows: [workflow] }, message);
+    assertUsageError({ workflows: [{ entry: 'b.js', out: 'b.out.js' }, { ...row, out: 'dwfb.config.js' }] }, 'Workflow 2 of the config file dwfb.config.js writes dwfb.config.js, which names the config file');
+  });
+
   it('names a config file that lists no workflow', () => {
     assertUsageError({ workflows: [] }, 'The config file dwfb.config.js lists no workflow');
   });

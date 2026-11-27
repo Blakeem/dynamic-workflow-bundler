@@ -37,8 +37,9 @@ const MAP_CONFLICT_FIELDS = Object.freeze([
  * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
  * a missing or wrong-typed field, an entry, out, scenarios or map that ends in a path separator or a `.` or `..`
  * segment, a map with no scenarios, two workflows whose out paths resolve to one path or differ only in letter
- * case, an out path that names the scenarios file of any workflow by either of those rules, and a map that
- * names an entry, out, scenarios or other map of any workflow by either of those rules.
+ * case, an out path that names the scenarios file of any workflow by either of those rules, a map that
+ * names an entry, out, scenarios or other map of any workflow by either of those rules, and an out or map that
+ * names the config file by either of those rules.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -63,6 +64,7 @@ export function checkConfig(value, configFile, configPath) {
   checkOutFiles(workflows, value.workflows, configPath);
   checkScenariosFiles(workflows, value.workflows, configPath);
   checkMapFiles(workflows, value.workflows, configPath);
+  checkConfigFileTargets(workflows, value.workflows, configFile, configPath);
 
   return { workflows };
 }
@@ -164,6 +166,33 @@ function checkMapFiles(workflows, rows, configPath) {
 
     const message = `Workflow ${index + 1} of the config file ${configPath} writes the map ${rows[index].map}, which names the ${conflict.word} ${rows[conflict.otherIndex][conflict.field]} of workflow ${conflict.otherIndex + 1}`;
     if (sameCandidate !== undefined) throw new UsageError(message);
+    throw new UsageError(`${message} where file names ignore letter case`);
+  });
+}
+
+/**
+ * `dwfb build` would replace the config file with a built script, and `dwfb map` with a flow map.
+ * @param {ConfigWorkflow[]} workflows
+ * @param {Record<string, string>[]} rows The workflows as the config file gives them.
+ * @param {string} configFile The config file's absolute path.
+ * @param {string} configPath
+ */
+function checkConfigFileTargets(workflows, rows, configFile, configPath) {
+  const configKey = configFile.toLowerCase();
+
+  workflows.forEach((workflow, index) => {
+    const targets = [
+      { file: workflow.out, text: rows[index].out },
+      { file: workflow.map, text: `the map ${rows[index].map}` },
+    ].filter(({ file }) => file !== null);
+    // The user wrote the out and the map, and named the config file with --config or the working directory lookup
+    // found it. Windows and macOS file names ignore letter case by default. checkMapFiles refuses an out and a map
+    // of one workflow that name one file, so at most one of them names the config file.
+    const target = targets.find(({ file }) => file.toLowerCase() === configKey);
+    if (target === undefined) return;
+
+    const message = `Workflow ${index + 1} of the config file ${configPath} writes ${target.text}, which names the config file`;
+    if (target.file === configFile) throw new UsageError(message);
     throw new UsageError(`${message} where file names ignore letter case`);
   });
 }

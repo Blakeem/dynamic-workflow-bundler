@@ -175,7 +175,8 @@ Options:
   --check              Write nothing, and report each flow map file that differs from the flow map the
                        script and its scenarios give.
   --config <path>      Read this config file in place of ${CONFIG_FILES_TEXT}.
-  --json               Print the result as one JSON object, and write no file.
+  --json               Print the result as one JSON object, and write no file. With --check, the check
+                       key of each mapped script is fresh, stale or missing.
   --help               Print this help.
 `;
 
@@ -237,6 +238,7 @@ async function runCommand(args) {
  */
 async function runBuild(args) {
   let parsed = null;
+  let configFile = null;
   let workflows = null;
   const builtWorkflows = [];
 
@@ -258,7 +260,7 @@ async function runBuild(args) {
 
   const buildCommand = formatBuildCommand(entry, values);
   try {
-    workflows = await findWorkflows(entry, values.out, values.config);
+    ({ configFile, workflows } = await findWorkflows(entry, values.out, values.config));
   } catch (error) {
     return printCommandFailure('dwfb build', error);
   }
@@ -273,7 +275,7 @@ async function runBuild(args) {
     }
   }
   try {
-    await checkOutFiles(builtWorkflows);
+    await checkOutFiles(builtWorkflows, configFile);
   } catch (error) {
     return printCommandFailure('dwfb build', error);
   }
@@ -791,6 +793,7 @@ async function runMap(args) {
   let targets = null;
   let isSuccess = true;
   const mappedTargets = [];
+  const mapChecks = [];
   const writtenFiles = [];
 
   try {
@@ -811,21 +814,24 @@ async function runMap(args) {
   if (script === undefined && values.scenarios !== undefined) return printUsageError('dwfb map', `Name the script that --scenarios maps.\n\n${MAP_USAGE}`);
   if (script === undefined && values.out !== undefined) return printUsageError('dwfb map', `Name the script whose flow map --out writes.\n\n${MAP_USAGE}`);
   if (values.scenarios !== undefined && values.config !== undefined) return printUsageError('dwfb map', `${SCENARIOS_CONFIG_CONFLICT}.\n\n${MAP_USAGE}`);
-  if (values.check && values.json) return printUsageError('dwfb map', `Name --check or --json, not both, since --json compares no file.\n\n${MAP_USAGE}`);
 
   // Every flow map is drawn before any file is written, so a usage error in a later workflow writes nothing.
   try {
     targets = script === undefined ? await findMapTargets(values.config) : [await findScriptMapTarget(script, values)];
-    // --json writes no file, so it skips the checks of the flow map files on disk.
-    if (!values.json) await checkMapFiles(targets, values.scenarios === undefined ? await findConfigWorkflowFiles(values.config) : targets);
+    // --json with no --check reads and writes no flow map file, so it skips the checks of the flow map files on disk.
+    if (values.check || !values.json) {
+      const { configFile, workflows } = values.scenarios === undefined ? await findConfigWorkflowFiles(values.config) : { configFile: null, workflows: targets };
+      await checkMapFiles(targets, workflows, configFile);
+    }
     for (const target of targets) mappedTargets.push(await mapTarget(target));
+    if (values.json) for (const mappedTarget of mappedTargets) mapChecks.push(values.check ? await checkMappedTarget(mappedTarget) : null);
   } catch (error) {
     return printCommandFailure('dwfb map', error);
   }
 
   if (values.json) {
-    isSuccess = mappedTargets.every(({ result }) => result.ok);
-    return printResult(`${JSON.stringify(formatMapJson(mappedTargets, isSuccess), null, 2)}\n`, isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS);
+    isSuccess = mappedTargets.every(({ result }, index) => result.ok && (mapChecks[index] === null || mapChecks[index] === 'fresh'));
+    return printResult(`${JSON.stringify(formatMapJson(mappedTargets, mapChecks, isSuccess), null, 2)}\n`, isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS);
   }
   for (const mappedTarget of mappedTargets) {
     let output = null;
@@ -910,32 +916,40 @@ async function mapTarget(target) {
 
 /**
  * @param {string | undefined} configPath The path `--config` names.
- * @returns {Promise<WorkflowFiles[]>} The files of every workflow of the config file, relative to the working
- *   directory. The command found its targets in this config file, and Node keeps the module it loaded.
+ * @returns {Promise<{ configFile: string, workflows: WorkflowFiles[] }>} The config file as the messages name it,
+ *   and the files of every workflow of the config file, relative to the working directory. The command found its
+ *   targets in this config file, and Node keeps the module it loaded.
  */
 async function findConfigWorkflowFiles(configPath) {
   const commandConfig = /** @type {{ file: string, config: import('../src/check-config.js').Config }} */ (await loadCommandConfig(configPath));
 
-  return commandConfig.config.workflows.map((workflow) => ({
-    script: formatDisplayPath(workflow.out),
-    scenariosFile: workflow.scenarios === null ? null : formatDisplayPath(workflow.scenarios),
-    entry: formatDisplayPath(workflow.entry),
-  }));
+  return {
+    configFile: commandConfig.file,
+    workflows: commandConfig.config.workflows.map((workflow) => ({
+      script: formatDisplayPath(workflow.out),
+      scenariosFile: workflow.scenarios === null ? null : formatDisplayPath(workflow.scenarios),
+      entry: formatDisplayPath(workflow.entry),
+    })),
+  };
 }
 
 /**
- * Throws a UsageError for a flow map file that names a script, a scenarios file, a source or another flow map
- * file, by any spelling, such as through a link or in another letter case, since the write would replace that
- * file. checkConfig cannot see a link or a source that an entry reaches. Also throws for a flow map path that
- * names a folder or is inside a file, so that no flow map is written before the refusal.
+ * Throws a UsageError for a flow map file that names a script, a scenarios file, a source, another flow map
+ * file or the config file the command read, by any spelling, such as through a link or in another letter case,
+ * since the write would replace that file. checkConfig cannot see a link or a source that an entry reaches. Also
+ * throws for a flow map path that names a folder or is inside a file, so that no flow map is written before the
+ * refusal.
  * @param {MapTarget[]} targets
  * @param {WorkflowFiles[]} workflows Every workflow of the config file when the command read one, since the entry
  *   of a workflow with no map can reach the file a map names. Else the targets.
+ * @param {string | null} configFile The config file the command read, or null when it read none.
  */
-async function checkMapFiles(targets, workflows) {
+async function checkMapFiles(targets, workflows, configFile) {
   const takenFiles = [];
+  let configFiles = [];
 
   if (targets.every(({ file }) => file === null)) return;
+  if (configFile !== null) configFiles = [{ file: await findRealPath(configFile) }];
   for (const workflow of workflows) {
     takenFiles.push({ file: await findRealPath(workflow.script), label: `the script ${workflow.script}` });
     if (workflow.scenariosFile !== null) takenFiles.push({ file: await findRealPath(workflow.scenariosFile), label: `the scenarios file ${workflow.scenariosFile}` });
@@ -944,8 +958,11 @@ async function checkMapFiles(targets, workflows) {
   for (const { script, file } of targets) {
     if (file === null) continue;
     const mapFile = await findRealPath(file);
-    // checkConfig refuses two paths that differ only in letter case on every platform, and so does this check.
+    // The user wrote each path, or the working directory lookup found the config file. checkConfig refuses two paths
+    // that differ only in letter case on every platform, and so does this check.
+    const sameConfigFile = findSameFile(configFiles, mapFile);
     const sameFile = findSameFile(takenFiles, mapFile);
+    if (sameConfigFile !== undefined) throw new UsageError(formatConfigFileConflict(`The flow map file ${file}`, /** @type {string} */ (configFile), formatCaseNote(sameConfigFile.file, mapFile)));
     if (sameFile !== undefined) throw new UsageError(`The flow map file ${file} names ${sameFile.label}${formatCaseNote(sameFile.file, mapFile)}, which the flow map would replace`);
     await checkOutPath(resolve(file), `The flow map path ${file}`);
     takenFiles.push({ file: mapFile, label: `the flow map file ${file} of the script ${script}` });
@@ -1029,15 +1046,40 @@ async function writeFlowMap({ target, result, fileLabel, document, findings }, i
   }
   if (target.file === null) return { text: document, isFresh: true, isWritten: false };
 
-  const fileBytes = await readExistingFile(target.file);
-  const isSame = fileBytes !== null && fileBytes.equals(Buffer.from(document, 'utf8'));
-  if (isCheck && fileBytes === null) return { text: `Stale ${fileLabel}: the file is missing.\n`, isFresh: false, isWritten: false };
-  if (isCheck && !isSame) return { text: `Stale ${fileLabel}: the file differs from the flow map of ${result.script}.\n`, isFresh: false, isWritten: false };
+  const fileCheck = await compareFlowMapFile(target.file, document);
+  if (isCheck && fileCheck === 'missing') return { text: `Stale ${fileLabel}: the file is missing.\n`, isFresh: false, isWritten: false };
+  if (isCheck && fileCheck === 'stale') return { text: `Stale ${fileLabel}: the file differs from the flow map of ${result.script}.\n`, isFresh: false, isWritten: false };
   if (isCheck) return { text: `Fresh ${fileLabel}.\n`, isFresh: true, isWritten: false };
-  if (isSame) return { text: `Unchanged ${fileLabel}.\n`, isFresh: true, isWritten: false };
+  if (fileCheck === 'fresh') return { text: `Unchanged ${fileLabel}.\n`, isFresh: true, isWritten: false };
 
   await writeScript(resolve(target.file), document);
   return { text: `Wrote ${fileLabel}.\n`, isFresh: true, isWritten: true };
+}
+
+/**
+ * @typedef {'fresh' | 'stale' | 'missing'} MapCheck How a flow map file compares with its flow map.
+ */
+
+/**
+ * @param {MappedTarget} mappedTarget A target of `dwfb map --check`, whose flow map file is not null.
+ * @returns {Promise<MapCheck | null>} Null for a script with an unmapped scenario, which has no flow map to compare.
+ */
+async function checkMappedTarget({ target, document }) {
+  if (document === null) return null;
+
+  return compareFlowMapFile(/** @type {string} */ (target.file), document);
+}
+
+/**
+ * @param {string} file
+ * @param {string} document The flow map.
+ * @returns {Promise<MapCheck>}
+ */
+async function compareFlowMapFile(file, document) {
+  const fileBytes = await readExistingFile(file);
+
+  if (fileBytes === null) return 'missing';
+  return fileBytes.equals(Buffer.from(document, 'utf8')) ? 'fresh' : 'stale';
 }
 
 /**
@@ -1055,14 +1097,16 @@ async function readExistingFile(file) {
 
 /**
  * @param {MappedTarget[]} mappedTargets In the order mapped.
+ * @param {(MapCheck | null)[]} mapChecks The `check` key of each map in the same order: how its flow map file
+ *   compares with `--check`, and null with no `--check` and for a script with an unmapped scenario.
  * @param {boolean} isSuccess
  * @returns {object} The `--json` shape, which is part of the public interface.
  */
-function formatMapJson(mappedTargets, isSuccess) {
+function formatMapJson(mappedTargets, mapChecks, isSuccess) {
   return {
     ok: isSuccess,
     runtime: CONTRACT_RUNTIME_VERSION,
-    maps: mappedTargets.map(({ result, fileLabel, findings }) => ({ script: result.script, file: fileLabel, ...result, findings })),
+    maps: mappedTargets.map(({ result, fileLabel, findings }, index) => ({ script: result.script, file: fileLabel, check: mapChecks[index], ...result, findings })),
   };
 }
 
@@ -1198,11 +1242,12 @@ async function isMissingFile(path) {
  * @param {string | undefined} entry
  * @param {string | undefined} out
  * @param {string | undefined} configPath
- * @returns {Promise<{ entry: string, out: string, banner: boolean, validate: boolean, scenarios?: string | null }[]>} A
- *   config workflow keeps its absolute scenarios path.
+ * @returns {Promise<{ configFile: string | null, workflows: { entry: string, out: string, banner: boolean, validate: boolean, scenarios?: string | null }[] }>}
+ *   The config file as the messages name it, or null for the `--out` workflow, which reads none. A config
+ *   workflow keeps its absolute scenarios path.
  */
 async function findWorkflows(entry, out, configPath) {
-  if (out !== undefined) return [{ entry, out, banner: true, validate: true }];
+  if (out !== undefined) return { configFile: null, workflows: [{ entry, out, banner: true, validate: true }] };
   const commandConfig = await loadCommandConfig(configPath);
   if (commandConfig === null) {
     const missingWhat = entry === undefined ? 'an entry file' : 'the built script with --out <file>';
@@ -1210,24 +1255,27 @@ async function findWorkflows(entry, out, configPath) {
   }
 
   const configWorkflows = commandConfig.config.workflows.map((workflow) => ({ ...workflow, entry: formatDisplayPath(workflow.entry), out: formatDisplayPath(workflow.out) }));
-  if (entry === undefined) return configWorkflows;
+  if (entry === undefined) return { configFile: commandConfig.file, workflows: configWorkflows };
 
   const entryWorkflows = await findConfigWorkflows(configWorkflows, 'entry', entry);
   if (entryWorkflows.length === 0) throw new UsageError(`The config file ${commandConfig.file} has no workflow whose entry is ${entry}`);
 
-  return entryWorkflows;
+  return { configFile: commandConfig.file, workflows: entryWorkflows };
 }
 
 /**
  * build() refuses an `out` that is a source of its own workflow. This extends the refusal to the sources of
  * every workflow the command builds, since the command writes each script after every workflow builds. It
  * also refuses two workflows whose `out` paths name one file through a link, and an `out` that names the
- * scenarios file of a workflow the command builds through a link, which checkConfig cannot see.
+ * scenarios file of a workflow the command builds or the config file the command read through a link, which
+ * checkConfig cannot see.
  * @param {{ workflow: { entry: string, out: string, scenarios?: string | null }, result: import('../src/build.js').BuildResult }[]} builtWorkflows
+ * @param {string | null} configFile The config file the command read, or null when it read none.
  */
-async function checkOutFiles(builtWorkflows) {
+async function checkOutFiles(builtWorkflows, configFile) {
   // build() gives each source relative to the working directory's real path.
   const workFolder = await realpath(process.cwd());
+  const configFiles = configFile === null ? [] : [{ file: await findRealPath(configFile) }];
   const sourceWorkflows = new Map();
   const scenariosFiles = [];
   const outFiles = [];
@@ -1244,10 +1292,13 @@ async function checkOutFiles(builtWorkflows) {
   for (const { workflow } of builtWorkflows) {
     const outFile = await findRealPath(workflow.out);
     const sourceWorkflow = sourceWorkflows.get(outFile);
-    // checkConfig refuses two out paths that differ only in letter case on every platform, and so does this check.
+    // The user wrote each path, or the working directory lookup found the config file. checkConfig refuses two out
+    // paths that differ only in letter case on every platform, and so does this check.
     const scenariosFile = findSameFile(scenariosFiles, outFile);
     const sameOutFile = findSameFile(outFiles, outFile);
+    const sameConfigFile = findSameFile(configFiles, outFile);
     const outLabel = `The out file ${formatDisplayPath(workflow.out)} of the workflow whose entry is ${formatDisplayPath(workflow.entry)}`;
+    if (sameConfigFile !== undefined) throw new UsageError(formatConfigFileConflict(outLabel, /** @type {string} */ (configFile), formatCaseNote(sameConfigFile.file, outFile)));
     if (sourceWorkflow !== undefined) throw new UsageError(`${outLabel} is a source of the workflow whose entry is ${formatDisplayPath(sourceWorkflow.entry)}`);
     if (scenariosFile !== undefined) {
       const scenariosWorkflow = scenariosFile.workflow;
@@ -1280,6 +1331,16 @@ function findSameFile(realFiles, file) {
  */
 function formatCaseNote(file, otherFile) {
   return file === otherFile ? '' : ' where file names ignore letter case';
+}
+
+/**
+ * @param {string} pathLabel The path the command would write, such as `The flow map file docs/flow.md`.
+ * @param {string} configFile The config file the command read, as the messages name it.
+ * @param {string} caseNote What formatCaseNote gives for the two real paths.
+ * @returns {string} The message of `dwfb build` and `dwfb map` for a write that would replace the config file.
+ */
+function formatConfigFileConflict(pathLabel, configFile, caseNote) {
+  return `${pathLabel} names the config file ${configFile}${caseNote}, which the write would replace`;
 }
 
 /**
