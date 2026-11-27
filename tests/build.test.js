@@ -9,6 +9,7 @@ import { build } from 'dynamic-workflow-bundler';
 import { compileBuiltScript, placeContractFinding } from '../src/build.js';
 import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { FIXES } from '../src/finding.js';
+import { PARSE_OPTIONS } from '../src/parse-source.js';
 import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { runBuiltScript } from './support/run-built-script.js';
 import { writeSizedFile } from './support/write-sized-file.js';
@@ -375,7 +376,7 @@ describe('build of text files, JSON files and parts', () => {
       'const done = await agent(prompt);',
       'return [steps, done, prompt];',
     ].join('\n');
-    const program = parse(original, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true });
+    const program = parse(original, PARSE_OPTIONS);
     const lineStarts = program.body.map((statement) => original.slice(0, statement.start).split('\n').length - 1);
     const lines = original.split('\n');
     const metaLineCount = lineStarts[1];
