@@ -60,7 +60,8 @@ import { installRuntimeGlobals } from './runtime-globals.js';
  * @property {(call: AgentCall) => unknown} answerCall Gives the value of one agent() call, and the script
  *   gets a copy of it made as a list leaving parallel() is copied. A thrown error, or a promise it gives
  *   that rejects, rejects that call, and the script gets that error itself. A SimulationStop thrown or
- *   rejected that way ends the simulation instead, and the call never settles.
+ *   rejected that way leaves the call unsettled instead. It ends the simulation only before the script's
+ *   promise settles. After that, the simulation goes on to its end.
  */
 
 /**
@@ -101,7 +102,10 @@ const ignoreRejection = () => {};
 // A context that runs no script reads no args and no budget.
 const IDLE_SETTINGS = Object.freeze({ globalNames: RUNTIME_GLOBAL_NAMES, argsText: undefined, budgetTotal: null, budgetSpent: 0, budgetSpentPerCall: 0 });
 
-/** Ends a simulation at the agent() call whose `answerCall` throws it, so the script runs no further. */
+/**
+ * Ends a simulation at the agent() call whose `answerCall` throws it, so the script runs no further. The
+ * `answerCall` doc of SimulationOptions says when a stop ends nothing.
+ */
 export class SimulationStop extends Error {
   constructor() {
     super('The simulation stopped at an agent() call');
@@ -373,8 +377,8 @@ function addReadyAnswer(simulation, settleCall) {
 }
 
 /**
- * Rejects one agent() call with what `answerCall` threw, in a later turn than the call, or stops the
- * simulation at once for a SimulationStop and leaves the call unsettled.
+ * Rejects one agent() call with what `answerCall` threw, in a later turn than the call. A SimulationStop
+ * leaves the call unsettled, and stops the simulation at once only before the script's promise settles.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @param {unknown} error
  * @param {(reason: unknown) => void} reject
