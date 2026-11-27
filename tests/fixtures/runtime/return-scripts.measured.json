@@ -1,0 +1,56 @@
+{
+  "measuredOn": "2.1.332",
+  "note": "Each entry is one launched script with no args that calls no agent, run by the Workflow runtime of Claude Code 2.1.332 on 2026-11-26. `script` is the text after the meta statement. `result` is what the Workflow tool reported: the return for a completed script, the error text for a failed one.",
+  "scripts": {
+    "return-a": {
+      "script": "const direct = await parallel([() => undefined, () => null, () => -0])\nreturn { parallelUndefinedIsUndefined: direct[0] === undefined, parallelNullIsNull: direct[1] === null, negativeZeroKept: Object.is(direct[2], -0), undefinedProperty: undefined, functionProperty() {}, date: new Date(0), map: new Map([[1, 2]]), nan: NaN, infinity: Infinity, nested: [undefined, () => 1, 3], error: new Error('e'), symbolProperty: Symbol('s') }",
+      "status": "completed",
+      "result": {
+        "parallelUndefinedIsUndefined": true,
+        "parallelNullIsNull": true,
+        "negativeZeroKept": true,
+        "date": {},
+        "map": {},
+        "nan": null,
+        "infinity": null,
+        "nested": [
+          null,
+          null,
+          3
+        ],
+        "error": {}
+      }
+    },
+    "return-b": {
+      "script": "const value = { name: 'circular' }\nvalue.self = value\nreturn value",
+      "status": "failed",
+      "result": "TypeError: JSON.stringify cannot serialize cyclic structures."
+    },
+    "return-c": {
+      "script": "Promise.reject(new Error('unhandled rejection'))\nawait new Promise((resolve) => setTimeout(resolve, 20))\nreturn 'returned after an unhandled rejection'",
+      "status": "completed",
+      "result": "returned after an unhandled rejection"
+    },
+    "return-d": {
+      "script": "throw { code: 7, message: 'object thrown' }",
+      "status": "failed",
+      "result": "Error: object thrown"
+    },
+    "return-e": {
+      "script": "throw 'string thrown'",
+      "status": "failed",
+      "result": "Error: string thrown"
+    },
+    "return-f": {
+      "script": "return () => 1",
+      "status": "failed",
+      "result": "Error: workflow result cannot be a function"
+    },
+    "return-g": {
+      "script": null,
+      "status": "failed",
+      "result": "TypeError: JSON.stringify cannot serialize BigInt",
+      "note": "From the probe run of 2026-11-26 whose launched script failed on its return. The exact script was not kept."
+    }
+  }
+}

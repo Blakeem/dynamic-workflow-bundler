@@ -34,6 +34,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | simulation | One execution of a script against a scenario. A run is a real execution by the runtime. |
 | trace | The record of one simulation. |
 | call | One `agent()` invocation in a trace. |
+| group | One `parallel()` or `pipeline()` invocation in a simulation. Each call made inside it records the group's index. |
 | runtime | The Claude Code Workflow runtime. The simulator is this project's stand-in for it. |
 
 Add a row before a new concept gets a name in code.

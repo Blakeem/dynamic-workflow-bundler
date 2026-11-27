@@ -1,0 +1,42 @@
+{
+  "measuredOn": "2.1.332",
+  "note": "What the Workflow runtime of Claude Code 2.1.332 gave on 2026-11-26 for sim-probe-boundary.js, launched with no args.",
+  "result": {
+    "parallel identity": "ok: string false",
+    "parallel function value": "ok: [object Array] {0: <undefined>}",
+    "parallel object with function": "ok: [object Array] {0: [object Object] {kept: number 1}}",
+    "parallel object with undefined": "ok: [object Array] {0: [object Object] {u: <undefined>, kept: number 1}}",
+    "parallel date": "ok: [object Array] {0: [object Object] {}}",
+    "parallel map": "ok: [object Array] {0: [object Object] {}}",
+    "parallel set": "ok: [object Array] {0: [object Object] {}}",
+    "parallel class instance": "ok: [object Array] {0: [object Object] {x: number 1}}",
+    "parallel nan and infinity": "ok: [object Array] {0: number NaN, 1: number Infinity, 2: number 0}",
+    "parallel bigint": "ok: [object Array] {0: <bigint 1>}",
+    "parallel symbol": "ok: [object Array] {0: <symbol>}",
+    "parallel error value": "ok: [object Array] {0: [object Object] {}}",
+    "parallel circular": "threw RangeError: Maximum call stack size exceeded.",
+    "parallel sparse array": "ok: [object Array] {0: [object Array] {0: number 1, 1: <undefined>, 2: number 3}}",
+    "parallel toJSON": "ok: [object Array] {0: [object Object] {}}",
+    "parallel sparse thunks": "threw TypeError: parallel() expects an array of functions, not promises. Wrap each call: () => agent(...)",
+    "parallel thunk not function": "threw TypeError: parallel() expects an array of functions, not promises. Wrap each call: () => agent(...)",
+    "parallel order": "ok: string fast,slow",
+    "parallel runs thunks in same tick": "ok: string after call,thunk",
+    "pipeline identity": "ok: string false",
+    "pipeline stage identity": "ok: string true",
+    "pipeline final undefined": "ok: [object Array] {0: <undefined>}",
+    "pipeline final function": "ok: [object Array] {0: <undefined>}",
+    "pipeline null skips later stages": "ok: string [null] ",
+    "pipeline undefined keeps later stages": "ok: string [\"two\"] stage 2 ran with undefined",
+    "pipeline false keeps later stages": "ok: string [\"two\"] stage 2 ran with false",
+    "pipeline throw skips later stages": "ok: string [null,\"two\"] stage 2 ran with 2",
+    "pipeline items sparse": "ok: [object Array] {0: string 1, 1: string undefined, 2: string 3}",
+    "pipeline order": "ok: string s1 i1 s1 i2 s2 i1 s2 i2",
+    "pipeline index and item": "ok: [object Array] {0: string aa0|a0, 1: string bb1|b1}",
+    "log object": "ok: <undefined>",
+    "phase twice": "ok: string done"
+  },
+  "logs": [
+    "pipeline[0] failed: x",
+    "[object]"
+  ]
+}

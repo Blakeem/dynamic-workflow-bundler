@@ -1,0 +1,55 @@
+{
+  "measuredOn": "2.1.332",
+  "note": "What the Workflow runtime of Claude Code 2.1.332 gave on 2026-11-26 for sim-probe-names.js, launched with the args in `args`.",
+  "args": {
+    "list": [
+      1
+    ],
+    "obj": {
+      "a": 1
+    }
+  },
+  "result": {
+    "parallel promises": "threw TypeError: parallel() expects an array of functions, not promises. Wrap each call: () => agent(...) | instanceof Error false | constructor undefined",
+    "parallel string": "threw TypeError: parallel() expects an array of functions | instanceof Error false | constructor undefined",
+    "parallel nothing": "threw TypeError: parallel() expects an array of functions | instanceof Error false | constructor undefined",
+    "parallel 4097": "threw Error: array length 4097 exceeds the maximum of 4096 supported across the workflow VM boundary | instanceof Error false | constructor undefined",
+    "pipeline string items": "threw TypeError: pipeline() expects an array as the first argument | instanceof Error false | constructor undefined",
+    "pipeline stage not function": "threw TypeError: pipeline() stages must be functions: pipeline(items, item => ..., result => ...) | instanceof Error false | constructor undefined",
+    "pipeline 4097": "threw Error: array length 4097 exceeds the maximum of 4096 supported across the workflow VM boundary | instanceof Error false | constructor undefined",
+    "date now computed": "threw Error: Date.now() / new Date() are unavailable in workflow scripts (breaks resume). Stamp results after the workflow returns, or pass timestamps via args. | instanceof Error true | constructor Error",
+    "math random computed": "threw Error: Math.random() is unavailable in workflow scripts (breaks resume). For N independent samples, include the index in the agent label or prompt. | instanceof Error true | constructor Error",
+    "eval": "threw EvalError: Code generation from strings disallowed for this context | instanceof Error true | constructor EvalError",
+    "agent schema string": "threw TypeError: WeakMap keys must be objects or non-registered symbols | instanceof Error false | constructor undefined",
+    "agent schema root array type": "threw TelemetrySafeError: agent({schema}) received an unusable JSON Schema — the API only accepts an object-rooted tool input schema, so every request would be rejected: the root schema must declare type: 'object' (the API rejects any other root type for a tool input schema); wrap arrays or primitives in an object property. The subagent was not started — fix the schema and call agent() again. | instanceof Error false | constructor undefined",
+    "agent unknown agentType": "threw Error: agent({agentType}): agent type 'no-such-agent-type-probe' not found. Available agents: claude, claude-code-guide, Explore, general-purpose, opus-dev, Plan, statusline-setup, web-fetch, web-researcher | instanceof Error false | constructor undefined",
+    "budget assign": "threw TypeError: Attempted to assign to readonly property. | instanceof Error true | constructor TypeError",
+    "parallel result realm": "ok: [true,true,true,true,true,true,true]",
+    "pipeline result realm": "ok: [true,true,true,true]",
+    "args realm": "ok: [\"object\",true,true,true,true,false,\"{\\\"list\\\":[1],\\\"obj\\\":{\\\"a\\\":1}}\"]",
+    "args mutable": "ok: {\"list\":[1,2],\"obj\":{\"a\":1},\"added\":1}",
+    "budget realm": "ok: [false,true,\"number\",true]",
+    "function realm": "ok: [true,true,true,true]",
+    "parallel promise realm": "ok: [true,\"function\",\"[object Promise]\"]",
+    "setTimeout string": "ok: number",
+    "setTimeout id": "ok: number",
+    "setTimeout extra arguments": "ok: [null,null]",
+    "setTimeout no delay": "ok: fired",
+    "clearTimeout cancels": "ok: cancelled",
+    "console log return": "ok: undefined",
+    "log number": "ok: undefined",
+    "log array": "ok: undefined",
+    "log two arguments": "ok: undefined",
+    "log undefined": "ok: undefined",
+    "log null": "ok: undefined",
+    "phase number": "ok: undefined"
+  },
+  "logs": [
+    "to console",
+    "5",
+    "[object]",
+    "first",
+    "undefined",
+    "null"
+  ]
+}

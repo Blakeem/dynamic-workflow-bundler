@@ -1,0 +1,36 @@
+export const meta = { name: 'sim-probe-values', description: 'Measures budget, args, workflow errors and promise handling. Calls no agent.' }
+const out = {}
+const tryRun = async (key, run) => {
+  try { const value = await run(); out[key] = 'ok: ' + (typeof value === 'string' ? value : JSON.stringify(value)) } catch (error) { out[key] = 'threw ' + (error && error.name) + ': ' + (error && error.message) + ' | type ' + typeof error }
+}
+await tryRun('budget keys', () => Object.keys(budget).join(','))
+await tryRun('budget spent', () => String(budget.spent()))
+await tryRun('budget remaining', () => String(budget.remaining()))
+await tryRun('budget total', () => String(budget.total))
+await tryRun('args typeof', () => typeof args)
+await tryRun('args value', () => String(args))
+await tryRun('workflow unknown name', () => workflow('no-such-workflow-name'))
+await tryRun('workflow missing path', () => workflow({ scriptPath: 'E:/no/such/file.js' }))
+await tryRun('workflow number', () => workflow(5))
+await tryRun('workflow nothing', () => workflow())
+await tryRun('workflow empty object', () => workflow({}))
+await tryRun('phase return', () => String(phase('x')))
+await tryRun('log return', () => String(log('probe line')))
+await tryRun('parallel sync values', () => parallel([() => 1, () => 'two', () => undefined, () => null]))
+await tryRun('parallel nested', () => parallel([() => parallel([() => 1]), () => 2]))
+await tryRun('parallel thunk rejects', () => parallel([() => Promise.reject(new Error('r')), () => 3]))
+await tryRun('parallel thunk throws string', () => parallel([() => { throw 'text' }]))
+await tryRun('pipeline empty items', () => pipeline([]))
+await tryRun('pipeline undefined stage result', () => pipeline([1, 2], () => undefined, (previous) => String(previous)))
+await tryRun('pipeline stage returns null then next stage', () => pipeline([1], () => null, (previous) => 'after ' + String(previous)))
+await tryRun('pipeline no arguments', () => pipeline())
+await tryRun('agent no arguments type', () => typeof agent)
+await tryRun('agent schema array', () => agent('x', { schema: [] }))
+await tryRun('agent schema null', () => agent('x', { schema: null }).then((value) => 'resolved ' + typeof value))
+await tryRun('agent opts string', () => agent('x', 'opts').then((value) => 'resolved ' + typeof value))
+await tryRun('console keys', () => Object.keys(console).join(','))
+await tryRun('setTimeout zero order', () => new Promise((resolve) => { const order = []; setTimeout(() => { order.push('timer'); resolve(order.join(',')) }, 0); Promise.resolve().then(() => order.push('microtask')) }))
+await tryRun('globalThis is frozen', () => String(Object.isFrozen(globalThis)) + ' ' + String(Object.isExtensible(globalThis)))
+await tryRun('agent is frozen', () => String(Object.isFrozen(agent)) + ' ' + agent.name + ' ' + agent.length)
+await tryRun('function names', () => [parallel.name, pipeline.name, phase.name, log.name, workflow.name].join(','))
+return out

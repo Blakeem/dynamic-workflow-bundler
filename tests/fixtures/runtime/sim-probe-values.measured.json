@@ -1,0 +1,41 @@
+{
+  "measuredOn": "2.1.332",
+  "note": "What the Workflow runtime of Claude Code 2.1.332 gave on 2026-11-26 for sim-probe-values.js, launched with no args.",
+  "result": {
+    "budget keys": "ok: total,spent,remaining",
+    "budget spent": "ok: 7912730",
+    "budget remaining": "ok: Infinity",
+    "budget total": "ok: null",
+    "args typeof": "ok: undefined",
+    "args value": "ok: undefined",
+    "workflow unknown name": "threw Error: workflow('no-such-workflow-name'): no workflow with that name. Available: deep-research | type object",
+    "workflow missing path": "threw Error: workflow({scriptPath: 'E:/no/such/file.js'}): scriptPath must be a script path this tool returned, or a file you can already read (the working directory or a directory you have added): E:/no/such/file.js\nA session that cannot call Read cannot load any scriptPath. Pass the whole script inline through Workflow's `script` input instead. | type object",
+    "workflow number": "threw TypeError: workflow() expects a workflow name (string) or {scriptPath: string} | type object",
+    "workflow nothing": "threw TypeError: workflow() expects a workflow name (string) or {scriptPath: string} | type object",
+    "workflow empty object": "threw TypeError: workflow() expects a workflow name (string) or {scriptPath: string} | type object",
+    "phase return": "ok: undefined",
+    "log return": "ok: undefined",
+    "parallel sync values": "ok: [1,\"two\",null,null]",
+    "parallel nested": "ok: [[1],2]",
+    "parallel thunk rejects": "ok: [null,3]",
+    "parallel thunk throws string": "ok: [null]",
+    "pipeline empty items": "ok: []",
+    "pipeline undefined stage result": "ok: [\"undefined\",\"undefined\"]",
+    "pipeline stage returns null then next stage": "ok: [null]",
+    "pipeline no arguments": "threw TypeError: pipeline() expects an array as the first argument | type object",
+    "agent no arguments type": "ok: function",
+    "agent schema array": "threw TelemetrySafeError: agent({schema}) received an invalid JSON Schema: data must be object,boolean | type object",
+    "agent schema null": "ok: resolved string",
+    "agent opts string": "ok: resolved string",
+    "console keys": "ok: log,info,debug,error,warn",
+    "setTimeout zero order": "ok: microtask,timer",
+    "globalThis is frozen": "ok: false true",
+    "agent is frozen": "ok: false  0",
+    "function names": "ok: ,,,,"
+  },
+  "logs": [
+    "probe line",
+    "parallel[0] failed: r",
+    "parallel[0] failed: text"
+  ]
+}
