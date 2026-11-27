@@ -1,4 +1,4 @@
-import { CONTRACT_RUNTIME_VERSION } from './contract.js';
+import { AGENT_CALL_LIMIT, CONTRACT_RUNTIME_VERSION } from './contract.js';
 import { findFreeNames } from './find-free-names.js';
 import { findNonJsonValue, isPlainObject } from './find-non-json-value.js';
 import { findScriptedReturn, formatCallName } from './find-scripted-return.js';
@@ -57,10 +57,10 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
 
 /**
  * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' } | { kind: 'never-settles' }>
- *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json', message: string, call: number }
+ *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'call-limit', message: string, call: number }
  *   | { kind: 'stopped', reason: 'node-lacks-name' | 'never-settles', message: string }
  *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A stop's message has
- *   no closing period. `call` is the index of the call that got no usable scripted return.
+ *   no closing period. `call` is the index of the call the simulation stopped at.
  */
 
 /**
@@ -78,15 +78,17 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
 /**
  * Runs a workflow script against a scenario with no model call, and writes and prints nothing. Each agent()
  * call gets the scripted return that the scenario's respond gives it, and the simulation stops at a call
- * that gets none it can use, or when the script waits on a promise that nothing settles. A script that
- * breaks the contract is refused and does not run, and a script larger than READ_BYTE_LIMIT is refused as
- * `validate()` refuses it.
+ * that gets none it can use, at the call after the AGENT_CALL_LIMIT calls the runtime allows one workflow,
+ * or when the script waits on a promise that nothing settles. A script that breaks the contract is refused
+ * and does not run, and a script larger than READ_BYTE_LIMIT is refused as `validate()` refuses it.
  * Not simulated: the check of `agentType` and `model` against the session, any check of a schema other
- * than its root type, the limit on agent calls, and a budget that grows by a different count at each call.
+ * than its root type, and a budget that grows by a different count at each call.
  * A call of `workflow()` that names a workflow throws an Error with the message
  * `workflow() is not simulated`. Time is virtual, so each `agent()` call answers before any timer runs and
  * a wait of any length ends at once. Code after a script's first `await` has no time limit. So a loop
- * there with no end keeps the simulation from ending, whether or not it calls `agent()`.
+ * there with no end keeps the simulation from ending, unless it calls `agent()` and waits for an `agent()`
+ * answer or a timer between those calls, since the simulation then stops at the cap on `agent()` calls.
+ * A wait for a promise that settles at once, such as `await null`, does not count.
  * Rejects with a UsageError for options or a scenario of another shape, for a script `validate()` rejects,
  * and for a respond function that throws at a call made before the script settles.
  * @param {{ script: string, scenario?: Scenario }} options `script` as `validate()` takes it.
@@ -219,8 +221,9 @@ function createTraceWithoutRun(traceHead, end) {
  */
 
 /**
- * Answers each agent() call from `respond` and records it. A call that gets no usable scripted return, or
- * whose respond function throws, stops the simulation.
+ * Answers each agent() call from `respond` and records it. A call after AGENT_CALL_LIMIT answered calls, a
+ * call that gets no usable scripted return, and a call whose respond function throws each stop the
+ * simulation.
  * @param {Respond | undefined} respond
  */
 function createCallRecorder(respond) {
@@ -235,7 +238,7 @@ function createCallRecorder(respond) {
       let outcome = null;
 
       try {
-        outcome = findScriptedReturn(respond, call, recorder.calls, hasSchemaObject(agentCall.opts));
+        outcome = findCallOutcome(respond, call, recorder.calls, agentCall.opts);
       } catch (error) {
         recorder.stop = { call, end: null, respondError: error };
         throw new SimulationStop();
@@ -250,6 +253,27 @@ function createCallRecorder(respond) {
   };
 
   return recorder;
+}
+
+/**
+ * @param {Respond | undefined} respond
+ * @param {Omit<TraceCall, 'returned'>} call
+ * @param {TraceCall[]} earlierCalls The calls that got a scripted return.
+ * @param {unknown} opts The call's options, of the script's realm.
+ * @returns {import('./find-scripted-return.js').ScriptedReturnResult | { kind: 'stopped', reason: 'call-limit', message: string }}
+ *   A stop for a call past the cap, which reads no respond, or the scripted return of the call.
+ */
+function findCallOutcome(respond, call, earlierCalls, opts) {
+  if (earlierCalls.length === AGENT_CALL_LIMIT) return { kind: 'stopped', reason: 'call-limit', message: formatCallLimitMessage(call) };
+  return findScriptedReturn(respond, call, earlierCalls, hasSchemaObject(opts));
+}
+
+/**
+ * @param {Omit<TraceCall, 'returned'>} call
+ * @returns {string}
+ */
+function formatCallLimitMessage(call) {
+  return `The script made more than ${AGENT_CALL_LIMIT} agent() calls, the cap the runtime puts on one workflow. Check the loop that makes ${formatCallName(call)}`;
 }
 
 /**

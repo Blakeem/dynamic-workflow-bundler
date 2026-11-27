@@ -284,6 +284,33 @@ describe('a stop', () => {
     assert.deepEqual([trace.calls, trace.logs], [[], ['waiting']]);
   });
 
+  // The loop of each test that uses it never ends without the cap, so the timeout fails the test rather than hang the suite.
+  const CALL_LIMIT_TEST_TIMEOUT = 60_000;
+
+  it('stops at the call after the 1000th, the cap the runtime puts on one workflow, and answers the 1000th', { timeout: CALL_LIMIT_TEST_TIMEOUT }, async () => {
+    const findLoop = "const bugs = [];\nwhile (bugs.length < 10) {\n  const found = await agent('Find bugs', { label: 'find', schema: { type: 'object' } });\n  bugs.push(...found.bugs);\n}\nreturn bugs;\n";
+    const capped = await simulateScript(await writeScript('find-loop.js', findLoop), { respond: { find: { bugs: [] } } });
+    const counted = await simulateScript(await writeScript('count-calls.js', "for (let index = 0; index < args.count; index += 1) await agent('x');\nreturn args.count;\n"), { args: { count: 1000 }, respond: { '': 'any' } });
+
+    assert.deepEqual(capped.end, {
+      kind: 'stopped',
+      reason: 'call-limit',
+      message: 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the loop that makes call 1000 (label "find")',
+      call: 1000,
+    });
+    assert.equal(capped.calls.length, 1001);
+    assert.deepEqual(capped.calls[999].returned, { bugs: [] });
+    assert.ok(!Object.hasOwn(capped.calls[1000], 'returned'));
+    assert.deepEqual([counted.end, counted.calls.length], [{ kind: 'returned', value: 1000 }, 1000]);
+  });
+
+  it('stops at the cap a loop that waits for a timer between calls it does not await', { timeout: CALL_LIMIT_TEST_TIMEOUT }, async () => {
+    const timerLoop = "await agent('a');\nwhile (true) {\n  agent('x');\n  await new Promise((resolve) => setTimeout(resolve, 1));\n}\n";
+    const trace = await simulateScript(await writeScript('timer-loop.js', timerLoop), { respond: { '': 'ok' } });
+
+    assert.deepEqual([trace.end.reason, trace.end.call, trace.calls.length], ['call-limit', 1000, 1001]);
+  });
+
   it('stops at a call whose respond function gives a promise, and lets no rejection of it reach the process', async () => {
     const script = await writeScript('answer.js', "return await agent('x')\n");
     const unhandled = [];

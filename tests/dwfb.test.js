@@ -38,9 +38,10 @@ async function copyModulesFixture() {
 /**
  * @param {string[]} args
  * @param {string} [cwd]
+ * @param {number} [timeout] Milliseconds before the command is killed, which leaves `status` null.
  */
-function runCommand(args, cwd = process.cwd()) {
-  const { status, stdout, stderr } = spawnSync(process.execPath, [COMMAND, ...args], { cwd, encoding: 'utf8' });
+function runCommand(args, cwd = process.cwd(), timeout = undefined) {
+  const { status, stdout, stderr } = spawnSync(process.execPath, [COMMAND, ...args], { cwd, encoding: 'utf8', timeout });
   return { status, stdout, stderr };
 }
 
@@ -899,6 +900,20 @@ describe('dwfb simulate', () => {
     assert.deepEqual(runCommand(['simulate', 'waits.js', '--scenarios', 'any.scenarios.js', '--scenario', 'first'], folder), {
       status: 1,
       stdout: `FAILED waits.js first: stopped: ${message}, 0 calls.\n0 passed, 1 failed.\n`,
+      stderr: '',
+    });
+  });
+
+  it('prints a stop at the call after the 1000th with the call it names, and exits 1', async () => {
+    const folder = await writeSimulateFolder();
+    const message = 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the loop that makes call 1000 (label "find")';
+    await writeFile(join(folder, 'find-loop.js'), `${META}const bugs = [];\nwhile (bugs.length < 10) {\n  const found = await agent('Find bugs', { label: 'find', schema: { type: 'object' } });\n  bugs.push(...found.bugs);\n}\nreturn bugs;\n`);
+    await writeFile(join(folder, 'find.scenarios.js'), "export default [{ name: 'no bugs', respond: { find: { bugs: [] } } }];\n");
+
+    // The loop never ends without the cap, so the timeout fails the test rather than hang the suite.
+    assert.deepEqual(runCommand(['simulate', 'find-loop.js', '--scenarios', 'find.scenarios.js'], folder, 60_000), {
+      status: 1,
+      stdout: `FAILED find-loop.js no bugs: stopped at call 1000 (label "find"): ${message}, 1001 calls.\n0 passed, 1 failed.\n`,
       stderr: '',
     });
   });

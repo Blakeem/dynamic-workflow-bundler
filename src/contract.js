@@ -7,6 +7,9 @@
 /** The Claude Code version whose Workflow runtime the contract was measured on, with a set of probe scripts. */
 export const CONTRACT_RUNTIME_VERSION = '2.1.332';
 
+/** The cap on agent() calls over one workflow, which the Workflow tool of Claude Code 2.1.332 documents. What the runtime does with the next call is not measured. */
+export const AGENT_CALL_LIMIT = 1000;
+
 const RULE_IDS = [
   'script-too-large',
   'syntax-error',
