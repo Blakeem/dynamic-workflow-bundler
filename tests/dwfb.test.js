@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { listMissingGlobalNames } from '../src/run-simulation.js';
+import { sliceReadmeSection } from './support/slice-readme-section.js';
 
 const COMMAND = fileURLToPath(new URL('../bin/dwfb.js', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -45,18 +46,6 @@ async function copyModulesFixture() {
 function runCommand(args, cwd = process.cwd(), timeout = undefined) {
   const { status, stdout, stderr } = spawnSync(process.execPath, [COMMAND, ...args], { cwd, encoding: 'utf8', timeout });
   return { status, stdout, stderr };
-}
-
-/**
- * @param {string} readme
- * @param {string} heading
- * @returns {string} The README section that opens with the heading, up to the next section.
- */
-function sliceReadmeSection(readme, heading) {
-  const sectionStart = readme.indexOf(heading);
-  const sectionEnd = readme.indexOf('\n## ', sectionStart + heading.length);
-  assert.notEqual(sectionStart, -1, `README.md has no line ${heading.trim()}`);
-  return readme.slice(sectionStart, sectionEnd === -1 ? readme.length : sectionEnd);
 }
 
 describe('dwfb', () => {
@@ -1270,6 +1259,29 @@ describe('dwfb inspect', () => {
     assert.deepEqual({ status: json.status, stderr: json.stderr }, { status: 1, stderr: '' });
     assert.equal(JSON.parse(json.stdout).ok, false);
     assert.deepEqual(JSON.parse(json.stdout).events, []);
+  });
+
+  it('names how a simulation that stopped before its first call ended in the usage error for --call, and exits 2', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'waits.js'), `${META}await new Promise(() => {});\n`);
+    const message = 'The script waits on a promise that nothing settles. A run of this script would not end';
+
+    assert.deepEqual(runCommand(['inspect', 'waits.js', '--scenarios', 'answer.scenarios.js', '--call', '0'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: `dwfb inspect: The simulation made no call, and it ended as stopped: ${message}.\n`,
+    });
+  });
+
+  it('names how a simulation that returned with no call ended in the usage error for --call, and exits 2', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'none.js'), `${META}return 1;\n`);
+
+    assert.deepEqual(runCommand(['inspect', 'none.js', '--scenarios', 'answer.scenarios.js', '--call', '0', '--json'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb inspect: The simulation made no call, and it ended as returned.\n',
+    });
   });
 
   it('reads the scenarios file of the config workflow whose out is the script when no --scenarios names one', async () => {

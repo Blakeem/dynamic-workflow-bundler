@@ -582,6 +582,10 @@ async function runInspect(args) {
     isRefused = simulation.trace.end.kind === 'refused';
     // The trace comes before the call check that createInspection() makes, so that a refused script, which made
     // no call, prints its findings as dwfb simulate does in place of a usage error for the call --call names.
+    // The no-call error of createInspection() names no end, so it would hide how a script ended before its first call.
+    if (values.call !== undefined && !isRefused && simulation.trace.calls.length === 0) {
+      throw new UsageError(`The simulation made no call, and it ended as ${formatSimulationEnd(simulation.trace)}`);
+    }
     inspection = createInspection(simulation.trace, values.call === undefined || isRefused ? undefined : Number(values.call));
   } catch (error) {
     return printCommandFailure('dwfb inspect', error);

@@ -7,6 +7,7 @@ import { checkContract } from '../src/check-contract.js';
 import { CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from '../src/contract.js';
 import { FIXES } from '../src/finding.js';
 import { CONTRACT_CASES } from './fixtures/contract/cases.js';
+import { sliceReadmeSection } from './support/slice-readme-section.js';
 
 const CASE_FOLDER = fileURLToPath(new URL('./fixtures/contract/cases/', import.meta.url));
 // The probe set holds no script for these two rules, so tests/check-contract.test.js covers them.
@@ -50,12 +51,8 @@ describe('contract rule table', () => {
 
   it('holds the ids of the rule table of the README section on dwfb validate, in its order', async () => {
     const readme = await readFile(README, 'utf8');
-    const sectionStart = readme.indexOf(VALIDATE_SECTION_HEADING);
-    const sectionEnd = readme.indexOf('\n## ', sectionStart + VALIDATE_SECTION_HEADING.length);
-    const section = readme.slice(sectionStart, sectionEnd === -1 ? readme.length : sectionEnd);
-    const readmeIds = [...section.matchAll(RULE_ROW_PATTERN)].map((match) => match.groups.id);
+    const readmeIds = [...sliceReadmeSection(readme, VALIDATE_SECTION_HEADING).matchAll(RULE_ROW_PATTERN)].map((match) => match.groups.id);
 
-    assert.notEqual(sectionStart, -1, `README.md has no line ${VALIDATE_SECTION_HEADING.trim()}`);
     assert.deepEqual(readmeIds, CONTRACT_RULES.map((rule) => rule.id));
   });
 
