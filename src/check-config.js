@@ -4,7 +4,14 @@ import { isObject } from './is-object.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
-const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios']);
+const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios', 'map']);
+// The words each message gives a path field of a workflow, in the order a map path is compared with them.
+const MAP_CONFLICT_FIELDS = Object.freeze([
+  ['entry', 'entry'],
+  ['out', 'out file'],
+  ['scenarios', 'scenarios file'],
+  ['map', 'map'],
+]);
 
 /**
  * @typedef {object} ConfigWorkflow
@@ -13,8 +20,11 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios'
  * @property {boolean} banner Defaults to true.
  * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
  *   against the contract. Defaults to true.
- * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate` and
- *   `dwfb inspect` run `out` against, or null for a workflow that `dwfb simulate` with no script skips.
+ * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate`,
+ *   `dwfb inspect` and `dwfb map` run `out` against, or null for a workflow that `dwfb simulate` with no script
+ *   skips.
+ * @property {string | null} map The absolute path of the flow map that `dwfb map` writes for `out`, or null for
+ *   a workflow that `dwfb map` with no script skips.
  */
 
 /**
@@ -25,9 +35,10 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios'
 /**
  * Checks the default export of a config file and resolves each path against the config file's folder.
  * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
- * a missing or wrong-typed field, an entry, out or scenarios that ends in a path separator or a `.` or `..`
- * segment, two workflows whose out paths resolve to one path or differ only in letter case, and an out path
- * that names the scenarios file of any workflow by either of those rules.
+ * a missing or wrong-typed field, an entry, out, scenarios or map that ends in a path separator or a `.` or `..`
+ * segment, a map with no scenarios, two workflows whose out paths resolve to one path or differ only in letter
+ * case, an out path that names the scenarios file of any workflow by either of those rules, and a map that
+ * names an entry, out, scenarios or other map of any workflow by either of those rules.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -51,6 +62,7 @@ export function checkConfig(value, configFile, configPath) {
   }
   checkOutFiles(workflows, value.workflows, configPath);
   checkScenariosFiles(workflows, value.workflows, configPath);
+  checkMapFiles(workflows, value.workflows, configPath);
 
   return { workflows };
 }
@@ -62,10 +74,10 @@ export function checkConfig(value, configFile, configPath) {
  * @returns {ConfigWorkflow}
  */
 function checkWorkflow(row, rowLabel, configFolder) {
-  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate, scenarios }`);
+  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate, scenarios, map }`);
   const unknownKey = Object.keys(row).find((key) => !WORKFLOW_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`${rowLabel} has an unknown key ${unknownKey}`);
-  const { entry, out, banner = true, validate = true, scenarios } = row;
+  const { entry, out, banner = true, validate = true, scenarios, map } = row;
   if (typeof entry !== 'string' || entry === '') throw new UsageError(`${rowLabel} needs entry, the path of an entry file`);
   if (typeof out !== 'string' || out === '') throw new UsageError(`${rowLabel} needs out, the path of the built script`);
   if (typeof banner !== 'boolean') throw new UsageError(`${rowLabel} takes banner as a boolean`);
@@ -74,8 +86,18 @@ function checkWorkflow(row, rowLabel, configFolder) {
   if (isFolderPath(entry)) throw new UsageError(`${rowLabel} gives the entry ${entry}, which is not a file`);
   if (isFolderPath(out)) throw new UsageError(`${rowLabel} gives the out path ${out}, which names a folder`);
   if (scenarios !== undefined && isFolderPath(scenarios)) throw new UsageError(`${rowLabel} gives the scenarios ${scenarios}, which is not a file`);
+  if (map !== undefined && (typeof map !== 'string' || map === '')) throw new UsageError(`${rowLabel} takes map as the path of a flow map file`);
+  if (map !== undefined && isFolderPath(map)) throw new UsageError(`${rowLabel} gives the map ${map}, which names a folder`);
+  if (map !== undefined && scenarios === undefined) throw new UsageError(`${rowLabel} gives map and no scenarios, so name the scenarios file that the flow map is drawn from`);
 
-  return { entry: resolve(configFolder, entry), out: resolve(configFolder, out), banner, validate, scenarios: scenarios === undefined ? null : resolve(configFolder, scenarios) };
+  return {
+    entry: resolve(configFolder, entry),
+    out: resolve(configFolder, out),
+    banner,
+    validate,
+    scenarios: scenarios === undefined ? null : resolve(configFolder, scenarios),
+    map: map === undefined ? null : resolve(configFolder, map),
+  };
 }
 
 /**
@@ -118,6 +140,30 @@ function checkScenariosFiles(workflows, rows, configPath) {
 
     const message = `Workflow ${index + 1} of the config file ${configPath} writes ${rows[index].out}, which names the scenarios file ${rows[scenariosIndex].scenarios} of workflow ${scenariosIndex + 1}`;
     if (sameIndex !== -1) throw new UsageError(message);
+    throw new UsageError(`${message} where file names ignore letter case`);
+  });
+}
+
+/**
+ * `dwfb map` would replace a source, a built script, a scenarios file or another flow map with a flow map.
+ * @param {ConfigWorkflow[]} workflows
+ * @param {Record<string, string>[]} rows The workflows as the config file gives them.
+ * @param {string} configPath
+ */
+function checkMapFiles(workflows, rows, configPath) {
+  workflows.forEach((workflow, index) => {
+    if (workflow.map === null) return;
+    const mapFile = workflow.map;
+    const candidates = workflows.flatMap((other, otherIndex) =>
+      MAP_CONFLICT_FIELDS.filter(([field]) => other[field] !== null && !(otherIndex === index && field === 'map')).map(([field, word]) => ({ file: other[field], field, word, otherIndex })),
+    );
+    // The user wrote both paths, and Windows and macOS file names ignore letter case by default.
+    const sameCandidate = candidates.find((candidate) => candidate.file === mapFile);
+    const conflict = sameCandidate ?? candidates.find((candidate) => candidate.file.toLowerCase() === mapFile.toLowerCase());
+    if (conflict === undefined) return;
+
+    const message = `Workflow ${index + 1} of the config file ${configPath} writes the map ${rows[index].map}, which names the ${conflict.word} ${rows[conflict.otherIndex][conflict.field]} of workflow ${conflict.otherIndex + 1}`;
+    if (sameCandidate !== undefined) throw new UsageError(message);
     throw new UsageError(`${message} where file names ignore letter case`);
   });
 }

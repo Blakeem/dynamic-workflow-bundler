@@ -1,6 +1,7 @@
 import { open, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { checkContract, formatScriptOversizeReason, SCRIPT_BYTE_LIMIT } from './check-contract.js';
+import { checkOutPath } from './check-out-path.js';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes, isFolderPath } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
@@ -299,41 +300,9 @@ async function checkOutFile(outFile, out, sourceFiles) {
     outRealFile = await realpath(outFile);
   } catch (error) {
     if (!MISSING_FILE_CODES.has(error.code)) throw error;
-    await checkOutFolder(outFile, out);
-    return;
   }
-  if (sourceFiles.includes(outRealFile)) throw new UsageError(`The out file ${out} is a source of this build`);
-  if (!(await stat(outRealFile)).isFile()) throw new UsageError(`The out path ${out} is not a file`);
-}
-
-/**
- * Checks that the nearest existing folder above a missing `out` is a folder, which the build can create
- * the rest of the path in.
- * @param {string} outFile
- * @param {string} out The path as the caller gave it.
- */
-async function checkOutFolder(outFile, out) {
-  let folder = dirname(outFile);
-  let folderStats = await statIfExists(folder);
-
-  while (folderStats === null && dirname(folder) !== folder) {
-    folder = dirname(folder);
-    folderStats = await statIfExists(folder);
-  }
-  if (folderStats !== null && !folderStats.isDirectory()) throw new UsageError(`The out path ${out} is inside a file`);
-}
-
-/**
- * @param {string} path
- * @returns {Promise<import('node:fs').Stats | null>} Null when no file or folder exists at the path.
- */
-async function statIfExists(path) {
-  try {
-    return await stat(path);
-  } catch (error) {
-    if (MISSING_FILE_CODES.has(error.code)) return null;
-    throw error;
-  }
+  if (outRealFile !== null && sourceFiles.includes(outRealFile)) throw new UsageError(`The out file ${out} is a source of this build`);
+  await checkOutPath(outFile, `The out path ${out}`);
 }
 
 /**

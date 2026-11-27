@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
+import { formatFlowMap } from '../src/format-flow-map.js';
+import { map as mapLibrary } from '../src/map.js';
+import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { listMissingGlobalNames } from '../src/run-simulation.js';
-import { sliceReadmeSection } from './support/slice-readme-section.js';
+import { sliceMarkdownSection } from './support/slice-markdown-section.js';
+import { writeSizedFile } from './support/write-sized-file.js';
 
 const COMMAND = fileURLToPath(new URL('../bin/dwfb.js', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -1061,7 +1066,7 @@ describe('dwfb simulate', () => {
 
   it('loads the example scenarios file of README.md, and its example script passes with it as the README shows', async () => {
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
-    const section = sliceReadmeSection(readme, README_SIMULATE_HEADING);
+    const section = sliceMarkdownSection(readme, README_SIMULATE_HEADING);
     const exampleFiles = [...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
     const run = README_RUN_PATTERN.exec(section)?.groups;
     const folder = await makeTemporaryFolder();
@@ -1389,8 +1394,8 @@ describe('dwfb inspect', () => {
 
   it('prints what each example of the README section on dwfb inspect shows, for the example files of dwfb simulate', async () => {
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
-    const exampleFiles = [...sliceReadmeSection(readme, README_SIMULATE_HEADING).matchAll(README_FILE_PATTERN)].map((match) => match.groups);
-    const runs = [...sliceReadmeSection(readme, README_SECTION_HEADING).matchAll(README_RUN_PATTERN)].map((match) => match.groups);
+    const exampleFiles = [...sliceMarkdownSection(readme, README_SIMULATE_HEADING).matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const runs = [...sliceMarkdownSection(readme, README_SECTION_HEADING).matchAll(README_RUN_PATTERN)].map((match) => match.groups);
     const folder = await makeTemporaryFolder();
 
     assert.equal(runs.length, 2, 'The README section on dwfb inspect shows an example of the events and one of a call');
@@ -1411,6 +1416,346 @@ describe('dwfb inspect', () => {
     assert.equal(status, 0);
     assert.match(stdout, /^Usage: dwfb inspect <script> \[--scenarios <file>\] \[--scenario <name>\] \[--call <index>\] \[options\]\n[^]*\n {2}--call <index> {7}Print the call of this index in full\. The first call is 0\.\n/);
     assert.match(runCommand(['--help']).stdout, /\n {2}inspect <script> \[--scenarios <file>\] \[--scenario <name>\] \[--call <index>\]\n {35}Run a workflow script against one scenario/);
+  });
+});
+
+describe('dwfb map', () => {
+  const FLOW_SCRIPT = [
+    "export const meta = { name: 'flow', description: 'd' };\n",
+    "await agent('Work.', { label: 'work' });\n",
+    "if (args?.fail) throw new Error('The work failed');\n",
+    "return { status: 'done' };\n",
+  ].join('');
+  const FLOW_SCENARIOS = "export default [{ name: 'works', respond: { work: 'ok' } }, { name: 'fails', expect: 'threw', args: { fail: true }, respond: { work: 'ok' } }];\n";
+  const GAP_SCRIPT = "export const meta = { name: 'gap', description: 'd' };\nawait agent('Work.', { label: 'work' });\nreturn {};\n";
+  const GAP_SCENARIOS = "export default [{ name: 'no\\tstatus', respond: { work: 'ok' } }];\n";
+  const GAP_LINE = 'gap.js no\\u{0009}status: not mapped, since the script returned no status that is a non-empty string, and the scenario names no endState.\n';
+  const CONFIG = [
+    'export default { workflows: [\n',
+    "  { entry: 'gap.entry.js', out: 'gap.js', scenarios: 'gap.scenarios.js', map: 'maps/gap.flow-map.md' },\n",
+    "  { entry: 'plain.entry.js', out: 'plain.js', scenarios: 'flow.scenarios.js' },\n",
+    "  { entry: 'flow.entry.js', out: 'flow.js', scenarios: 'flow.scenarios.js', map: 'maps/flow.flow-map.md' },\n",
+    '] };\n',
+  ].join('');
+  const README_SECTION_HEADING = '\n## dwfb map\n';
+  const README_RUN_PATTERN = /^\$ dwfb (?<args>map [^\n]*)\n(?<output>[^]*?)```$/m;
+  const README_MAP_FILE_PATTERN = /^`(?<path>[^`\n]+)`:\n\n````markdown\n(?<text>[^]*?)````$/m;
+  const FLOW_SCENARIOS_ARGS = ['--scenarios', 'flow.scenarios.js'];
+  const CLOCK_SCRIPT = "export const meta = { name: 'clock', description: 'd' };\nreturn Date.now();\n";
+
+  /**
+   * @returns {Promise<string>} A new folder of an ES module package that holds the scripts, the scenarios files
+   *   and the config file of these tests.
+   */
+  async function writeMapFolder() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG);
+    await writeFile(join(folder, 'flow.js'), FLOW_SCRIPT);
+    await writeFile(join(folder, 'plain.js'), FLOW_SCRIPT);
+    await writeFile(join(folder, 'flow.scenarios.js'), FLOW_SCENARIOS);
+    await writeFile(join(folder, 'gap.js'), GAP_SCRIPT);
+    await writeFile(join(folder, 'gap.scenarios.js'), GAP_SCENARIOS);
+    return folder;
+  }
+
+  /**
+   * @param {string} folder
+   * @returns {Promise<string>} The flow map that the library gives for flow.js and its scenarios file.
+   */
+  async function formatExpectedFlowMap(folder) {
+    const { graph } = await mapLibrary({ script: join(folder, 'flow.js'), scenarios: join(folder, 'flow.scenarios.js') });
+    return formatFlowMap('flow', /** @type {import('../src/build-flow-graph.js').FlowGraph} */ (graph));
+  }
+
+  it('prints the flow map of a script and the scenarios file --scenarios names, and writes no file', async () => {
+    const folder = await writeMapFolder();
+
+    assert.deepEqual(runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS], folder), { status: 0, stdout: await formatExpectedFlowMap(folder), stderr: '' });
+    assert.equal((await readdir(folder)).includes('maps'), false);
+  });
+
+  it('prints the flow map of a script whose config workflow has no map, from the scenarios of that workflow', async () => {
+    const folder = await writeMapFolder();
+
+    assert.deepEqual(runCommand(['map', 'plain.js'], folder), { status: 0, stdout: await formatExpectedFlowMap(folder), stderr: '' });
+  });
+
+  it('writes the file --out names, creating its folder, and then leaves the file unchanged when its bytes would not change', async () => {
+    const folder = await writeMapFolder();
+    const file = join(folder, 'docs', 'deep', 'flow.md');
+    const oldTime = new Date('2001-01-01T00:00:00Z');
+
+    assert.deepEqual(runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'docs/deep/flow.md'], folder), { status: 0, stdout: 'Wrote docs/deep/flow.md.\n', stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), await formatExpectedFlowMap(folder));
+    await utimes(file, oldTime, oldTime);
+    assert.deepEqual(runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'docs/deep/flow.md'], folder), { status: 0, stdout: 'Unchanged docs/deep/flow.md.\n', stderr: '' });
+    assert.equal((await stat(file)).mtimeMs, oldTime.getTime());
+    await writeFile(file, 'old');
+    assert.deepEqual(runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'docs/deep/flow.md'], folder), { status: 0, stdout: 'Wrote docs/deep/flow.md.\n', stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), await formatExpectedFlowMap(folder));
+  });
+
+  it('writes the map of the config workflow whose out is the script, and with no script the map of each workflow that has one', async () => {
+    const folder = await writeMapFolder();
+    const flowMap = await formatExpectedFlowMap(folder);
+
+    assert.deepEqual(runCommand(['map', 'flow.js'], folder), { status: 0, stdout: 'Wrote maps/flow.flow-map.md.\n', stderr: '' });
+    assert.equal(await readFile(join(folder, 'maps', 'flow.flow-map.md'), 'utf8'), flowMap);
+    await writeFile(join(folder, 'gap.scenarios.js'), FLOW_SCENARIOS);
+    await writeFile(join(folder, 'gap.js'), FLOW_SCRIPT);
+    assert.deepEqual(runCommand(['map'], folder), { status: 0, stdout: 'Wrote maps/gap.flow-map.md.\nUnchanged maps/flow.flow-map.md.\n', stderr: '' });
+    assert.equal(await readFile(join(folder, 'maps', 'gap.flow-map.md'), 'utf8'), flowMap);
+  });
+
+  it('prints one line per unmapped scenario, writes no file for its script, still maps the other workflows and exits 1', async () => {
+    const folder = await writeMapFolder();
+
+    assert.deepEqual(runCommand(['map'], folder), { status: 1, stdout: `${GAP_LINE}Wrote maps/flow.flow-map.md.\n`, stderr: '' });
+    assert.deepEqual(await readdir(join(folder, 'maps')), ['flow.flow-map.md']);
+    assert.deepEqual(runCommand(['map', 'gap.js', '--scenarios', 'gap.scenarios.js'], folder), { status: 1, stdout: GAP_LINE, stderr: '' });
+  });
+
+  it('prints the findings of a refused script before its unmapped scenarios', async () => {
+    const folder = await writeMapFolder();
+    await writeFile(join(folder, 'clock.js'), CLOCK_SCRIPT);
+
+    assert.deepEqual(runCommand(['map', 'clock.js', ...FLOW_SCENARIOS_ARGS], folder), {
+      status: 1,
+      stdout: [
+        'clock.js:2:8 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.\n',
+        'clock.js works: not mapped, since refused.\n',
+        'clock.js fails: not mapped, since refused.\n',
+      ].join(''),
+      stderr: '',
+    });
+  });
+
+  it('reports each file as fresh or stale with --check, writes nothing, and exits 1 for a stale file', async () => {
+    const folder = await writeMapFolder();
+    const file = join(folder, 'maps', 'flow.flow-map.md');
+
+    assert.deepEqual(runCommand(['map', 'flow.js', '--check'], folder), { status: 1, stdout: 'Stale maps/flow.flow-map.md: the file is missing.\n', stderr: '' });
+    assert.equal((await readdir(folder)).includes('maps'), false);
+    await mkdir(join(folder, 'maps'));
+    await writeFile(file, 'old');
+    assert.deepEqual(runCommand(['map', 'flow.js', '--check'], folder), { status: 1, stdout: 'Stale maps/flow.flow-map.md: the file differs from the flow map of flow.js.\n', stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), 'old');
+    await writeFile(file, await formatExpectedFlowMap(folder));
+    assert.deepEqual(runCommand(['map', 'flow.js', '--check'], folder), { status: 0, stdout: 'Fresh maps/flow.flow-map.md.\n', stderr: '' });
+    assert.deepEqual(runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'maps/flow.flow-map.md', '--check'], folder), { status: 0, stdout: 'Fresh maps/flow.flow-map.md.\n', stderr: '' });
+    assert.deepEqual(runCommand(['map', '--check'], folder), { status: 1, stdout: `${GAP_LINE}Fresh maps/flow.flow-map.md.\n`, stderr: '' });
+  });
+
+  it('prints one JSON object with the result of map() for each script, writes no file, and exits 1 for an unmapped scenario', async () => {
+    const folder = await writeMapFolder();
+    const flowResult = await mapLibrary({ script: join(folder, 'flow.js'), scenarios: join(folder, 'flow.scenarios.js') });
+    const configRun = runCommand(['map', '--json'], folder);
+    const scriptRun = runCommand(['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--json'], folder);
+
+    assert.equal(configRun.status, 1);
+    assert.deepEqual(JSON.parse(configRun.stdout), {
+      ok: false,
+      runtime: CONTRACT_RUNTIME_VERSION,
+      maps: [
+        { script: 'gap.js', file: 'maps/gap.flow-map.md', ok: false, runtime: CONTRACT_RUNTIME_VERSION, graph: null, unmapped: [{ scenario: 'no\tstatus', reason: 'the script returned no status that is a non-empty string, and the scenario names no endState' }], findings: [] },
+        { script: 'flow.js', file: 'maps/flow.flow-map.md', ok: true, runtime: CONTRACT_RUNTIME_VERSION, graph: flowResult.graph, unmapped: [], findings: [] },
+      ],
+    });
+    assert.deepEqual({ status: scriptRun.status, stderr: scriptRun.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(scriptRun.stdout).maps.map(({ script, file, ok }) => ({ script, file, ok })), [{ script: 'flow.js', file: null, ok: true }]);
+    await writeFile(join(folder, 'clock.js'), CLOCK_SCRIPT);
+    const refusedRun = runCommand(['map', 'clock.js', ...FLOW_SCENARIOS_ARGS, '--json'], folder);
+    assert.equal(refusedRun.status, 1);
+    assert.deepEqual(JSON.parse(refusedRun.stdout).maps[0].findings.map(({ rule, line, column }) => ({ rule, line, column })), [{ rule: 'clock-unavailable', line: 2, column: 8 }]);
+    assert.equal((await readdir(folder)).includes('maps'), false);
+  });
+
+  it('prints each usage error to stderr and exits 2', async () => {
+    const folder = await writeMapFolder();
+    const emptyFolder = await makeTemporaryFolder();
+    await writeFile(join(emptyFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(emptyFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.out.js' }] };\n");
+    const cases = [
+      [folder, ['map', 'flow.js', 'gap.js'], /^dwfb map: Name one workflow script\.\n\nUsage: dwfb map /],
+      [folder, ['map', ''], /^dwfb map: Name one workflow script\.\n/],
+      [folder, ['map', 'flow.js', '--scenarios', ''], /^dwfb map: Name the scenarios file with --scenarios <file>\.\n/],
+      [folder, ['map', 'flow.js', '--out', ''], /^dwfb map: Name the flow map file with --out <file>\.\n/],
+      [folder, ['map', 'flow.js', '--config', ''], /^dwfb map: Name the config file with --config <path>\.\n/],
+      [folder, ['map', 'flow.js', '--out', 'maps/'], /^dwfb map: The out path maps\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['map', 'flow.js', '--out', 'maps/', '--json'], /^dwfb map: The out path maps\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['map', ...FLOW_SCENARIOS_ARGS], /^dwfb map: Name the script that --scenarios maps\.\n/],
+      [folder, ['map', '--out', 'x.md'], /^dwfb map: Name the script whose flow map --out writes\.\n/],
+      [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--config', 'dwfb.config.js'], /^dwfb map: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n/],
+      [folder, ['map', 'flow.js', '--check', '--json'], /^dwfb map: Name --check or --json, not both, since --json compares no file\.\n/],
+      [folder, ['map', 'flow.js', '--verbose'], /^dwfb map: Unknown option '--verbose'/],
+      [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--check'], /^dwfb map: Name the flow map file that --check compares with --out <file>, since a named scenarios file reads no config file\.\n$/],
+      [folder, ['map', 'plain.js', '--check'], /^dwfb map: Name the flow map file that --check compares with --out <file>, since no map of the config file names one\.\n$/],
+      [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', './flow.js'], /^dwfb map: The flow map file \.\/flow\.js names the script flow\.js, which the flow map would replace\.\n$/],
+      // The real path of FLOW.js keeps that spelling where file names keep letter case, and is flow.js on Windows.
+      [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'FLOW.js'], /^dwfb map: The flow map file FLOW\.js names the script flow\.js( where file names ignore letter case)?, which the flow map would replace\.\n$/],
+      [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'flow.scenarios.js'], /^dwfb map: The flow map file flow\.scenarios\.js names the scenarios file flow\.scenarios\.js, which the flow map would replace\.\n$/],
+      [folder, ['map', 'flow.js', '--out', 'flow.entry.js'], /^dwfb map: The flow map file flow\.entry\.js names the entry flow\.entry\.js, which the flow map would replace\.\n$/],
+      [folder, ['map', 'flow.js', '--scenarios', 'missing.js'], /^dwfb map: The scenarios file missing\.js does not exist/],
+      [emptyFolder, ['map'], /^dwfb map: The config file dwfb\.config\.js has no workflow with map, so give a workflow map, or name a script\.\n$/],
+      [await makeTemporaryFolder(), ['map'], /^dwfb map: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script, or name a config file with --config <path>\.\n$/],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+    assert.equal((await readdir(folder)).includes('maps'), false);
+  });
+
+  it('refuses a flow map file that names a source the entry reaches, of the config workflow or of the banner, and writes nothing', async () => {
+    const folder = await writeMapFolder();
+    const banner = `// Built by dynamic-workflow-bundler from flow.entry.js. Edit the source, not this file.\n`;
+    await writeFile(join(folder, 'flow.entry.js'), "export const meta = { name: 'flow', description: 'd' };\nimport { prompt } from './prompt.js';\nawait agent(prompt, { label: 'work' });\n");
+    await writeFile(join(folder, 'prompt.js'), "export const prompt = 'Work.';\n");
+    await writeFile(join(folder, 'banner.js'), FLOW_SCRIPT.replace('\n', `\n${banner}`));
+    const message = 'dwfb map: The flow map file prompt.js names the source prompt.js of the entry flow.entry.js, which the flow map would replace.\n';
+
+    assert.deepEqual(runCommand(['map', 'flow.js', '--out', 'prompt.js'], folder), { status: 2, stdout: '', stderr: message });
+    assert.deepEqual(runCommand(['map', 'banner.js', ...FLOW_SCENARIOS_ARGS, '--out', 'prompt.js'], folder), { status: 2, stdout: '', stderr: message });
+    assert.deepEqual(runCommand(['map', 'banner.js', ...FLOW_SCENARIOS_ARGS, '--out', 'flow.entry.js'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb map: The flow map file flow.entry.js names the entry flow.entry.js, which the flow map would replace.\n',
+    });
+    assert.equal(await readFile(join(folder, 'prompt.js'), 'utf8'), "export const prompt = 'Work.';\n");
+  });
+
+  it('refuses a config map that names a source the entry of a workflow with no map reaches, and writes nothing', async () => {
+    const folder = await writeMapFolder();
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG.replace('maps/flow.flow-map.md', 'prompt.js'));
+    await writeFile(join(folder, 'plain.entry.js'), "export const meta = { name: 'plain', description: 'd' };\nimport { prompt } from './prompt.js';\nawait agent(prompt, { label: 'work' });\n");
+    await writeFile(join(folder, 'prompt.js'), "export const prompt = 'Work.';\n");
+    const stderr = 'dwfb map: The flow map file prompt.js names the source prompt.js of the entry plain.entry.js, which the flow map would replace.\n';
+
+    for (const args of [['map'], ['map', 'flow.js'], ['map', 'flow.js', '--check']]) assert.deepEqual(runCommand(args, folder), { status: 2, stdout: '', stderr }, args.join(' '));
+    assert.equal(await readFile(join(folder, 'prompt.js'), 'utf8'), "export const prompt = 'Work.';\n");
+    assert.equal((await readdir(folder)).includes('maps'), false);
+  });
+
+  it('maps a script whose banner names an entry that is a folder, refuses a flow map file at that folder, and names a script it cannot read', async () => {
+    const folder = await writeMapFolder();
+    const banner = `// Built by dynamic-workflow-bundler from entries. Edit the source, not this file.\n`;
+    await mkdir(join(folder, 'entries'));
+    await writeFile(join(folder, 'banner.js'), FLOW_SCRIPT.replace('\n', `\n${banner}`));
+    await writeSizedFile(join(folder, 'large.js'), READ_BYTE_LIMIT + 1);
+    const largeRun = runCommand(['map', 'large.js', ...FLOW_SCENARIOS_ARGS, '--out', 'large.md'], folder);
+
+    assert.deepEqual(runCommand(['map', 'banner.js', ...FLOW_SCENARIOS_ARGS, '--out', 'banner.md'], folder), { status: 0, stdout: 'Wrote banner.md.\n', stderr: '' });
+    assert.deepEqual(runCommand(['map', 'banner.js', ...FLOW_SCENARIOS_ARGS, '--out', 'entries'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb map: The flow map file entries names the entry entries, which the flow map would replace.\n',
+    });
+    assert.deepEqual(runCommand(['map', 'missing.js', ...FLOW_SCENARIOS_ARGS, '--out', 'missing.md'], folder), { status: 2, stdout: '', stderr: 'dwfb map: The script file missing.js does not exist.\n' });
+    assert.deepEqual({ status: largeRun.status, stderr: largeRun.stderr }, { status: 1, stderr: '' });
+    assert.match(largeRun.stdout, /^large\.js:1:1 script-too-large /);
+    assert.deepEqual((await readdir(folder)).filter((name) => name.endsWith('.md')), ['banner.md']);
+  });
+
+  it('names two flow map files of the config file that name one file through a link, and writes nothing', async () => {
+    const folder = await writeMapFolder();
+    await mkdir(join(folder, 'maps'));
+    await symlink(join(folder, 'maps'), join(folder, 'linked'), 'junction');
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG.replace('maps/flow.flow-map.md', 'linked/gap.flow-map.md'));
+    const { status, stdout, stderr } = runCommand(['map'], folder);
+
+    assert.deepEqual({ status, stdout }, { status: 2, stdout: '' });
+    assert.equal(stderr, 'dwfb map: The flow map file linked/gap.flow-map.md names the flow map file maps/gap.flow-map.md of the script gap.js, which the flow map would replace.\n');
+    assert.deepEqual(await readdir(join(folder, 'maps')), []);
+  });
+
+  it('refuses a flow map path that names a folder or is inside a file before it writes any flow map', async () => {
+    const folder = await writeMapFolder();
+    await writeFile(join(folder, 'gap.scenarios.js'), FLOW_SCENARIOS);
+    await writeFile(join(folder, 'gap.js'), FLOW_SCRIPT);
+    await mkdir(join(folder, 'maps', 'flow.flow-map.md'), { recursive: true });
+    const cases = [
+      [['map'], 'dwfb map: The flow map path maps/flow.flow-map.md is not a file.\n'],
+      [['map', '--check'], 'dwfb map: The flow map path maps/flow.flow-map.md is not a file.\n'],
+      [['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'maps'], 'dwfb map: The flow map path maps is not a file.\n'],
+      [['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'flow.scenarios.js/deeper/flow.md'], 'dwfb map: The flow map path flow.scenarios.js/deeper/flow.md is inside a file.\n'],
+    ];
+
+    for (const [args, stderr] of cases) assert.deepEqual(runCommand(args, folder), { status: 2, stdout: '', stderr }, args.join(' '));
+    // --json writes no file, so it skips the checks of the flow map files on disk.
+    for (const args of [['map', '--json'], ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--out', 'maps', '--json']]) {
+      const { status, stdout, stderr } = runCommand(args, folder);
+      assert.deepEqual({ status, stderr, files: JSON.parse(stdout).maps.map(({ file }) => file) }, { status: 0, stderr: '', files: args.length === 2 ? ['maps/gap.flow-map.md', 'maps/flow.flow-map.md'] : ['maps'] }, args.join(' '));
+    }
+    assert.deepEqual(await readdir(join(folder, 'maps')), ['flow.flow-map.md']);
+  });
+
+  it('names each flow map written before a failed write, and exits 2', async (context) => {
+    if (process.getuid?.() === 0) return context.skip('root writes every folder');
+    const folder = await writeMapFolder();
+    await writeFile(join(folder, 'gap.scenarios.js'), FLOW_SCENARIOS);
+    await writeFile(join(folder, 'gap.js'), FLOW_SCRIPT);
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG.replace('maps/flow.flow-map.md', 'locked/flow.flow-map.md'));
+    await mkdir(join(folder, 'locked'));
+    await writeFile(join(folder, 'locked', 'flow.flow-map.md'), 'old\n');
+    // Windows refuses a rename over a read-only file, and POSIX refuses to create a file in a folder with no write permission.
+    const lockedPath = process.platform === 'win32' ? join(folder, 'locked', 'flow.flow-map.md') : join(folder, 'locked');
+    const cause = process.platform === 'win32' ? '(rename EPERM)' : '(open EACCES)';
+    await chmod(lockedPath, process.platform === 'win32' ? 0o444 : 0o555);
+
+    try {
+      assert.deepEqual(runCommand(['map'], folder), {
+        status: 2,
+        stdout: 'Wrote maps/gap.flow-map.md.\n',
+        stderr: `dwfb map: Could not read or write locked/flow.flow-map.md ${cause}. Wrote maps/gap.flow-map.md before the failure.\n`,
+      });
+      assert.equal(await readFile(join(folder, 'maps', 'gap.flow-map.md'), 'utf8'), await formatExpectedFlowMap(folder));
+      assert.equal(await readFile(join(folder, 'locked', 'flow.flow-map.md'), 'utf8'), 'old\n');
+    } finally {
+      await chmod(lockedPath, process.platform === 'win32' ? 0o644 : 0o755);
+    }
+  });
+
+  it('names the workflow of a scenarios file that does not load, and maps nothing before a later workflow fails', async () => {
+    const folder = await writeMapFolder();
+    await writeFile(join(folder, 'flow.scenarios.js'), 'export default [{ name: 1 }];\n');
+    await writeFile(join(folder, 'gap.scenarios.js'), FLOW_SCENARIOS);
+    await writeFile(join(folder, 'gap.js'), FLOW_SCRIPT);
+    const { status, stdout, stderr } = runCommand(['map'], folder);
+
+    assert.deepEqual({ status, stdout }, { status: 2, stdout: '' });
+    assert.match(stderr, /^dwfb map: The scenarios of the workflow whose entry is flow\.entry\.js cannot load\. /);
+    assert.equal((await readdir(folder)).includes('maps'), false);
+  });
+
+  it('writes the flow map that the README section on dwfb map shows, for the example script of dwfb simulate', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    const section = sliceMarkdownSection(readme, README_SECTION_HEADING);
+    const exampleFiles = [...sliceMarkdownSection(readme, README_SIMULATE_HEADING).matchAll(README_FILE_PATTERN), ...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const run = README_RUN_PATTERN.exec(section)?.groups;
+    const mapFile = README_MAP_FILE_PATTERN.exec(section)?.groups;
+    const folder = await makeTemporaryFolder();
+
+    assert.deepEqual(exampleFiles.map(({ path }) => path), ['.claude/workflows/review.js', 'workflows/review/scenarios.js', 'workflows/review/scenarios.js']);
+    assert.ok(run !== undefined, 'The README section on dwfb map shows no $ dwfb map command');
+    assert.ok(mapFile !== undefined, 'The README section on dwfb map shows no flow map file');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const { path, code } of exampleFiles) {
+      await mkdir(join(folder, dirname(path)), { recursive: true });
+      await writeFile(join(folder, path), code);
+    }
+    assert.deepEqual(runCommand(run.args.split(' '), folder), { status: 0, stdout: run.output, stderr: '' });
+    assert.equal(await readFile(join(folder, mapFile.path), 'utf8'), mapFile.text);
+  });
+
+  it('prints its usage for map --help, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['map', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb map \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[options\]\n[^]*\n {2}--out <file> {9}Write the flow map to this file\.\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}map \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
   });
 });
 

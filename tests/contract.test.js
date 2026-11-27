@@ -7,7 +7,7 @@ import { checkContract } from '../src/check-contract.js';
 import { AGENT_CALL_LIMIT, CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, isPastCallLimit, RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from '../src/contract.js';
 import { FIXES } from '../src/finding.js';
 import { CONTRACT_CASES } from './fixtures/contract/cases.js';
-import { sliceReadmeSection } from './support/slice-readme-section.js';
+import { sliceMarkdownSection } from './support/slice-markdown-section.js';
 
 const CASE_FOLDER = fileURLToPath(new URL('./fixtures/contract/cases/', import.meta.url));
 // The probe set holds no script for these two rules, so tests/check-contract.test.js covers them.
@@ -51,7 +51,7 @@ describe('contract rule table', () => {
 
   it('holds the ids of the rule table of the README section on dwfb validate, in its order', async () => {
     const readme = await readFile(README, 'utf8');
-    const readmeIds = [...sliceReadmeSection(readme, VALIDATE_SECTION_HEADING).matchAll(RULE_ROW_PATTERN)].map((match) => match.groups.id);
+    const readmeIds = [...sliceMarkdownSection(readme, VALIDATE_SECTION_HEADING).matchAll(RULE_ROW_PATTERN)].map((match) => match.groups.id);
 
     assert.deepEqual(readmeIds, CONTRACT_RULES.map((rule) => rule.id));
   });
