@@ -5,7 +5,7 @@ import { findScriptedReturn, formatCallName } from './find-scripted-return.js';
 import { formatErrorCause } from './format-error-cause.js';
 import { isObject } from './is-object.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
-import { convertToText, isSpentPerCall, listMissingGlobalNames, runSimulation, SimulationStop } from './run-simulation.js';
+import { convertToText, isBudgetCount, isBudgetTotal, listMissingGlobalNames, runSimulation, SimulationStop } from './run-simulation.js';
 import { UsageError } from './usage-error.js';
 import { checkScriptFile } from './validate.js';
 
@@ -16,6 +16,9 @@ import { checkScriptFile } from './validate.js';
 const SIMULATE_OPTION_KEYS = new Set(['script', 'scenario']);
 export const SCENARIO_KEYS = new Set(['name', 'args', 'respond', 'budget']);
 const BUDGET_KEYS = new Set(['total', 'spent', 'spentPerCall']);
+// A run of such a script on Claude Code 2.1.332 did not end while it was watched, and no runtime fixture
+// records an end, so the simulation stops rather than report one.
+const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settles. A run of this script would not end';
 
 /**
  * @typedef {string | Record<string, unknown> | null} ScriptedReturn What one agent() call gets: a string for
@@ -53,9 +56,9 @@ const BUDGET_KEYS = new Set(['total', 'spent', 'spentPerCall']);
  */
 
 /**
- * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' }>
+ * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' } | { kind: 'never-settles' }>
  *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json', message: string, call: number }
- *   | { kind: 'stopped', reason: 'node-lacks-name', message: string }
+ *   | { kind: 'stopped', reason: 'node-lacks-name' | 'never-settles', message: string }
  *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A stop's message has
  *   no closing period. `call` is the index of the call that got no usable scripted return.
  */
@@ -75,10 +78,15 @@ const BUDGET_KEYS = new Set(['total', 'spent', 'spentPerCall']);
 /**
  * Runs a workflow script against a scenario with no model call, and writes and prints nothing. Each agent()
  * call gets the scripted return that the scenario's respond gives it, and the simulation stops at a call
- * that gets none it can use. A script that breaks the contract is refused and does not run, and a script
- * larger than READ_BYTE_LIMIT is refused as `validate()` refuses it.
+ * that gets none it can use, or when the script waits on a promise that nothing settles. A script that
+ * breaks the contract is refused and does not run, and a script larger than READ_BYTE_LIMIT is refused as
+ * `validate()` refuses it.
  * Not simulated: the check of `agentType` and `model` against the session, any check of a schema other
  * than its root type, the limit on agent calls, and a budget that grows by a different count at each call.
+ * A call of `workflow()` that names a workflow throws an Error with the message
+ * `workflow() is not simulated`. Time is virtual, so each `agent()` call answers before any timer runs and
+ * a wait of any length ends at once. Code after a script's first `await` has no time limit. So a loop
+ * there with no end keeps the simulation from ending, whether or not it calls `agent()`.
  * Rejects with a UsageError for options or a scenario of another shape, for a script `validate()` rejects,
  * and for a respond function that throws at a call made before the script settles.
  * @param {{ script: string, scenario?: Scenario }} options `script` as `validate()` takes it.
@@ -103,12 +111,21 @@ export async function simulate(options = /** @type {{ script: string }} */ ({}))
   if (isStopped && recorder.stop.end === null) throw await createRespondFailure(recorder.stop.call, recorder.stop.respondError);
   return {
     ...traceHead,
-    end: isStopped ? recorder.stop.end : result.end,
+    end: isStopped ? recorder.stop.end : convertRunEnd(result.end),
     calls: isStopped ? [...recorder.calls, recorder.stop.call] : recorder.calls,
     groups: result.groups,
     phases: result.phases,
     logs: result.logs,
   };
+}
+
+/**
+ * @param {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' }>} end
+ * @returns {TraceEnd}
+ */
+function convertRunEnd(end) {
+  if (end.kind === 'never-settles') return { kind: 'stopped', reason: 'never-settles', message: NEVER_SETTLES_MESSAGE };
+  return end;
 }
 
 /**
@@ -160,9 +177,9 @@ function checkBudget(budget) {
   const unknownKey = Object.keys(budget).find((key) => !BUDGET_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`The scenario budget takes no key ${unknownKey}`);
   const { total, spent, spentPerCall } = budget;
-  if (total !== undefined && total !== null && typeof total !== 'number') throw new UsageError('The scenario budget total must be a number or null');
-  if (spent !== undefined && typeof spent !== 'number') throw new UsageError('The scenario budget spent must be a number');
-  if (spentPerCall !== undefined && !isSpentPerCall(spentPerCall)) throw new UsageError('The scenario budget spentPerCall must be a finite number of 0 or more');
+  if (total !== undefined && !isBudgetTotal(total)) throw new UsageError('The scenario budget total must be null or a number of 0 or more');
+  if (spent !== undefined && !isBudgetCount(spent)) throw new UsageError('The scenario budget spent must be a finite number of 0 or more');
+  if (spentPerCall !== undefined && !isBudgetCount(spentPerCall)) throw new UsageError('The scenario budget spentPerCall must be a finite number of 0 or more');
 }
 
 /**

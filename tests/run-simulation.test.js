@@ -235,8 +235,12 @@ describe('the context', () => {
     await assert.rejects(simulateBody('return 1', { args: () => 1 }), { name: 'TypeError', message: /options\.args/ });
     await assert.rejects(simulateBody('return 1', { args: { count: 1n } }), { name: 'TypeError', message: /options\.args.*BigInt/ });
     await assert.rejects(simulateBody('return 1', { budget: 5 }), { name: 'TypeError', message: /options\.budget must/ });
-    await assert.rejects(simulateBody('return 1', { budget: { total: '5' } }), { name: 'TypeError', message: /budget\.total/ });
-    await assert.rejects(simulateBody('return 1', { budget: { spent: '5' } }), { name: 'TypeError', message: /budget\.spent/ });
+    for (const total of ['5', -1, Number.NaN]) {
+      await assert.rejects(simulateBody('return 1', { budget: { total } }), { name: 'TypeError', message: 'options.budget.total must be null or a number of 0 or more' });
+    }
+    for (const spent of ['5', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await assert.rejects(simulateBody('return 1', { budget: { spent } }), { name: 'TypeError', message: 'options.budget.spent must be a finite number of 0 or more' });
+    }
     for (const spentPerCall of ['5', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       await assert.rejects(simulateBody('return 1', { budget: { spentPerCall } }), { name: 'TypeError', message: /budget\.spentPerCall must be a finite number of 0 or more/ });
     }
@@ -281,10 +285,50 @@ describe('the time limit', () => {
 });
 
 describe('a script that can never continue', () => {
-  it('ends with an error, and an unhandled rejection before it ends nothing', async () => {
+  it('ends as never-settles, and an unhandled rejection before it ends nothing', async () => {
     const { end } = await simulateBody("Promise.reject(new Error('unhandled'))\nawait new Promise(() => {})");
 
-    assert.deepEqual(end, { kind: 'threw', name: 'Error', message: 'The script waits on a promise that never settles' });
+    assert.deepEqual(end, { kind: 'never-settles' });
+  });
+});
+
+describe('the order of an answer', () => {
+  it('settles each agent() call after the microtasks the script queued in the turn of the call', async () => {
+    const flag = await simulateBody("let answered = false\nagent('x').then(() => { answered = true; log('answered') })\nawait null\nlog('after one microtask')\nreturn answered", { answerCall: () => 'x' });
+    const order = await simulateBody("const o = []\nconst p = agent('x').then(() => o.push('agent'))\nPromise.resolve().then(() => o.push('micro'))\nawait p\nreturn o", { answerCall: () => 'x' });
+
+    assert.deepEqual([flag.end, flag.logs], [{ kind: 'returned', value: false }, ['after one microtask']]);
+    assert.deepEqual(order.end, { kind: 'returned', value: ['micro', 'agent'] });
+  });
+
+  it('rejects a call whose answerCall throws after the microtasks the script queued in the turn of the call', async () => {
+    const answerCall = () => {
+      throw new Error('no answer');
+    };
+    const { end } = await simulateBody("const o = []\nconst p = agent('x').catch((error) => o.push(error.message))\nPromise.resolve().then(() => o.push('micro'))\nawait p\nreturn o", { answerCall });
+
+    assert.deepEqual(end, { kind: 'returned', value: ['micro', 'no answer'] });
+  });
+
+  it('settles a call whose answerCall gives a promise in a turn after the promise settles', async () => {
+    const body = "let answered = false\nagent('x').then(() => { answered = true }, () => { answered = true })\nawait null\nawait null\nawait null\nreturn answered";
+    const fulfilled = await simulateBody(body, { answerCall: () => Promise.resolve('x') });
+    const rejected = await simulateBody(body, { answerCall: () => Promise.reject(new Error('no answer')) });
+
+    assert.deepEqual(fulfilled.end, { kind: 'returned', value: false });
+    assert.deepEqual(rejected.end, { kind: 'returned', value: false });
+  });
+
+  it('settles the answers in call order, before any timer', async () => {
+    const body = [
+      'const o = []',
+      "setTimeout(() => o.push('timer'), 0)",
+      "await Promise.all([agent('one').then((value) => o.push(value)), agent('two').then((value) => o.push(value))])",
+      'return o',
+    ].join('\n');
+    const { end } = await simulateBody(body, { answerCall: (call) => call.prompt });
+
+    assert.deepEqual(end, { kind: 'returned', value: ['one', 'two'] });
   });
 });
 

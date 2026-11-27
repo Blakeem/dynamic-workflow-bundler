@@ -10,9 +10,11 @@ import { installRuntimeGlobals } from './runtime-globals.js';
 /** @typedef {import('./runtime-globals.js').InstalledRuntime} InstalledRuntime */
 
 /**
- * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string } | { kind: 'stopped' }} SimulationEnd
+ * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string } | { kind: 'stopped' }
+ *   | { kind: 'never-settles' }} SimulationEnd
  *   How the script ended. `value` is the JSON value the runtime reports for the return. `stopped` when
- *   `answerCall` threw a SimulationStop before the script settled.
+ *   `answerCall` threw a SimulationStop before the script settled. `never-settles` when the script waits on
+ *   a promise that nothing settles, since no code can run, no answer is ready or pending and no timer is left.
  */
 
 /**
@@ -72,7 +74,6 @@ import { installRuntimeGlobals } from './runtime-globals.js';
 export const SCRIPT_TIME_LIMIT_MS = 30000;
 // The runtime's message names its own limit, so it stays the same when a test sets a shorter one.
 const TIMEOUT_MESSAGE = `Script execution timed out after ${SCRIPT_TIME_LIMIT_MS}ms`;
-const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that never settles';
 // The texts Claude Code 2.1.332 gives for a return it cannot report.
 const FUNCTION_RESULT_MESSAGE = 'workflow result cannot be a function';
 const CYCLE_RESULT_MESSAGE = 'JSON.stringify cannot serialize cyclic structures.';
@@ -100,10 +101,11 @@ export class SimulationStop extends Error {
 
 /**
  * Runs a workflow script as the runtime of Claude Code 2.1.332 runs it, with no model call: each agent()
- * call gets what `answerCall` gives, once agent() has checked the call's schema. Time is virtual. A timer
- * runs once no other code of the script can run and no answer is pending, so a wait of any length ends at
- * once. A timer callback that throws ends nothing, as an unhandled rejection ends nothing, since the
- * runtime's handling of it was not measured.
+ * call gets what `answerCall` gives, once agent() has checked the call's schema. An answer reaches the
+ * script only once the code the script queued before it has run, one answer per turn in the order the
+ * answers are ready. Time is virtual. A timer runs once no other code of the script can run and no answer
+ * is ready or pending, so a wait of any length ends at once. A timer callback that throws ends nothing, as
+ * an unhandled rejection ends nothing, since the runtime's handling of it was not measured.
  * Rejects when the text does not parse, does not open with the meta statement, or has a body that does not
  * compile. It checks no other rule of the contract, so a script the runtime refuses for another rule runs.
  * @param {string} text The entire script.
@@ -170,9 +172,9 @@ function readSettings(options) {
 
   if (typeof options?.answerCall !== 'function') throw new TypeError('runSimulation needs options.answerCall, a function');
   if (typeof budget !== 'object') throw new TypeError('options.budget must be an object of total, spent and spentPerCall');
-  if (budgetTotal !== null && typeof budgetTotal !== 'number') throw new TypeError('options.budget.total must be a number or null');
-  if (typeof budgetSpent !== 'number') throw new TypeError('options.budget.spent must be a number');
-  if (!isSpentPerCall(budgetSpentPerCall)) throw new TypeError('options.budget.spentPerCall must be a finite number of 0 or more');
+  if (!isBudgetTotal(budgetTotal)) throw new TypeError('options.budget.total must be null or a number of 0 or more');
+  if (!isBudgetCount(budgetSpent)) throw new TypeError('options.budget.spent must be a finite number of 0 or more');
+  if (!isBudgetCount(budgetSpentPerCall)) throw new TypeError('options.budget.spentPerCall must be a finite number of 0 or more');
   try {
     argsText = options.args === undefined ? undefined : JSON.stringify(options.args);
   } catch (error) {
@@ -183,11 +185,21 @@ function readSettings(options) {
 }
 
 /**
- * Infinity is refused, since the spent count before the first answer would be Infinity * 0, which is NaN.
+ * Infinity is allowed, as a total with no limit, and NaN is refused, since remaining() would give NaN.
  * @param {unknown} value
- * @returns {boolean} True for a number that a budget can add for each answered call.
+ * @returns {boolean} True for null or a number of 0 or more.
  */
-export function isSpentPerCall(value) {
+export function isBudgetTotal(value) {
+  return value === null || (typeof value === 'number' && value >= 0);
+}
+
+/**
+ * Infinity is refused. An Infinity spent makes remaining() Infinity minus Infinity for an Infinity total, and an
+ * Infinity spentPerCall makes spent() Infinity * 0 before the first answer, both NaN.
+ * @param {unknown} value
+ * @returns {boolean} True for a number that a budget can hold as spent, or add for each answered call.
+ */
+export function isBudgetCount(value) {
   return Number.isFinite(value) && /** @type {number} */ (value) >= 0;
 }
 
@@ -220,6 +232,8 @@ function createSimulation(answerCall) {
     nextTimerId: 1,
     /** @type {Map<number, TimerEntry>} */
     timers: new Map(),
+    /** @type {{ settle: () => void }[]} The answers that wait for a turn, in the order they are ready. */
+    readyAnswers: [],
     /** @type {Set<Promise<void>>} */
     pendingAnswers: new Set(),
     runtimeErrors: new WeakSet(),
@@ -261,8 +275,8 @@ function createSimulation(answerCall) {
 }
 
 /**
- * Settles one agent() call with what `answerCall` gives. A promise it gives keeps the simulation waiting
- * until it settles, and settles nothing once the simulation has ended.
+ * Settles one agent() call with what `answerCall` gives, in a later turn than the call. A promise it gives
+ * keeps the simulation waiting until it settles. No answer settles once the simulation has ended.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @param {SimulationOptions['answerCall']} answerCall
  * @param {AgentCall} call
@@ -281,14 +295,12 @@ function answerAgentCall(simulation, answerCall, call, resolve, reject) {
     return;
   }
   if (!isThenable(answer)) {
-    resolve(answer);
+    addReadyAnswer(simulation, () => resolve(answer));
     return;
   }
 
   const settled = Promise.resolve(answer).then(
-    (value) => {
-      if (simulation.isActive) resolve(value);
-    },
+    (value) => addReadyAnswer(simulation, () => resolve(value)),
     (error) => {
       if (simulation.isActive) rejectAgentCall(simulation, error, reject);
     },
@@ -298,15 +310,29 @@ function answerAgentCall(simulation, answerCall, call, resolve, reject) {
 }
 
 /**
- * Rejects one agent() call with what `answerCall` threw, or stops the simulation for a SimulationStop and
- * leaves the call unsettled.
+ * @param {ReturnType<typeof createSimulation>['simulation']} simulation
+ * @param {() => void} settleCall Settles one agent() call.
+ */
+function addReadyAnswer(simulation, settleCall) {
+  // A subagent's answer needs a model call, so it cannot reach the script in the turn that made the call.
+  // No runtime fixture measures this order.
+  simulation.readyAnswers.push({
+    settle: () => {
+      if (simulation.isActive) settleCall();
+    },
+  });
+}
+
+/**
+ * Rejects one agent() call with what `answerCall` threw, in a later turn than the call, or stops the
+ * simulation at once for a SimulationStop and leaves the call unsettled.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @param {unknown} error
  * @param {(reason: unknown) => void} reject
  */
 function rejectAgentCall(simulation, error, reject) {
   if (!(error instanceof SimulationStop)) {
-    reject(error);
+    addReadyAnswer(simulation, () => reject(error));
     return;
   }
   if (simulation.settledPromises.has(simulation.scriptPromise)) return;
@@ -383,13 +409,14 @@ async function runScript(script, context, scriptTimeLimit, simulation, runtime) 
   const outcome = await settleScript(scriptPromise, simulation);
 
   if (simulation.isStopped) return { kind: 'stopped' };
-  if (outcome === null) return { kind: 'threw', name: 'Error', message: NEVER_SETTLES_MESSAGE };
+  if (outcome === null) return { kind: 'never-settles' };
   if (outcome.isRejected) return convertThrown(outcome.value, simulation.runtimeErrors);
   return convertReturned(outcome.value, runtime.copyValue, simulation.runtimeErrors);
 }
 
 /**
- * Runs the script's queued code, then its pending answers and timers, until its promise settles.
+ * Runs the script's queued code, then its ready answers one per turn, its pending answers and its timers,
+ * until its promise settles.
  * @param {Promise<unknown>} scriptPromise A promise of the script's realm.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @returns {Promise<{ isRejected: boolean, value: unknown } | null>} Null when the promise can never settle,
@@ -409,7 +436,9 @@ async function settleScript(scriptPromise, simulation) {
   );
   await waitForIdle();
   while (outcome === null && !simulation.isStopped) {
-    if (simulation.pendingAnswers.size > 0) {
+    if (simulation.readyAnswers.length > 0) {
+      simulation.readyAnswers.shift().settle();
+    } else if (simulation.pendingAnswers.size > 0) {
       await Promise.race(simulation.pendingAnswers);
     } else {
       const timer = takeNextTimer(simulation.timers);

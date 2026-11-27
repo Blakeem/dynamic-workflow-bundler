@@ -829,6 +829,7 @@ describe('dwfb simulate', () => {
     for (const name of ['review-loop', 'call-each', 'reads-temporal']) await cp(join(SIMULATE_FIXTURES, `${name}.js`), join(folder, `${name}.js`));
     await writeFile(join(folder, 'answer.js'), `${META}const answer = await agent('Answer', { label: 'answer' });\nif (answer === null) throw new TypeError('The answer agent died');\nreturn answer;\n`);
     await writeFile(join(folder, 'clock.js'), `${META}return Date.now();\n`);
+    await writeFile(join(folder, 'waits.js'), `${META}await new Promise(() => {});\n`);
     for (const [file, text] of Object.entries(SCENARIO_FILES)) await writeFile(join(folder, file), text);
     return folder;
   }
@@ -887,6 +888,17 @@ describe('dwfb simulate', () => {
     assert.deepEqual(runCommand(['simulate', 'reads-temporal.js', '--scenarios', 'any.scenarios.js', '--scenario', 'first'], folder), {
       status: 1,
       stdout: `FAILED reads-temporal.js first: stopped: ${message}, 0 calls.\n0 passed, 1 failed.\n`,
+      stderr: '',
+    });
+  });
+
+  it('prints a stop with no call for a script that waits on a promise that nothing settles, and exits 1', async () => {
+    const folder = await writeSimulateFolder();
+    const message = 'The script waits on a promise that nothing settles. A run of this script would not end';
+
+    assert.deepEqual(runCommand(['simulate', 'waits.js', '--scenarios', 'any.scenarios.js', '--scenario', 'first'], folder), {
+      status: 1,
+      stdout: `FAILED waits.js first: stopped: ${message}, 0 calls.\n0 passed, 1 failed.\n`,
       stderr: '',
     });
   });

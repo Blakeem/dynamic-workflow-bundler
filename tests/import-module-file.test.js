@@ -68,6 +68,17 @@ describe('importModuleFile', () => {
     await assertUsageError(own, /^The data file d\.js does not load\. Unexpected token 'export'\. If the file is an ES module, set "type": "module" in the nearest package\.json, or rename it to d\.mjs$/);
     await assertUsageError(importing, /^The data file d\.js does not load\. [^\n]*commonjs\/imported\.js:1:1 [^\n]*\. If the file is an ES module, set "type": "module" in the nearest package\.json, or rename it to a \.mjs file$/);
   });
+
+  const otherPlatform = process.platform === 'win32' ? false : 'the stored letter case of a path was probed on Windows only';
+  it('loads one module for two spellings of its path that differ in letter case', { skip: otherPlatform }, async () => {
+    const file = await writeTestFile('case/count.mjs', 'let count = 0;\nexport default () => (count += 1);\n');
+    const otherSpelling = join(folder, 'CASE', 'COUNT.mjs');
+
+    const first = await importModuleFile(file, LABEL, RECOVERY);
+    const second = await importModuleFile(otherSpelling, LABEL, RECOVERY);
+
+    assert.deepEqual([first.default(), second.default()], [1, 2]);
+  });
 });
 
 describe('importCheckedDefault', () => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -25,6 +25,20 @@ after(async () => {
  */
 function findFixture(name) {
   return fileURLToPath(new URL(`${name}.js`, FIXTURES));
+}
+
+/**
+ * @param {string} name
+ * @param {string} body The script after its meta statement.
+ * @returns {Promise<string>} The path of a new script in a new folder.
+ */
+async function writeScript(name, body) {
+  const folder = await mkdtemp(join(tmpdir(), 'dwfb-simulate-'));
+  const script = join(folder, name);
+
+  temporaryFolders.push(folder);
+  await writeFile(script, `export const meta = { name: 'p', description: 'd' }\n${body}`);
+  return script;
 }
 
 /**
@@ -72,8 +86,12 @@ describe('simulate options', () => {
     await rejectScenario({ respond: new Map([['review', 'pass']]) }, 'The scenario respond must be an object keyed by label prefix, or a function');
     await rejectScenario({ budget: 5 }, 'The scenario budget must be an object of total, spent and spentPerCall');
     await rejectScenario({ budget: { totl: 5 } }, 'The scenario budget takes no key totl');
-    await rejectScenario({ budget: { total: '5' } }, 'The scenario budget total must be a number or null');
-    await rejectScenario({ budget: { spent: '5' } }, 'The scenario budget spent must be a number');
+    for (const total of ['5', Number.NaN, -1]) {
+      await rejectScenario({ budget: { total } }, 'The scenario budget total must be null or a number of 0 or more');
+    }
+    for (const spent of ['5', Number.NaN, Number.POSITIVE_INFINITY, -1, null]) {
+      await rejectScenario({ budget: { spent } }, 'The scenario budget spent must be a finite number of 0 or more');
+    }
     for (const spentPerCall of ['5', -1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
       await rejectScenario({ budget: { spentPerCall } }, 'The scenario budget spentPerCall must be a finite number of 0 or more');
     }
@@ -84,6 +102,7 @@ describe('simulate options', () => {
 
     assert.deepEqual(trace.end, { kind: 'returned', value: { args: { list: [1] }, total: 10, spent: 4, remaining: 6 } });
     assert.deepEqual((await simulateFixture('budget-args')).end, { kind: 'returned', value: { total: null, spent: 0, remaining: null } });
+    assert.deepEqual((await simulateFixture('budget-args', { budget: { total: 0, spent: 0 } })).end, { kind: 'returned', value: { total: 0, spent: 0, remaining: 0 } });
   });
 
   it('adds spentPerCall to spent for each call that got a scripted return, so a script can stop between steps', async () => {
@@ -252,6 +271,35 @@ describe('a stop', () => {
       message: `The script reads Temporal, which the runtime defines and Node ${process.version} does not, so the simulation cannot run it. Run it on a Node that defines Temporal`,
     });
     assert.deepEqual(trace.calls, []);
+  });
+
+  it('stops with no call when the script waits on a promise that nothing settles', async () => {
+    const trace = await simulateScript(await writeScript('waits.js', "log('waiting')\nawait new Promise(() => {})\n"));
+
+    assert.deepEqual(trace.end, {
+      kind: 'stopped',
+      reason: 'never-settles',
+      message: 'The script waits on a promise that nothing settles. A run of this script would not end',
+    });
+    assert.deepEqual([trace.calls, trace.logs], [[], ['waiting']]);
+  });
+
+  it('stops at a call whose respond function gives a promise, and lets no rejection of it reach the process', async () => {
+    const script = await writeScript('answer.js', "return await agent('x')\n");
+    const unhandled = [];
+    const recordUnhandled = (reason) => unhandled.push(reason);
+    let trace = null;
+
+    process.on('unhandledRejection', recordUnhandled);
+    try {
+      trace = await simulateScript(script, { respond: async () => { throw new Error('boom'); } });
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+    assert.equal(trace.end.reason, 'wrong-type');
+    assert.match(trace.end.message, /^The respond function gives call 0 \(no label\) a Promise/);
+    assert.deepEqual(unhandled, []);
   });
 });
 

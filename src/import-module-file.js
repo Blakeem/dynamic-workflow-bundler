@@ -19,8 +19,9 @@ const [NODE_MAJOR_VERSION, NODE_MINOR_VERSION] = process.versions.node.split('.'
 export const IS_MODULE_SYNTAX_DETECTED = NODE_MAJOR_VERSION > 22 || (NODE_MAJOR_VERSION === 22 && NODE_MINOR_VERSION >= 7);
 
 /**
- * Imports a file the user wrote, such as a config file, as an ES module. Node keeps each module it loads, so
- * a later call in the same process reads the file as the first call loaded it.
+ * Imports a file the user wrote, such as a config file, as an ES module. Node keeps each module it loads by
+ * its real path, so a later call in the same process, by any spelling of the path, reads the file as the
+ * first call loaded it.
  * Rejects with a UsageError for a missing file, a folder or a path that ends in a path separator or a `.` or
  * `..` segment, and a file that fails to load. For a syntax error the message names the file and line that
  * does not parse.
@@ -32,6 +33,7 @@ export const IS_MODULE_SYNTAX_DETECTED = NODE_MAJOR_VERSION > 22 || (NODE_MAJOR_
  */
 export async function importModuleFile(path, fileLabel, moduleFileRecovery) {
   let fileStats = null;
+  let realFile = '';
   const file = resolve(path);
 
   try {
@@ -41,8 +43,11 @@ export async function importModuleFile(path, fileLabel, moduleFileRecovery) {
     throw error;
   }
   if (isFolderPath(path) || !fileStats.isFile()) throw new UsageError(`${fileLabel} is not a file`);
+  // Windows file names ignore letter case, and realpath gives the stored spelling of a path the user wrote, so
+  // every spelling of one file shares one module record.
+  realFile = await realpath(file);
   try {
-    return await import(pathToFileURL(file).href);
+    return await import(pathToFileURL(realFile).href);
   } catch (error) {
     throw new UsageError(await formatLoadFailure(error, file, fileLabel, moduleFileRecovery));
   }

@@ -6,6 +6,8 @@ import { formatHiddenCharacters } from './format-hidden-characters.js';
 /** @typedef {import('./simulate.js').TraceCall} TraceCall */
 /** @typedef {Omit<TraceCall, 'returned'>} PendingCall A call that has no scripted return yet. */
 
+const ignoreRejection = () => {};
+
 /**
  * @typedef {{ kind: 'answered', returned: ScriptedReturn }
  *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json', message: string }} ScriptedReturnResult
@@ -95,6 +97,8 @@ function callRespondFunction(respondFunction, source, call, earlierCalls) {
   // Copies, so a function that changes what it gets changes no call of the trace.
   const value = respondFunction(structuredClone(call), structuredClone(earlierCalls));
 
+  // The wrong-type stop drops a promise, so its rejection must not reach the process as unhandled.
+  if (value instanceof Promise) Promise.prototype.then.call(value, undefined, ignoreRejection);
   return { value, source, unansweredMessage: null };
 }
 
