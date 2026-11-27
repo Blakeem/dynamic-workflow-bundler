@@ -40,7 +40,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | inspection | What `dwfb inspect` shows of one trace: its events in order, or one call in full. |
 | role | The fixed start of a call's label, which names the kind of agent, such as `review` in `review:u1`. |
 | item | The part of a call's label after its role that names what the call works on, such as `u1` in `review:u1`. |
-| throw site | One `throw new <Name>(...)` statement of a script, with the fixed text its message starts with. |
+| throw site | One `throw new <Name>(...)` statement of a script, placed at the line and column of its `new` keyword. |
 | frame | One place in a script that the stack of a thrown error names: a line and a column. The newest frame is where the error was created. |
 | call site | One entry of the stack that V8 records for an error, with a file name and an offset into the compiled code. Each call site inside the script gives one frame. |
 | end state | A named way a script ends: the `status` of the object it returns, the name a scenario gives, or a throw site. |

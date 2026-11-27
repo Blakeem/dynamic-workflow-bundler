@@ -11,8 +11,7 @@ import { formatRealDisplayPath } from '../src/real-path.js';
 
 const ORACLE_FOLDER = fileURLToPath(new URL('./fixtures/flow-map/', import.meta.url));
 const REFERENCE_SOURCES = { derived: 'returned', declared: 'scenario' };
-// Lines 2 and 3 of a script that writeFiles writes, after its meta statement.
-const AMBIGUOUS_BODY = "if (args.first) throw new Error(args.message);\nthrow new Error(`${args.message} again`);\n";
+const FIRST_AND_SECOND_SCENARIOS = "export default [{ name: 'first', expect: 'threw', args: { first: true } }, { name: 'second', expect: 'threw', args: {} }];\n";
 const GAPS_BODY = [
   'const kind = args?.kind;',
   "if (kind === 'label') await agent('Run.', { label: args.label });",
@@ -64,6 +63,17 @@ function convertReferenceGraph({ nodes, edges, phases, loops }) {
   const convertEdge = ({ from, to, labelled, fromId, toId, boundary, ...edge }) => ({ ...edge, from: fromId, to: toId, nextItem: boundary });
 
   return { nodes: nodes.map(convertNode), edges: edges.map(convertEdge), phases, loops };
+}
+
+/**
+ * @param {{ script: string, scenarios: string }} files
+ * @returns {Promise<{ id: string, line: number | null, scenarios: string[] }[]>} Each throw node of the graph that map() gives.
+ */
+async function listThrowNodes(files) {
+  const { graph } = await map(files);
+
+  assert.notEqual(graph, null);
+  return graph.nodes.filter((node) => node.kind === 'throw').map(({ id, line, scenarios }) => ({ id, line, scenarios }));
 }
 
 /**
@@ -123,17 +133,79 @@ describe('map', () => {
       ],
     );
     assert.equal(stopTrace.end.kind, 'stopped');
-    assert.match(parse.reason, /^the script threw SyntaxError with the message ".+", which starts with the fixed text of no throw site$/);
+    // The newest frame of an error of JSON.parse is the call of the script that invoked it.
+    assert.match(parse.reason, /^the script threw SyntaxError: .+ at line 4, column 28, which is no throw site$/);
     assert.deepEqual(result.unmapped.at(-1), parse);
   });
 
-  it('leaves unmapped a throw that two throw sites with no fixed start could give, and each scenario of a refused script', async () => {
-    const ambiguous = await writeFiles('ambiguous', AMBIGUOUS_BODY, "export default [{ name: 'a', expect: 'threw', args: { message: 'gone' } }];\n");
+  it('gives a throw node to each of two throw sites with the same message text, on two lines or on one', async () => {
+    const twoLines = await writeFiles('two-lines', "if (args.first) throw new Error('Gone');\nthrow new Error('Gone');\n", FIRST_AND_SECOND_SCENARIOS);
+    const oneLine = await writeFiles('one-line', "if (args.first) throw new Error('Gone'); else throw new Error('Gone');\n", FIRST_AND_SECOND_SCENARIOS);
+
+    assert.deepEqual(await listThrowNodes(twoLines), [
+      { id: 'x1', line: 2, scenarios: ['first'] },
+      { id: 'x2', line: 3, scenarios: ['second'] },
+    ]);
+    assert.deepEqual(await listThrowNodes(oneLine), [
+      { id: 'x1', line: 2, scenarios: ['first'] },
+      { id: 'x2', line: 2, scenarios: ['second'] },
+    ]);
+  });
+
+  it('ends a throw at the site that created the error, for an error class of the script and a site inside a function', async () => {
+    const errorClass = await writeFiles(
+      'error-class',
+      "class BlockError extends Error {\n  constructor(id) {\n    super(`No block ${id}`);\n    this.name = 'BlockError';\n  }\n}\nthrow new BlockError(args.id);\n",
+      "export default [{ name: 'a', expect: 'threw', args: { id: 'b1' } }];\n",
+    );
+    const inFunction = await writeFiles(
+      'in-function',
+      "function fail(reason) { throw new Error(reason); }\nif (args.early) fail('early');\nfail('late');\n",
+      "export default [{ name: 'early', expect: 'threw', args: { early: true } }, { name: 'late', expect: 'threw', args: {} }];\n",
+    );
+
+    assert.deepEqual(await listThrowNodes(errorClass), [{ id: 'x1', line: 8, scenarios: ['a'] }]);
+    assert.deepEqual(await listThrowNodes(inFunction), [{ id: 'x1', line: 2, scenarios: ['early', 'late'] }]);
+  });
+
+  it('leaves unmapped an error created anywhere but a throw site, and a thrown value with no place', async () => {
+    const scenarioText = "export default [{ name: 'a', expect: 'threw', args: {} }];\n";
+    const scriptBug = await writeFiles('script-bug', 'const reason = args.missing.text;\nthrow new Error(reason);\n', scenarioText);
+    const returned = await writeFiles('returned', "function createError() { return new Error('Gone'); }\nif (args.never) throw new Error('Gone');\nthrow createError();\n", scenarioText);
+    const inConstructor = await writeFiles('in-constructor', 'class BlockError extends Error {\n  constructor(block) {\n    super(block.name);\n  }\n}\nthrow new BlockError(args.block);\n', scenarioText);
+    const text = await writeFiles('text', "if (args.never) throw new Error('Gone');\nthrow 'Gone';\n", scenarioText);
+
+    assert.deepEqual((await map(scriptBug)).unmapped, [{ scenario: 'a', reason: "the script threw TypeError: Cannot read properties of undefined (reading 'text') at line 2, column 29, which is no throw site" }]);
+    assert.deepEqual((await map(returned)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: Gone at line 2, column 33, which is no throw site' }]);
+    assert.deepEqual((await map(inConstructor)).unmapped, [{ scenario: 'a', reason: "the script threw TypeError: Cannot read properties of undefined (reading 'name') at line 4, column 17, which is no throw site" }]);
+    assert.deepEqual((await map(text)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: Gone, and the simulation recorded no place it was created at' }]);
+  });
+
+  it('leaves unmapped an error that the new operation of a throw site raises, and maps a TypeError of a TypeError site', async () => {
+    const scenarioText = "export default [{ name: 'a', expect: 'threw', args: {} }];\n";
+    const noConstructor = await writeFiles('no-constructor', "const Fail = args.missing;\nthrow new Fail('boom');\n", scenarioText);
+    const derivedReturn = await writeFiles('derived-return', "class BlockError extends Error { constructor(m) { super(m); return 1; } }\nthrow new BlockError('boom');\n", scenarioText);
+    const proxyTrap = await writeFiles('proxy-trap', "const Fail = new Proxy(Error, { construct() { return 1; } });\nthrow new Fail('boom');\n", scenarioText);
+    const noStack = await writeFiles('no-stack', "class Halt { constructor(m) { this.message = m; } }\nthrow new Halt('boom');\n", scenarioText);
+    const shadowedName = await writeFiles('shadowed-name', "const TypeError = args.missing;\nthrow new TypeError('boom');\n", scenarioText);
+    const spread = await writeFiles('spread', "const parts = args.parts;\nthrow new TypeError(...parts);\n", scenarioText);
+    const otherGlobal = await writeFiles('other-global', "const reason = Symbol('s');\nthrow new Error(reason);\n", scenarioText);
+    const typeSite = await writeFiles('type-site', "throw new TypeError('Wrong type');\n", scenarioText);
+    const engineReason = (message, name) => `the script threw TypeError: ${message} at line 3, column 7, the throw site of ${name}, and an error named TypeError ends only at a throw site that calls the global TypeError with no spread argument`;
+
+    assert.deepEqual((await map(noConstructor)).unmapped, [{ scenario: 'a', reason: engineReason('Fail is not a constructor', 'Fail') }]);
+    assert.deepEqual((await map(derivedReturn)).unmapped, [{ scenario: 'a', reason: engineReason('Derived constructors may only return object or undefined', 'BlockError') }]);
+    assert.deepEqual((await map(proxyTrap)).unmapped, [{ scenario: 'a', reason: engineReason("'construct' on proxy: trap returned non-object ('1')", 'Fail') }]);
+    assert.deepEqual((await map(shadowedName)).unmapped, [{ scenario: 'a', reason: engineReason('TypeError is not a constructor', 'TypeError') }]);
+    assert.deepEqual((await map(spread)).unmapped, [{ scenario: 'a', reason: engineReason('parts is not iterable (cannot read property undefined)', 'TypeError') }]);
+    assert.deepEqual((await map(otherGlobal)).unmapped, [{ scenario: 'a', reason: engineReason('Cannot convert a Symbol value to a string', 'Error') }]);
+    assert.deepEqual((await map(noStack)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: boom, and the simulation recorded no place it was created at' }]);
+    assert.deepEqual(await listThrowNodes(typeSite), [{ id: 'x1', line: 2, scenarios: ['a'] }]);
+  });
+
+  it('leaves unmapped each scenario of a refused script', async () => {
     const refused = await writeFiles('refused', 'return Date.now();\n', "export default [{ name: 'a' }, { name: 'b' }];\n");
 
-    assert.deepEqual((await map(ambiguous)).unmapped, [
-      { scenario: 'a', reason: 'the script threw Error with the message "gone again", which starts with the fixed text of no throw site, and the throw sites at lines 2, 3 each give a message with no fixed start' },
-    ]);
     assert.deepEqual(await map(refused), {
       ok: false,
       script: await formatRealDisplayPath(refused.script),

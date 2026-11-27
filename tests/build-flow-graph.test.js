@@ -5,8 +5,8 @@ import { buildFlowGraph } from '../src/build-flow-graph.js';
 const DONE = { kind: 'returned', value: { status: 'done' } };
 const SEQ_ROLES = ['dev', 'check'];
 const SEQ_SITES = [
-  { line: 12, prefix: 'No block to build', template: 'No block to build', isMessageBuilt: false },
-  { line: 20, prefix: 'Dead in round ', template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
+  { line: 12, column: 31, name: 'Error', isGlobalName: true, hasSpread: false, template: 'No block to build', isMessageBuilt: false },
+  { line: 20, column: 34, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
 ];
 // The labels of the seq script's scenario in which each check passes in round 2.
 const SEQ_ROUND_2_LABELS = ['dev a r1', 'check a r1', 'dev a r2', 'check a r2', 'dev b r1', 'check b r1', 'dev b r2', 'check b r2'];
@@ -74,13 +74,23 @@ function listEdges(graph) {
 }
 
 /**
- * @param {string} template A throw site's template, which is its prefix too.
+ * @param {string} message
+ * @param {{ line: number, column: number }[]} frames
+ * @param {string} [name]
+ * @returns {{ kind: 'threw', name: string, message: string, frames: { line: number, column: number }[] }}
+ */
+function createThrewEnd(message, frames, name = 'Error') {
+  return { kind: 'threw', name, message, frames };
+}
+
+/**
+ * @param {string} template A throw site's template.
  * @param {boolean} [isMessageBuilt] The site's isMessageBuilt.
- * @returns {string} The label of the throw node a message of that template reaches.
+ * @returns {string} The label of the throw node that an error the site creates reaches.
  */
 function readThrowLabel(template, isMessageBuilt = false) {
-  const site = { line: 3, prefix: template, template, isMessageBuilt };
-  const graph = buildGraph([createSimulation('a', [], { kind: 'threw', name: 'Error', message: template })], { roles: [], throwSites: [site] });
+  const site = { line: 3, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template, isMessageBuilt };
+  const graph = buildGraph([createSimulation('a', [], createThrewEnd(template, [{ line: 3, column: 7 }]))], { roles: [], throwSites: [site] });
 
   return graph.nodes[0].label;
 }
@@ -127,19 +137,20 @@ describe('buildFlowGraph', () => {
     ]);
   });
 
-  it('gives a simulation that threw the throw site with the longest prefix its message starts with', () => {
-    // The site at line 5 has the prefix of the site at line 4, so it is never picked.
+  it('gives a simulation that threw the throw site at the line and column of its newest frame, whatever the message', () => {
     const sites = [
-      { line: 4, prefix: 'Dead', template: 'Dead', isMessageBuilt: false },
-      { line: 5, prefix: 'Dead', template: 'Dead', isMessageBuilt: false },
-      { line: 7, prefix: 'Dead in round ', template: 'Dead in round ...', isMessageBuilt: true },
-      { line: 9, prefix: '', template: '...', isMessageBuilt: true },
+      { line: 4, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead', isMessageBuilt: false },
+      { line: 4, column: 30, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead', isMessageBuilt: false },
+      { line: 7, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead in round ...', isMessageBuilt: true },
+      { line: 9, column: 7, name: 'TypeError', isGlobalName: true, hasSpread: false, template: 'Wrong type', isMessageBuilt: false },
     ];
     const graph = buildGraph(
       [
-        createSimulation('round', [], { kind: 'threw', name: 'Error', message: 'Dead in round 2' }),
-        createSimulation('dead', [], { kind: 'threw', name: 'Error', message: 'Dead early' }),
-        createSimulation('other', [], { kind: 'threw', name: 'TypeError', message: 'x is not a function' }),
+        createSimulation('round', [], createThrewEnd('Dead in round 2', [{ line: 7, column: 7 }, { line: 4, column: 30 }])),
+        createSimulation('second', [], createThrewEnd('Dead', [{ line: 4, column: 30 }])),
+        createSimulation('first', [], createThrewEnd('Dead', [{ line: 4, column: 7 }])),
+        createSimulation('other text', [], createThrewEnd('Gone', [{ line: 7, column: 7 }], 'BlockError')),
+        createSimulation('engine name', [], createThrewEnd('Bad', [{ line: 9, column: 7 }], 'TypeError')),
       ],
       { roles: [], throwSites: sites },
     );
@@ -147,19 +158,60 @@ describe('buildFlowGraph', () => {
     assert.deepEqual(
       graph.nodes.map(({ id, line, scenarios }) => ({ id, line, scenarios })),
       [
-        { id: 'x1', line: 4, scenarios: ['dead'] },
-        { id: 'x2', line: 7, scenarios: ['round'] },
-        { id: 'x3', line: 9, scenarios: ['other'] },
+        { id: 'x1', line: 4, scenarios: ['first'] },
+        { id: 'x2', line: 4, scenarios: ['second'] },
+        { id: 'x3', line: 7, scenarios: ['round', 'other text'] },
+        { id: 'x4', line: 9, scenarios: ['engine name'] },
       ],
     );
+  });
+
+  it('leaves unmapped an error with the name of an engine error at a throw site of another name', () => {
+    const names = ['EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError'];
+    const sites = [{ line: 3, column: 7, name: 'Fail', isGlobalName: false, hasSpread: false, template: 'boom', isMessageBuilt: false }];
+    const unmapped = findUnmapped(
+      names.map((name) => createSimulation(name, [], createThrewEnd('Fail is not a constructor', [{ line: 3, column: 7 }], name))),
+      { roles: [], throwSites: sites },
+    );
+
+    assert.deepEqual(
+      unmapped,
+      names.map((name) => ({
+        scenario: name,
+        reason: `the script threw ${name}: Fail is not a constructor at line 3, column 7, the throw site of Fail, and an error named ${name} ends only at a throw site that calls the global ${name} with no spread argument`,
+      })),
+    );
+  });
+
+  it('leaves unmapped an engine error at a throw site that calls a binding of the script, spreads an argument or calls a global of another name', () => {
+    const sites = [
+      { line: 3, column: 7, name: 'TypeError', isGlobalName: false, hasSpread: false, template: 'x', isMessageBuilt: false },
+      { line: 4, column: 7, name: 'TypeError', isGlobalName: true, hasSpread: true, template: '', isMessageBuilt: true },
+      { line: 5, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: '', isMessageBuilt: true },
+    ];
+    const unmapped = findUnmapped(
+      [
+        createSimulation('binding', [], createThrewEnd('TypeError is not a constructor', [{ line: 3, column: 7 }], 'TypeError')),
+        createSimulation('spread', [], createThrewEnd('args.parts is not iterable', [{ line: 4, column: 7 }], 'TypeError')),
+        createSimulation('other global', [], createThrewEnd('Cannot convert a Symbol value to a string', [{ line: 5, column: 7 }], 'TypeError')),
+      ],
+      { roles: [], throwSites: sites },
+    );
+    const rule = 'and an error named TypeError ends only at a throw site that calls the global TypeError with no spread argument';
+
+    assert.deepEqual(unmapped, [
+      { scenario: 'binding', reason: `the script threw TypeError: TypeError is not a constructor at line 3, column 7, the throw site of TypeError, ${rule}` },
+      { scenario: 'spread', reason: `the script threw TypeError: args.parts is not iterable at line 4, column 7, the throw site of TypeError, ${rule}` },
+      { scenario: 'other global', reason: `the script threw TypeError: Cannot convert a Symbol value to a string at line 5, column 7, the throw site of Error, ${rule}` },
+    ]);
   });
 
   it('folds the throws of the seq script in rounds 1 and 3 into one throw node', () => {
     const labels = ['dev a r1', 'check a r1', 'dev b r1', 'check b r1'];
     const graph = buildGraph(
       [
-        createSimulation('dies in round 1', labels, { kind: 'threw', name: 'Error', message: 'Dead in round 1. Resume with the same args.' }),
-        createSimulation('dies in round 3', labels, { kind: 'threw', name: 'Error', message: 'Dead in round 3. Resume with the same args.' }),
+        createSimulation('dies in round 1', labels, createThrewEnd('Dead in round 1. Resume with the same args.', [{ line: 20, column: 34 }])),
+        createSimulation('dies in round 3', labels, createThrewEnd('Dead in round 3. Resume with the same args.', [{ line: 20, column: 34 }])),
       ],
       { roles: SEQ_ROLES, throwSites: SEQ_SITES },
     );
@@ -175,22 +227,20 @@ describe('buildFlowGraph', () => {
     });
   });
 
-  it('leaves unmapped a throw no site gives, and a throw that two sites with no fixed start could give', () => {
-    const noSite = findUnmapped([createSimulation('a', [], { kind: 'threw', name: 'Error', message: 'Gone' })], { roles: [], throwSites: SEQ_SITES });
-    const twoSites = findUnmapped([createSimulation('a', [], { kind: 'threw', name: 'Error', message: 'Gone\n' })], {
-      roles: [],
-      throwSites: [
-        { line: 3, prefix: '', template: '', isMessageBuilt: true },
-        { line: 5, prefix: '', template: '...', isMessageBuilt: true },
+  it('leaves unmapped a throw with no frame, and one whose newest frame is no throw site though an older frame is', () => {
+    const unmapped = findUnmapped(
+      [
+        createSimulation('no frame', [], createThrewEnd('Gone\n', [], 'Bad\tError')),
+        createSimulation('older frame', [], createThrewEnd('No block to build', [{ line: 2, column: 5 }, { line: 12, column: 31 }])),
+        createSimulation('other column', [], createThrewEnd('No block to build', [{ line: 12, column: 30 }])),
       ],
-    });
+      { roles: [], throwSites: SEQ_SITES },
+    );
 
-    assert.deepEqual(noSite, [{ scenario: 'a', reason: 'the script threw Error with the message "Gone", which starts with the fixed text of no throw site' }]);
-    assert.deepEqual(twoSites, [
-      {
-        scenario: 'a',
-        reason: 'the script threw Error with the message "Gone\\u{000A}", which starts with the fixed text of no throw site, and the throw sites at lines 3, 5 each give a message with no fixed start',
-      },
+    assert.deepEqual(unmapped, [
+      { scenario: 'no frame', reason: 'the script threw Bad\\u{0009}Error: Gone\\u{000A}, and the simulation recorded no place it was created at' },
+      { scenario: 'older frame', reason: 'the script threw Error: No block to build at line 2, column 5, which is no throw site' },
+      { scenario: 'other column', reason: 'the script threw Error: No block to build at line 12, column 30, which is no throw site' },
     ]);
   });
 
@@ -353,7 +403,7 @@ describe('buildFlowGraph', () => {
 
   it('joins the exits of the last segment to the end state, and the start to it for a trace with no call', () => {
     const graph = buildGraph(
-      [createSimulation('fan', [{ label: 'verify:u1', group: [0, 0] }, { label: 'verify:u2', group: [0, 1] }]), createSimulation('early', [], { kind: 'threw', name: 'Error', message: 'No block to build' })],
+      [createSimulation('fan', [{ label: 'verify:u1', group: [0, 0] }, { label: 'verify:u2', group: [0, 1] }]), createSimulation('early', [], createThrewEnd('No block to build', [{ line: 12, column: 31 }]))],
       { roles: ['verify'], throwSites: SEQ_SITES },
     );
 
@@ -383,13 +433,13 @@ describe('buildFlowGraph', () => {
 
   it('gives a graph of JSON values with its nodes, edges, phases and loops in their order', () => {
     const sites = [
-      { line: 4, prefix: 'Early', template: 'Early', isMessageBuilt: false },
-      { line: 9, prefix: 'Late', template: 'Late', isMessageBuilt: false },
+      { line: 4, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Early', isMessageBuilt: false },
+      { line: 9, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Late', isMessageBuilt: false },
     ];
     const graph = buildGraph(
       [
-        createSimulation('late', [{ label: 'dev a', phase: 'Dev' }], { kind: 'threw', name: 'Error', message: 'Late' }),
-        createSimulation('early', [{ label: 'check a', phase: 'Audit' }, { label: 'dev a', phase: 'Dev' }, { label: 'check a', phase: 'Audit' }], { kind: 'threw', name: 'Error', message: 'Early' }),
+        createSimulation('late', [{ label: 'dev a', phase: 'Dev' }], createThrewEnd('Late', [{ line: 9, column: 7 }])),
+        createSimulation('early', [{ label: 'check a', phase: 'Audit' }, { label: 'dev a', phase: 'Dev' }, { label: 'check a', phase: 'Audit' }], createThrewEnd('Early', [{ line: 4, column: 7 }])),
         createSimulation('done', ['dev a'], DONE),
       ],
       { roles: ['unused', 'check', 'dev'], throwSites: sites, phases: [{ title: 'Dev', detail: 'Builds.' }, { title: 'Empty' }, 'Plain'] },
