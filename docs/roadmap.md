@@ -15,7 +15,7 @@ Status is one of `planned`, `building` or `done`.
 |---|---|---|---|
 | Bundle | `dwfb build`, `dwfb locate` | Build one workflow script from an entry, modules, text files and parts. `--check` reports a built script that no longer matches its source. `locate` maps a line of the built script to its source line. | done |
 | Contract check | `dwfb validate`, `dwfb build` | Report each rule of the Workflow runtime that a script breaks, before launch. The build checks each script it builds and places a finding at its source line. | done |
-| Simulator | `dwfb simulate` | Run a script against a scenario with no model call, under the same limits as the runtime. | building |
+| Simulator | `dwfb simulate` | Run a script against a scenario with no model call, under the same limits as the runtime. | done |
 | Trace and inspector | `dwfb inspect` | Record every call of a simulation. Show one call's prompt, schema and return, and step through the calls in order. | planned |
 
 ## Version 0.0.2 to 0.0.4: tools that exist and move here
@@ -26,13 +26,14 @@ Status is one of `planned`, `building` or `done`.
 | 0.0.3 | Prompt snapshot | `dwfb snapshot` | Keep one copy of each distinct prompt per role, so a diff shows which prompts an edit reached. Hold a size budget per role. | planned |
 | 0.0.4 | Coverage | `dwfb coverage` | List each role, throw and end state that no scenario reaches, and each phase title that differs from `meta`. | planned |
 
-## Version 0.0.5 to 0.0.7: new tools
+## Version 0.0.5 to 0.0.8: new tools
 
 | Version | Item | Command | Scope | Status |
 |---|---|---|---|---|
 | 0.0.5 | Schema-valid returns | `dwfb simulate` | Reject a scripted return that breaks the call's schema. Build a minimal valid return from a schema. | planned |
 | 0.0.6 | Dead-agent sweep | `dwfb sweep` | Repeat each scenario with one agent dead at a time. Report each simulation that still ends as a success. | planned |
 | 0.0.7 | Runtime probe | `dwfb probe` | Write a script with no agent call that reports how the installed runtime behaves. Compare that report with the rules this tool holds. | planned |
+| 0.0.8 | Child workflows | `dwfb simulate` | Simulate a `workflow()` call by running the child script inside the same simulation. | planned |
 
 ## Version 0.1.0: first release on npm
 
