@@ -171,6 +171,25 @@ describe('the context', () => {
     assert.deepEqual((await simulateBody(body, { budget: { total: null } })).end.value, [null, 0, null]);
   });
 
+  it('adds spentPerCall to spent for each call that resolved to an answer, and none for a call that rejected', async () => {
+    const cycle = {};
+    cycle.self = cycle;
+    const answerCall = (call) => {
+      if (call.prompt === 'fail') throw new Error('no answer');
+      return call.prompt === 'cycle' ? cycle : null;
+    };
+    const body = [
+      "const spentList = [budget.spent(), await agent('one'), budget.spent()]",
+      "await agent('fail').catch(() => null)",
+      "await agent('cycle').catch(() => null)",
+      "await agent('bad schema', { schema: { type: 'array' } }).catch(() => null)",
+      "await agent('two')",
+      'return [...spentList, budget.spent(), budget.remaining()]',
+    ].join('\n');
+
+    assert.deepEqual((await simulateBody(body, { answerCall, budget: { total: 100, spent: 5, spentPerCall: 20 } })).end.value, [5, null, 25, 45, 55]);
+  });
+
   it('answers each agent() call with what answerCall gives, and rejects the call when answerCall throws', async () => {
     const calls = [];
     const answerCall = (call) => {
@@ -218,6 +237,9 @@ describe('the context', () => {
     await assert.rejects(simulateBody('return 1', { budget: 5 }), { name: 'TypeError', message: /options\.budget must/ });
     await assert.rejects(simulateBody('return 1', { budget: { total: '5' } }), { name: 'TypeError', message: /budget\.total/ });
     await assert.rejects(simulateBody('return 1', { budget: { spent: '5' } }), { name: 'TypeError', message: /budget\.spent/ });
+    for (const spentPerCall of ['5', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await assert.rejects(simulateBody('return 1', { budget: { spentPerCall } }), { name: 'TypeError', message: /budget\.spentPerCall must be a finite number of 0 or more/ });
+    }
     await assert.rejects(runSimulation('return 1', { answerCall: () => null }), /export const meta/);
     await assert.rejects(simulateBody('const value = ;'), SyntaxError);
   });

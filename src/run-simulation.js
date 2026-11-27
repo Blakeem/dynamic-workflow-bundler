@@ -45,7 +45,7 @@ import { installRuntimeGlobals } from './runtime-globals.js';
 /**
  * @typedef {object} SimulationOptions
  * @property {unknown} [args] A JSON value, or absent for no args.
- * @property {{ total?: number | null, spent?: number }} [budget]
+ * @property {{ total?: number | null, spent?: number, spentPerCall?: number }} [budget]
  * @property {(call: AgentCall) => unknown} answerCall Gives the value of one agent() call, and the script
  *   gets a copy of it made as a list leaving parallel() is copied. A thrown error, or a promise it gives
  *   that rejects, rejects that call, and the script gets that error itself. A SimulationStop thrown or
@@ -88,7 +88,7 @@ const NO_GROUP = -1;
 const hasInstance = Function.prototype[Symbol.hasInstance];
 const ignoreRejection = () => {};
 // A context that runs no script reads no args and no budget.
-const IDLE_SETTINGS = Object.freeze({ globalNames: RUNTIME_GLOBAL_NAMES, argsText: undefined, budgetTotal: null, budgetSpent: 0 });
+const IDLE_SETTINGS = Object.freeze({ globalNames: RUNTIME_GLOBAL_NAMES, argsText: undefined, budgetTotal: null, budgetSpent: 0, budgetSpentPerCall: 0 });
 
 /** Ends a simulation at the agent() call whose `answerCall` throws it, so the script runs no further. */
 export class SimulationStop extends Error {
@@ -165,19 +165,30 @@ function readSettings(options) {
   const budget = options?.budget ?? {};
   const budgetTotal = budget.total ?? null;
   const budgetSpent = budget.spent ?? 0;
+  const budgetSpentPerCall = budget.spentPerCall ?? 0;
   let argsText;
 
   if (typeof options?.answerCall !== 'function') throw new TypeError('runSimulation needs options.answerCall, a function');
-  if (typeof budget !== 'object') throw new TypeError('options.budget must be an object of total and spent');
+  if (typeof budget !== 'object') throw new TypeError('options.budget must be an object of total, spent and spentPerCall');
   if (budgetTotal !== null && typeof budgetTotal !== 'number') throw new TypeError('options.budget.total must be a number or null');
   if (typeof budgetSpent !== 'number') throw new TypeError('options.budget.spent must be a number');
+  if (!isSpentPerCall(budgetSpentPerCall)) throw new TypeError('options.budget.spentPerCall must be a finite number of 0 or more');
   try {
     argsText = options.args === undefined ? undefined : JSON.stringify(options.args);
   } catch (error) {
     throw new TypeError(`options.args must be a JSON value. ${error.message}`, { cause: error });
   }
   if (options.args !== undefined && argsText === undefined) throw new TypeError('options.args must be a JSON value');
-  return { globalNames: RUNTIME_GLOBAL_NAMES, argsText, budgetTotal, budgetSpent };
+  return { globalNames: RUNTIME_GLOBAL_NAMES, argsText, budgetTotal, budgetSpent, budgetSpentPerCall };
+}
+
+/**
+ * Infinity is refused, since the spent count before the first answer would be Infinity * 0, which is NaN.
+ * @param {unknown} value
+ * @returns {boolean} True for a number that a budget can add for each answered call.
+ */
+export function isSpentPerCall(value) {
+  return Number.isFinite(value) && /** @type {number} */ (value) >= 0;
 }
 
 /**

@@ -19,6 +19,7 @@
  * @property {string | undefined} argsText The args as JSON text, or undefined for no args.
  * @property {number | null} budgetTotal
  * @property {number} budgetSpent
+ * @property {number} budgetSpentPerCall Added to budgetSpent for each agent() call that resolved to an answer.
  */
 
 /**
@@ -196,16 +197,21 @@ export function installRuntimeGlobals(host, settings) {
     if (isArray(schema)) throwRuntimeError('TelemetrySafeError', SCHEMA_INVALID_MESSAGE);
     if (schema.type !== 'object') throwRuntimeError('TelemetrySafeError', SCHEMA_UNUSABLE_MESSAGE);
   };
+  let answeredCallCount = 0;
   // The script gets a copy of each answer, made of its own realm's objects. Not measured: an answer that holds a
   // cycle rejects as a list leaving parallel() that holds one does.
   const runAgent = (prompt, opts) => new ScriptPromise((resolve, reject) => {
     checkSchema(opts);
     const settleAnswer = (value) => {
+      let copy;
       try {
-        resolve(copyValue(value, createListCycleError));
+        copy = copyValue(value, createListCycleError);
       } catch (error) {
         reject(error);
+        return;
       }
+      answeredCallCount += 1;
+      resolve(copy);
     };
     host.agent(prompt, opts, settleAnswer, reject);
   });
@@ -217,11 +223,12 @@ export function installRuntimeGlobals(host, settings) {
     throwRuntimeError('Error', WORKFLOW_MESSAGE);
   };
 
-  const { budgetTotal, budgetSpent } = settings;
+  const { budgetTotal, budgetSpent, budgetSpentPerCall } = settings;
+  const countSpent = () => budgetSpent + budgetSpentPerCall * answeredCallCount;
   const budget = createObject(null);
   budget.total = budgetTotal;
-  budget.spent = () => budgetSpent;
-  budget.remaining = () => (budgetTotal === null ? Infinity : findLarger(0, budgetTotal - budgetSpent));
+  budget.spent = () => countSpent();
+  budget.remaining = () => (budgetTotal === null ? Infinity : findLarger(0, budgetTotal - countSpent()));
 
   const ScriptDate = function Date(...parts) {
     if (new.target === undefined || parts.length === 0) throw new ScriptError(CLOCK_MESSAGE);

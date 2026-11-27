@@ -5,7 +5,7 @@ import { findScriptedReturn, formatCallName } from './find-scripted-return.js';
 import { formatErrorCause } from './format-error-cause.js';
 import { isObject } from './is-object.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
-import { convertToText, listMissingGlobalNames, runSimulation, SimulationStop } from './run-simulation.js';
+import { convertToText, isSpentPerCall, listMissingGlobalNames, runSimulation, SimulationStop } from './run-simulation.js';
 import { UsageError } from './usage-error.js';
 import { checkScriptFile } from './validate.js';
 
@@ -15,7 +15,7 @@ import { checkScriptFile } from './validate.js';
 // A misspelled key such as `scenarios` would otherwise read as a missing scenario.
 const SIMULATE_OPTION_KEYS = new Set(['script', 'scenario']);
 export const SCENARIO_KEYS = new Set(['name', 'args', 'respond', 'budget']);
-const BUDGET_KEYS = new Set(['total', 'spent']);
+const BUDGET_KEYS = new Set(['total', 'spent', 'spentPerCall']);
 
 /**
  * @typedef {string | Record<string, unknown> | null} ScriptedReturn What one agent() call gets: a string for
@@ -37,7 +37,7 @@ const BUDGET_KEYS = new Set(['total', 'spent']);
  * @property {string} [name]
  * @property {unknown} [args] A JSON value, or absent for no args.
  * @property {Respond} [respond] Absent answers no call.
- * @property {{ total?: number | null, spent?: number }} [budget]
+ * @property {{ total?: number | null, spent?: number, spentPerCall?: number }} [budget]
  */
 
 /**
@@ -78,7 +78,7 @@ const BUDGET_KEYS = new Set(['total', 'spent']);
  * that gets none it can use. A script that breaks the contract is refused and does not run, and a script
  * larger than READ_BYTE_LIMIT is refused as `validate()` refuses it.
  * Not simulated: the check of `agentType` and `model` against the session, any check of a schema other
- * than its root type, the limit on agent calls, and a budget that grows as agents run.
+ * than its root type, the limit on agent calls, and a budget that grows by a different count at each call.
  * Rejects with a UsageError for options or a scenario of another shape, for a script `validate()` rejects,
  * and for a respond function that throws at a call made before the script settles.
  * @param {{ script: string, scenario?: Scenario }} options `script` as `validate()` takes it.
@@ -156,12 +156,13 @@ function checkArgs(args) {
  * @param {unknown} budget Not undefined.
  */
 function checkBudget(budget) {
-  if (!isObject(budget)) throw new UsageError('The scenario budget must be an object of total and spent');
+  if (!isObject(budget)) throw new UsageError('The scenario budget must be an object of total, spent and spentPerCall');
   const unknownKey = Object.keys(budget).find((key) => !BUDGET_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`The scenario budget takes no key ${unknownKey}`);
-  const { total, spent } = budget;
+  const { total, spent, spentPerCall } = budget;
   if (total !== undefined && total !== null && typeof total !== 'number') throw new UsageError('The scenario budget total must be a number or null');
   if (spent !== undefined && typeof spent !== 'number') throw new UsageError('The scenario budget spent must be a number');
+  if (spentPerCall !== undefined && !isSpentPerCall(spentPerCall)) throw new UsageError('The scenario budget spentPerCall must be a finite number of 0 or more');
 }
 
 /**

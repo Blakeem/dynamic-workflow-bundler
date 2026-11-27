@@ -12,7 +12,7 @@ function installInContext() {
   const context = createContext(Object.create(null));
   const install = runInContext(`(${installRuntimeGlobals})`, context);
   const globalNames = RUNTIME_GLOBAL_NAMES.filter((name) => !REMOVED_NAMES.includes(name));
-  const settings = { globalNames, argsText: '{"a":[1]}', budgetTotal: null, budgetSpent: 0 };
+  const settings = { globalNames, argsText: '{"a":[1]}', budgetTotal: null, budgetSpent: 0, budgetSpentPerCall: 0 };
   const runtime = install({}, settings);
 
   return { context, runtime };

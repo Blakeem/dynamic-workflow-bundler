@@ -45,7 +45,7 @@ describe('checkScenarios', () => {
   it('names the scenario of each problem simulate() names', () => {
     const label = 'Scenario 1 of the scenarios file s.js is not valid.';
 
-    assertUsageError([{ name: 'a', budget: 3 }], `${label} The scenario budget must be an object of total and spent`);
+    assertUsageError([{ name: 'a', budget: 3 }], `${label} The scenario budget must be an object of total, spent and spentPerCall`);
     assertUsageError([{ name: 'a', args: { count: 1n } }], `${label} The scenario args hold a BigInt at count, which JSON cannot carry`);
     assertUsageError([{ name: 'a', respond: 'pass' }], `${label} The scenario respond must be an object keyed by label prefix, or a function`);
   });

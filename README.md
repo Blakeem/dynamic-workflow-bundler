@@ -224,7 +224,7 @@ A scenarios file is an ES module whose default export is a list of scenarios, an
 | `name` | A name that no other scenario of the file has. Required. |
 | `args` | The JSON value the script reads as `args`. |
 | `respond` | The scripted returns of the `agent()` calls. |
-| `budget` | `{ total, spent }`, the numbers the script reads as its budget. `total` can be `null`. |
+| `budget` | `{ total, spent, spentPerCall }`, the numbers the script reads as its budget. `total` can be `null`. `spentPerCall` is added to `spent` for each `agent()` call that gets a scripted return, and defaults to 0. |
 | `expect` | `'returned'` or `'threw'`, the end that passes the scenario. Defaults to `'returned'`. |
 
 A scripted return is a string for a call with no schema, a plain JSON object for a call with a schema, or `null` for an agent that died. The script gets a copy of it, so a change the script makes to one return reaches no other call.
@@ -235,7 +235,7 @@ The simulation stops when a call gets no usable scripted return: no key matches,
 
 The command prints one line per scenario, then the counts of passed and failed scenarios. A line gives how the simulation ended and how many calls it made, and a failed scenario's line starts with `FAILED`. A scenario passes when its simulation ends as `expect` says. A scenario whose simulation stops or whose script is refused fails. `--scenario <name>` runs one scenario of the file. With no script, the command runs the `out` of each workflow of the config file that has `scenarios` against that file, and `--config <path>` names another config file. The command exits 0 when every scenario passed, 1 when one failed and 2 for a usage error, such as a scenarios file that does not load or holds an unknown key. `--json` prints the result as one JSON object, with the trace of each simulation.
 
-The simulator leaves out the check of `agentType` and `model` against the session, any check of a schema other than its root type, the limit on agent calls, and a budget that grows as agents run.
+The simulator leaves out the check of `agentType` and `model` against the session, any check of a schema other than its root type, the limit on agent calls, and a budget that grows by a different count at each call.
 
 ## License
 

@@ -39,6 +39,7 @@ const validateFinding = (rule) => ({ args: VALIDATE_ARGS, exit: /** @type {const
 const VALIDATED = { args: VALIDATE_ARGS, exit: /** @type {const} */ (0) };
 const SKIPPED_ONLY = /^Skipped out\/built\.js, since its workflow sets validate: false\.\n$/;
 const REVIEW_LOOP_SCRIPT = readFileSync(new URL('../simulate/review-loop.js', import.meta.url), 'utf8');
+const BUDGET_STEPS_SCRIPT = readFileSync(new URL('../simulate/budget-steps.js', import.meta.url), 'utf8');
 const THROW_SCRIPT = `${META}const answer = await agent('Answer', { label: 'answer' });\nif (answer === null) throw new Error('The answer agent died');\nreturn answer;\n`;
 const SIMULATE_ARGS = ['simulate', 'x.js', '--scenarios', 'scenarios.js'];
 /**
@@ -245,6 +246,11 @@ export const OUTCOME_CASES = [
     'simulate a scenario that stops at a used up list',
     createSimulateFiles(REVIEW_LOOP_SCRIPT, "[{ name: 'used up', respond: { draft: 'the draft', review: [{ verdict: 'fail' }] } }]"),
     { args: SIMULATE_ARGS, exit: 1, message: /^FAILED x\.js used up: stopped at call 2 \(label "review"\): The list of key "review" holds 1 scripted return/ },
+  ),
+  createCase(
+    'simulate a scenario whose budget is spent as calls get scripted returns',
+    createSimulateFiles(BUDGET_STEPS_SCRIPT, "[{ name: 'stops early', respond: { '': 'done' }, budget: { total: 100, spentPerCall: 40 } }]"),
+    { args: SIMULATE_ARGS, exit: 0, message: /^x\.js stops early: returned, 2 calls\.\n1 passed, 0 failed\.\n$/ },
   ),
   createCase(
     'simulate a refused script',

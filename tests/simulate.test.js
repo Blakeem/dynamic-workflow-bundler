@@ -70,10 +70,13 @@ describe('simulate options', () => {
     await rejectScenario({ respond: ['x'] }, 'The scenario respond must be an object keyed by label prefix, or a function');
     await rejectScenario({ respond: 'x' }, 'The scenario respond must be an object keyed by label prefix, or a function');
     await rejectScenario({ respond: new Map([['review', 'pass']]) }, 'The scenario respond must be an object keyed by label prefix, or a function');
-    await rejectScenario({ budget: 5 }, 'The scenario budget must be an object of total and spent');
+    await rejectScenario({ budget: 5 }, 'The scenario budget must be an object of total, spent and spentPerCall');
     await rejectScenario({ budget: { totl: 5 } }, 'The scenario budget takes no key totl');
     await rejectScenario({ budget: { total: '5' } }, 'The scenario budget total must be a number or null');
     await rejectScenario({ budget: { spent: '5' } }, 'The scenario budget spent must be a number');
+    for (const spentPerCall of ['5', -1, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      await rejectScenario({ budget: { spentPerCall } }, 'The scenario budget spentPerCall must be a finite number of 0 or more');
+    }
   });
 
   it("passes the scenario's args and budget to the script", async () => {
@@ -81,6 +84,16 @@ describe('simulate options', () => {
 
     assert.deepEqual(trace.end, { kind: 'returned', value: { args: { list: [1] }, total: 10, spent: 4, remaining: 6 } });
     assert.deepEqual((await simulateFixture('budget-args')).end, { kind: 'returned', value: { total: null, spent: 0, remaining: null } });
+  });
+
+  it('adds spentPerCall to spent for each call that got a scripted return, so a script can stop between steps', async () => {
+    const respond = { '': (call) => `${call.label} done` };
+    const stopsEarly = await simulateFixture('budget-steps', { respond, budget: { total: 100, spent: 0, spentPerCall: 40 } });
+    const runsAll = await simulateFixture('budget-steps', { respond, budget: { total: 100, spent: 10 } });
+
+    assert.deepEqual(stopsEarly.end, { kind: 'returned', value: { done: ['plan done', 'build done'], spent: 80 } });
+    assert.equal(stopsEarly.calls.length, 2);
+    assert.deepEqual(runsAll.end, { kind: 'returned', value: { done: ['plan done', 'build done', 'review done'], spent: 10 } });
   });
 });
 
