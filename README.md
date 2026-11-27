@@ -15,7 +15,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 | `dwfb locate` | Find the source file and line that a line of a built script comes from. | available |
 | `dwfb validate` | Report each rule of the Workflow runtime that a script breaks, before launch. | available |
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | available |
-| `dwfb inspect` | Show what each agent of a simulation received and returned. | planned |
+| `dwfb inspect` | Show what each agent of a simulation received and returned. | available |
 
 ## dwfb build
 
@@ -115,7 +115,7 @@ export default {
 
 `dwfb build` with no entry builds every workflow in order, and `dwfb build <entry>` builds each workflow whose entry is that file. A workflow with a finding does not stop the workflows after it. `banner: false` leaves out the banner line of one workflow, and `--no-banner` leaves it out of every workflow. `validate: false` skips the contract check in the build of one workflow, and `--no-validate` skips it for every workflow. `--config <path>` names another config file. `dwfb build <entry> --out <file>` reads no config file. A config file that does not load, has an unknown key, lists no workflow, gives a field of the wrong type or gives two workflows one `out` stops the command before it writes anything. Two `out` paths that differ only in letter case count as one `out`. Two `out` paths that name one file through a link count as one `out` among the workflows the command builds. A missing entry, or an `out` that the build refuses, such as a folder or a source file of a workflow the command builds, stops the command before it writes anything too.
 
-`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate) runs the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
+`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate) and [`dwfb inspect`](#dwfb-inspect) run the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
 
 ### Check
 
@@ -233,9 +233,55 @@ A scripted return is a string for a call with no schema, a plain JSON object for
 
 The simulation stops when a call gets no usable scripted return: no key matches, a list is used up, a function returns `undefined`, or the return has the wrong type or holds a value that JSON cannot carry. It also stops at the call after the 1000th, since the runtime caps one workflow at 1000 `agent()` calls. The script runs no further, and a `try` around `agent()` does not catch the stop. A script that waits on a promise that nothing settles also stops, since a run of it would not end. A script that reads a name the runtime defines and the running Node lacks, such as `Temporal`, stops before it runs. A script that breaks a rule of [`dwfb validate`](#dwfb-validate) is refused and does not run, and the command prints its findings.
 
-The command prints one line per scenario, then the counts of passed and failed scenarios. A line gives how the simulation ended and how many calls it made, and a failed scenario's line starts with `FAILED`. A scenario passes when its simulation ends as `expect` says. A scenario whose simulation stops or whose script is refused fails. `--scenario <name>` runs one scenario of the file. With no script, the command runs the `out` of each workflow of the config file that has `scenarios` against that file, and `--config <path>` names another config file. The command exits 0 when every scenario passed, 1 when one failed and 2 for a usage error, such as a scenarios file that does not load or holds an unknown key. `--json` prints the result as one JSON object, with the trace of each simulation.
+The command prints one line per scenario, then the counts of passed and failed scenarios. A line gives how the simulation ended and how many calls it made, and a failed scenario's line starts with `FAILED`. A scenario passes when its simulation ends as `expect` says. A scenario whose simulation stops or whose script is refused fails. `--scenario <name>` runs one scenario of the file. With no script, the command runs the `out` of each workflow of the config file that has `scenarios` against that file. With a script and no `--scenarios`, the command reads the `scenarios` of the config file's workflow whose `out` is the script. `--config <path>` names another config file. The command exits 0 when every scenario passed, 1 when one failed and 2 for a usage error, such as a scenarios file that does not load or holds an unknown key. `--json` prints the result as one JSON object, with the trace of each simulation.
 
 The simulator leaves out the check of `agentType` and `model` against the session, any check of a schema other than its root type, and a budget that grows by a different count at each call. A call of `workflow()` that names a workflow throws an Error with the message `workflow() is not simulated`. Time is virtual, so each `agent()` call answers before any timer runs and a wait of any length ends at once. Code after a script's first `await` has no time limit. So a loop there with no end keeps the simulation from ending, unless it calls `agent()` and waits for an `agent()` answer or a timer between those calls, since the simulation then stops at the cap on `agent()` calls. A wait for a promise that settles at once, such as `await null`, does not count.
+
+## dwfb inspect
+
+`dwfb inspect` runs a workflow script against one scenario, with no model call, and prints each event of the simulation in the order the script made it. An event is an `agent()` call, a `phase()` invocation or a log line. For the example of [`dwfb simulate`](#dwfb-simulate), run this command:
+
+```
+$ dwfb inspect .claude/workflows/review.js --scenarios workflows/review/scenarios.js --scenario "passes on round 2"
+.claude/workflows/review.js passes on round 2: returned, 2 calls.
+call 0 (label "review"): prompt of 32 characters, returned an object.
+call 1 (label "review"): prompt of 32 characters, returned an object.
+```
+
+The first line gives how the simulation ended and how many calls it made, as a line of `dwfb simulate` does, with no `FAILED` mark. A call's line gives the phase the runtime groups it under, its `parallel()` or `pipeline()` group, the length of its prompt and the type of its return. A length counts UTF-16 code units, as the `length` of a JavaScript string does. A character that a terminal does not show, such as a tab in a log line, is written as its escape, such as `\u{0009}`, so that each event takes one line.
+
+`--call <index>` prints one call in full, and the first call is 0:
+
+```
+$ dwfb inspect .claude/workflows/review.js --scenarios workflows/review/scenarios.js --scenario "passes on round 2" --call 1
+call 1 (label "review") of .claude/workflows/review.js passes on round 2
+phase: none
+group: none
+options:
+{
+  "label": "review",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "verdict": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "verdict"
+    ]
+  }
+}
+prompt:
+Review this change.
+Fix the typo
+returned:
+{
+  "verdict": "pass"
+}
+```
+
+A scenarios file of one scenario needs no `--scenario`. With no `--scenarios`, the command finds the scenarios file as `dwfb simulate` does. A script that breaks a rule of [`dwfb validate`](#dwfb-validate) is refused, and the command prints its findings. The command exits 0 when it prints the simulation, also for a simulation that threw or stopped, 1 for a refused script and 2 for a usage error. `--json` prints the result as one JSON object.
 
 ## License
 

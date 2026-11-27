@@ -12,6 +12,8 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const MODULES_ENTRY = join(FIXTURES, 'modules', 'entry.js');
 const CONFIG_FIXTURES = join(FIXTURES, 'config');
 const PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const README_SIMULATE_HEADING = '\n## dwfb simulate\n';
+const README_FILE_PATTERN = /^`(?<path>[^`\n]+)`:\n\n```js\n(?<code>[^]*?)```$/gm;
 
 const temporaryFolders = [];
 after(async () => {
@@ -43,6 +45,18 @@ async function copyModulesFixture() {
 function runCommand(args, cwd = process.cwd(), timeout = undefined) {
   const { status, stdout, stderr } = spawnSync(process.execPath, [COMMAND, ...args], { cwd, encoding: 'utf8', timeout });
   return { status, stdout, stderr };
+}
+
+/**
+ * @param {string} readme
+ * @param {string} heading
+ * @returns {string} The README section that opens with the heading, up to the next section.
+ */
+function sliceReadmeSection(readme, heading) {
+  const sectionStart = readme.indexOf(heading);
+  const sectionEnd = readme.indexOf('\n## ', sectionStart + heading.length);
+  assert.notEqual(sectionStart, -1, `README.md has no line ${heading.trim()}`);
+  return readme.slice(sectionStart, sectionEnd === -1 ? readme.length : sectionEnd);
 }
 
 describe('dwfb', () => {
@@ -807,8 +821,6 @@ describe('dwfb locate', () => {
 describe('dwfb simulate', () => {
   const META = "export const meta = { name: 'p', description: 'd' };\n";
   const SIMULATE_FIXTURES = join(FIXTURES, 'simulate');
-  const README_SECTION_HEADING = '\n## dwfb simulate\n';
-  const README_FILE_PATTERN = /^`(?<path>[^`\n]+)`:\n\n```js\n(?<code>[^]*?)```$/gm;
   const README_RUN_PATTERN = /^\$ dwfb (?<args>simulate [^\n]*)\n(?<output>[^]*?)```$/m;
   const USED_UP_MESSAGE = 'The list of key "review" holds 1 scripted return, which earlier calls used up, so it has none for call 2 (label "review"). Add a scripted return to the list';
   const NO_LABEL_MESSAGE = "No key of respond matches call 0 (no label). Add the key '', which matches a call with no label";
@@ -978,6 +990,20 @@ describe('dwfb simulate', () => {
     assert.deepEqual(runCommand(['simulate', '--config', 'other.config.js'], folder), expected);
   });
 
+  it('runs a named script with no --scenarios against the scenarios of the config workflow whose out is the script', async () => {
+    const folder = await writeSimulateFolder();
+    const config = "export default { workflows: [{ entry: 'clock.js', out: 'clock.js', validate: false }, { entry: 'answer.js', out: 'dist/answer.js', scenarios: 'answer.scenarios.js' }] };\n";
+    const expected = { status: 1, stdout: 'dist/answer.js answer died: threw TypeError: The answer agent died, 1 call.\nFAILED dist/answer.js answer given: returned, 1 call.\n1 passed, 1 failed.\n', stderr: '' };
+    await mkdir(join(folder, 'dist'));
+    await cp(join(folder, 'answer.js'), join(folder, 'dist', 'answer.js'));
+    await writeFile(join(folder, 'dwfb.config.js'), config);
+    await writeFile(join(folder, 'other.config.js'), config);
+
+    assert.deepEqual(runCommand(['simulate', 'dist/answer.js'], folder), expected);
+    await rm(join(folder, 'dwfb.config.js'));
+    assert.deepEqual(runCommand(['simulate', 'dist/answer.js', '--config', 'other.config.js'], folder), expected);
+  });
+
   it('loads a scenarios file once, so its top-level state carries over to a later workflow that names the same file', async () => {
     const folder = await writeSimulateFolder();
     const scenarios = "let calls = 0;\nexport default [{ name: 'first answer', respond: { answer: () => { calls += 1; return calls === 1 ? 'yes' : null; } } }];\n";
@@ -1009,10 +1035,12 @@ describe('dwfb simulate', () => {
     const cases = [
       [folder, ['simulate', ''], /^dwfb simulate: Name one workflow script\.\n\nUsage: dwfb simulate/],
       [folder, ['simulate', '--config', ''], /^dwfb simulate: Name the config file with --config <path>\.\n\nUsage: dwfb simulate/],
-      [folder, ['simulate', 'answer.js'], /^dwfb simulate: Name the scenarios file of the script with --scenarios <file>\.\n\nUsage: dwfb simulate/],
+      [folder, ['simulate', 'answer.js'], /^dwfb simulate: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name the scenarios file with --scenarios <file>\.\n$/],
+      [noScenarioFolder, ['simulate', 'b.js'], /^dwfb simulate: The config file dwfb\.config\.js has no workflow whose out is b\.js, so name the scenarios file with --scenarios <file>\.\n$/],
+      [noScenarioFolder, ['simulate', 'a.js'], /^dwfb simulate: The workflow whose entry is a\.js has no scenarios, so name the scenarios file with --scenarios <file>\.\n$/],
       [folder, ['simulate', '--scenarios', 'answer.scenarios.js'], /^dwfb simulate: Name the script that --scenarios simulates\.\n\nUsage: dwfb simulate/],
       [folder, ['simulate', '--scenario', 'a'], /^dwfb simulate: Name the script that --scenario simulates\.\n\nUsage: dwfb simulate/],
-      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--config', 'dwfb.config.js'], /^dwfb simulate: Name a script or --config, not both, since a named script needs no config file\.\n/],
+      [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--config', 'dwfb.config.js'], /^dwfb simulate: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n\nUsage: dwfb simulate/],
       [folder, ['simulate', 'answer.js', 'clock.js', '--scenarios', 'answer.scenarios.js'], /^dwfb simulate: Name one workflow script\.\n/],
       [folder, ['simulate', 'answer.js', '--scenarios', ''], /^dwfb simulate: Name the scenarios file with --scenarios <file>\.\n/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--verbose'], /^dwfb simulate: Unknown option '--verbose'[^]*\n\nUsage: dwfb simulate/],
@@ -1030,7 +1058,9 @@ describe('dwfb simulate', () => {
       [folder, ['simulate'], /^dwfb simulate: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script and --scenarios <file>, or name a config file with --config <path>\.\n$/],
       [noScenarioFolder, ['simulate'], /^dwfb simulate: The config file dwfb\.config\.js has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>\.\n$/],
       [noScenarioFolder, ['simulate', '--config', 'missing-out.config.js'], /^dwfb simulate: The out file dist\/a\.js of the workflow whose entry is a\.js does not exist, so run dwfb build a\.js --config missing-out\.config\.js\.\n$/],
+      [noScenarioFolder, ['simulate', 'dist/a.js', '--config', 'missing-out.config.js'], /^dwfb simulate: The out file dist\/a\.js of the workflow whose entry is a\.js does not exist, so run dwfb build a\.js --config missing-out\.config\.js\.\n$/],
       [noScenarioFolder, ['simulate', '--config', 'missing-scenarios.config.js'], /^dwfb simulate: The scenarios of the workflow whose entry is a\.js cannot load\. The scenarios file s\.js does not exist\.\n$/],
+      [noScenarioFolder, ['simulate', 'a.js', '--config', 'missing-scenarios.config.js'], /^dwfb simulate: The scenarios of the workflow whose entry is a\.js cannot load\. The scenarios file s\.js does not exist\.\n$/],
     ];
 
     for (const [cwd, args, message] of cases) {
@@ -1042,13 +1072,11 @@ describe('dwfb simulate', () => {
 
   it('loads the example scenarios file of README.md, and its example script passes with it as the README shows', async () => {
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
-    const sectionStart = readme.indexOf(README_SECTION_HEADING);
-    const section = readme.slice(sectionStart, readme.indexOf('\n## ', sectionStart + README_SECTION_HEADING.length));
+    const section = sliceReadmeSection(readme, README_SIMULATE_HEADING);
     const exampleFiles = [...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
     const run = README_RUN_PATTERN.exec(section)?.groups;
     const folder = await makeTemporaryFolder();
 
-    assert.notEqual(sectionStart, -1, `README.md has no line ${README_SECTION_HEADING.trim()}`);
     assert.deepEqual(exampleFiles.map(({ path }) => path), ['.claude/workflows/review.js', 'workflows/review/scenarios.js']);
     assert.ok(run !== undefined, 'The README section on dwfb simulate shows no $ dwfb simulate command');
     await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
@@ -1065,6 +1093,262 @@ describe('dwfb simulate', () => {
     assert.equal(status, 0);
     assert.match(stdout, /^Usage: dwfb simulate \[<script>\] \[--scenarios <file>\] \[options\]\n[^]*\n {2}--scenario <name> {4}Run only the scenario of this name\.\n/);
     assert.match(runCommand(['--help']).stdout, /\n {2}simulate \[<script>\] \[--scenarios <file>\]\n {35}Run a workflow script/);
+  });
+});
+
+describe('dwfb inspect', () => {
+  const META = "export const meta = { name: 'p', description: 'd' };\n";
+  const EVENTS_SCRIPT = [
+    META,
+    "phase('Plan');\n",
+    "log('plans\\tstart\\nnow');\n",
+    "await parallel([() => agent('Plan A', { label: 'plan' }), () => agent('Plan B\\n', { label: 'plan', phase: 'Side' })]);\n",
+    "await pipeline(['x'], (item) => agent(`Draft ${item}`), () => agent('Check', { label: 'check', schema: { type: 'object' } }));\n",
+    "return await agent('Judge', { label: 'judge', schema: { type: 'object' } });\n",
+  ].join('');
+  const EVENTS_SCENARIOS = [
+    'export default [\n',
+    "  { name: 'judged', respond: { plan: 'the plan', '': 'draft', check: null, judge: { verdict: 'pass' } } },\n",
+    "  { name: 'no draft', respond: { plan: 'the plan' } },\n",
+    '];\n',
+  ].join('');
+  const NO_DRAFT_MESSAGE = "No key of respond matches call 2 (no label). Add the key '', which matches a call with no label";
+  const PLAN_CALL_LINES = [
+    'call 0 (label "plan"): phase "Plan", parallel 0 item 0, prompt of 6 characters, returned a string of 8 characters.\n',
+    'call 1 (label "plan"): phase "Side", parallel 0 item 1, prompt of 7 characters, returned a string of 8 characters.\n',
+  ].join('');
+  const EVENT_HEAD_LINES = 'phase "Plan"\nlog plans\\u{0009}start\\u{000A}now\n';
+  const CLOCK_FINDING = 'clock.js:2:8 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.';
+  const README_SECTION_HEADING = '\n## dwfb inspect\n';
+  const README_RUN_PATTERN = /^\$ dwfb (?<args>inspect [^\n]*)\n(?<output>[^]*?)```$/gm;
+  const ARGUMENT_PATTERN = /"(?<quoted>[^"]*)"|(?<bare>\S+)/g;
+
+  /**
+   * @returns {Promise<string>} A new folder of an ES module package that holds the scripts and the scenarios
+   *   files of these tests.
+   */
+  async function writeInspectFolder() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'events.js'), EVENTS_SCRIPT);
+    await writeFile(join(folder, 'events.scenarios.js'), EVENTS_SCENARIOS);
+    await writeFile(join(folder, 'answer.js'), `${META}const answer = await agent('Answer', { label: 'answer' });\nif (answer === null) throw new TypeError('The answer agent died');\nreturn answer;\n`);
+    await writeFile(join(folder, 'answer.scenarios.js'), "export default [{ name: 'answer died', respond: { answer: null } }];\n");
+    await writeFile(join(folder, 'clock.js'), `${META}return Date.now();\n`);
+    return folder;
+  }
+
+  it('prints how the simulation ended with no FAILED mark, then one line per event in the order the script made them', async () => {
+    const folder = await writeInspectFolder();
+
+    assert.deepEqual(runCommand(['inspect', 'events.js', '--scenarios', 'events.scenarios.js', '--scenario', 'judged'], folder), {
+      status: 0,
+      stdout: [
+        'events.js judged: returned, 5 calls.\n',
+        EVENT_HEAD_LINES,
+        PLAN_CALL_LINES,
+        'call 2 (no label): phase "Plan", pipeline 1 item 0 stage 0, prompt of 7 characters, returned a string of 5 characters.\n',
+        'call 3 (label "check"): phase "Plan", pipeline 1 item 0 stage 1, prompt of 5 characters, returned null.\n',
+        'call 4 (label "judge"): phase "Plan", prompt of 5 characters, returned an object.\n',
+      ].join(''),
+      stderr: '',
+    });
+  });
+
+  it('prints no return for the call a simulation stopped at, and exits 0', async () => {
+    const folder = await writeInspectFolder();
+
+    assert.deepEqual(runCommand(['inspect', 'events.js', '--scenarios', 'events.scenarios.js', '--scenario', 'no draft'], folder), {
+      status: 0,
+      stdout: [
+        `events.js no draft: stopped at call 2 (no label): ${NO_DRAFT_MESSAGE}, 3 calls.\n`,
+        EVENT_HEAD_LINES,
+        PLAN_CALL_LINES,
+        'call 2 (no label): phase "Plan", pipeline 1 item 0 stage 0, prompt of 7 characters, no return.\n',
+      ].join(''),
+      stderr: '',
+    });
+  });
+
+  it('prints one call in full with --call, and adds a line end only to a prompt or a string return that ends with none', async () => {
+    const folder = await writeInspectFolder();
+    const args = ['inspect', 'events.js', '--scenarios', 'events.scenarios.js', '--scenario', 'judged', '--call'];
+
+    assert.deepEqual(runCommand([...args, '0'], folder), {
+      status: 0,
+      stdout: 'call 0 (label "plan") of events.js judged\nphase: "Plan"\ngroup: parallel 0, item 0 of 2\noptions:\n{\n  "label": "plan"\n}\nprompt:\nPlan A\nreturned:\nthe plan\n',
+      stderr: '',
+    });
+    assert.deepEqual(runCommand([...args, '1'], folder), {
+      status: 0,
+      stdout: 'call 1 (label "plan") of events.js judged\nphase: "Side"\ngroup: parallel 0, item 1 of 2\noptions:\n{\n  "label": "plan",\n  "phase": "Side"\n}\nprompt:\nPlan B\nreturned:\nthe plan\n',
+      stderr: '',
+    });
+    assert.deepEqual(runCommand([...args, '3'], folder), {
+      status: 0,
+      stdout: 'call 3 (label "check") of events.js judged\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 1 of 2\noptions:\n{\n  "label": "check",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt:\nCheck\nreturned: null, an agent that died\n',
+      stderr: '',
+    });
+    assert.deepEqual(runCommand([...args, '4'], folder), {
+      status: 0,
+      stdout: 'call 4 (label "judge") of events.js judged\nphase: "Plan"\ngroup: none\noptions:\n{\n  "label": "judge",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt:\nJudge\nreturned:\n{\n  "verdict": "pass"\n}\n',
+      stderr: '',
+    });
+  });
+
+  it('prints the stop in place of the return for the call a simulation stopped at, and the options line of a call with none', async () => {
+    const folder = await writeInspectFolder();
+
+    assert.deepEqual(runCommand(['inspect', 'events.js', '--scenarios', 'events.scenarios.js', '--scenario', 'no draft', '--call', '2'], folder), {
+      status: 0,
+      stdout: `call 2 (no label) of events.js no draft\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 0 of 2\noptions: none, or options that JSON cannot hold\nprompt:\nDraft x\nstopped: ${NO_DRAFT_MESSAGE}\n`,
+      stderr: '',
+    });
+  });
+
+  it('prints that options line also for a call whose options JSON cannot hold', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'big.js'), `${META}return await agent('A', { label: 'a', count: 1n });\n`);
+    await writeFile(join(folder, 'big.scenarios.js'), "export default [{ name: 'big', respond: { a: 'y' } }];\n");
+
+    assert.deepEqual(runCommand(['inspect', 'big.js', '--scenarios', 'big.scenarios.js', '--call', '0'], folder), {
+      status: 0,
+      stdout: 'call 0 (label "a") of big.js big\nphase: none\ngroup: none\noptions: none, or options that JSON cannot hold\nprompt:\nA\nreturned:\ny\n',
+      stderr: '',
+    });
+  });
+
+  it('takes the one scenario of a scenarios file with no --scenario, and exits 0 for a simulation that threw', async () => {
+    const folder = await writeInspectFolder();
+
+    assert.deepEqual(runCommand(['inspect', 'answer.js', '--scenarios', 'answer.scenarios.js'], folder), {
+      status: 0,
+      stdout: 'answer.js answer died: threw TypeError: The answer agent died, 1 call.\ncall 0 (label "answer"): prompt of 6 characters, returned null.\n',
+      stderr: '',
+    });
+  });
+
+  it('counts 1 character in the singular, for a prompt and for a string return', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'one.js'), `${META}return await agent('A');\n`);
+    await writeFile(join(folder, 'one.scenarios.js'), "export default [{ name: 'one', respond: { '': 'y' } }];\n");
+
+    assert.deepEqual(runCommand(['inspect', 'one.js', '--scenarios', 'one.scenarios.js'], folder), {
+      status: 0,
+      stdout: 'one.js one: returned, 1 call.\ncall 0 (no label): prompt of 1 character, returned a string of 1 character.\n',
+      stderr: '',
+    });
+  });
+
+  it('prints one JSON object with --json, for the events and for one call', async () => {
+    const folder = await writeInspectFolder();
+    const args = ['inspect', 'answer.js', '--scenarios', 'answer.scenarios.js', '--json'];
+    const head = { ok: true, script: 'answer.js', scenario: 'answer died', runtime: '2.1.332', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, callCount: 1 };
+    const events = runCommand(args, folder);
+    const call = runCommand([...args, '--call', '0'], folder);
+
+    assert.deepEqual({ status: events.status, stderr: events.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(events.stdout), {
+      ...head,
+      events: [{ kind: 'call', index: 0, label: 'answer', phase: null, group: null, promptLength: 6, returnedType: 'null', returnedLength: null }],
+    });
+    assert.deepEqual({ status: call.status, stderr: call.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(call.stdout), {
+      ...head,
+      call: { index: 0, label: 'answer', phase: null, group: null, opts: { label: 'answer' }, prompt: 'Answer', returned: null },
+    });
+  });
+
+  it('prints the findings of a refused script and how it ended, with or without --call, and exits 1', async () => {
+    const folder = await writeInspectFolder();
+    const args = ['inspect', 'clock.js', '--scenarios', 'answer.scenarios.js'];
+    const expected = { status: 1, stdout: `${CLOCK_FINDING}\nclock.js answer died: refused, 0 calls.\n`, stderr: '' };
+    const json = runCommand([...args, '--json'], folder);
+
+    assert.deepEqual(runCommand(args, folder), expected);
+    assert.deepEqual(runCommand([...args, '--call', '0'], folder), expected);
+    assert.deepEqual({ status: json.status, stderr: json.stderr }, { status: 1, stderr: '' });
+    assert.equal(JSON.parse(json.stdout).ok, false);
+    assert.deepEqual(JSON.parse(json.stdout).events, []);
+  });
+
+  it('reads the scenarios file of the config workflow whose out is the script when no --scenarios names one', async () => {
+    const folder = await writeInspectFolder();
+    const config = "export default { workflows: [{ entry: 'answer.js', out: 'dist/answer.js', scenarios: 'answer.scenarios.js' }] };\n";
+    const expected = { status: 0, stdout: 'dist/answer.js answer died: threw TypeError: The answer agent died, 1 call.\ncall 0 (label "answer"): prompt of 6 characters, returned null.\n', stderr: '' };
+    await mkdir(join(folder, 'dist'));
+    await cp(join(folder, 'answer.js'), join(folder, 'dist', 'answer.js'));
+    await writeFile(join(folder, 'dwfb.config.js'), config);
+    await writeFile(join(folder, 'other.config.js'), config);
+
+    assert.deepEqual(runCommand(['inspect', 'dist/answer.js'], folder), expected);
+    await rm(join(folder, 'dwfb.config.js'));
+    assert.deepEqual(runCommand(['inspect', 'dist/answer.js', '--config', 'other.config.js'], folder), expected);
+  });
+
+  it('exits 2 and prints no result for each usage error', async () => {
+    const folder = await writeInspectFolder();
+    const configFolder = await makeTemporaryFolder();
+    await writeFile(join(configFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(configFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.js' }] };\n");
+    await writeFile(join(configFolder, 'missing-out.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'dist/a.js', scenarios: 's.js' }] };\n");
+    await writeFile(join(configFolder, 'a.js'), `${META}return 1;\n`);
+    await writeFile(join(folder, 'tab.scenarios.js'), "export default [{ name: 'a\\tb' }, { name: 'c' }];\n");
+    const scenariosArgs = ['inspect', 'events.js', '--scenarios', 'events.scenarios.js'];
+    const cases = [
+      [folder, ['inspect'], /^dwfb inspect: Name one workflow script\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', ''], /^dwfb inspect: Name one workflow script\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js', 'answer.js'], /^dwfb inspect: Name one workflow script\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js', '--verbose'], /^dwfb inspect: Unknown option '--verbose'[^]*\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js', '--scenarios', ''], /^dwfb inspect: Name the scenarios file with --scenarios <file>\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', ''], /^dwfb inspect: Name the scenario with --scenario <name>\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--call', ''], /^dwfb inspect: Name the call with --call <index>\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js', '--config', ''], /^dwfb inspect: Name the config file with --config <path>\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', 'judged', '--call', '1.5'], /^dwfb inspect: The call "1\.5" is not a whole number written in digits\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', 'judged', '--call=-1'], /^dwfb inspect: The call "-1" is not a whole number written in digits\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', 'judged', '--call', '1\t'], /^dwfb inspect: The call "1\\u\{0009\}" is not a whole number written in digits\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', 'judged', '--call', '5'], /^dwfb inspect: The simulation made 5 calls, so name a call from 0 to 4\.\n$/],
+      [folder, [...scenariosArgs, '--config', 'dwfb.config.js'], /^dwfb inspect: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js'], /^dwfb inspect: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name the scenarios file with --scenarios <file>\.\n$/],
+      [configFolder, ['inspect', 'b.js'], /^dwfb inspect: The config file dwfb\.config\.js has no workflow whose out is b\.js, so name the scenarios file with --scenarios <file>\.\n$/],
+      [configFolder, ['inspect', 'a.js'], /^dwfb inspect: The workflow whose entry is a\.js has no scenarios, so name the scenarios file with --scenarios <file>\.\n$/],
+      [configFolder, ['inspect', 'dist/a.js', '--config', 'missing-out.config.js'], /^dwfb inspect: The out file dist\/a\.js of the workflow whose entry is a\.js does not exist, so run dwfb build a\.js --config missing-out\.config\.js\.\n$/],
+      [folder, scenariosArgs, /^dwfb inspect: The scenarios file events\.scenarios\.js holds 2 scenarios, so name one with --scenario <name>: "judged", "no draft"\.\n$/],
+      [folder, ['inspect', 'events.js', '--scenarios', 'tab.scenarios.js'], /^dwfb inspect: The scenarios file tab\.scenarios\.js holds 2 scenarios, so name one with --scenario <name>: "a\\u\{0009\}b", "c"\.\n$/],
+      [folder, [...scenariosArgs, '--scenario', 'other'], /^dwfb inspect: The scenarios file events\.scenarios\.js holds no scenario named "other"\.\n$/],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+  });
+
+  it('prints what each example of the README section on dwfb inspect shows, for the example files of dwfb simulate', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    const exampleFiles = [...sliceReadmeSection(readme, README_SIMULATE_HEADING).matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const runs = [...sliceReadmeSection(readme, README_SECTION_HEADING).matchAll(README_RUN_PATTERN)].map((match) => match.groups);
+    const folder = await makeTemporaryFolder();
+
+    assert.equal(runs.length, 2, 'The README section on dwfb inspect shows an example of the events and one of a call');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const { path, code } of exampleFiles) {
+      await mkdir(join(folder, dirname(path)), { recursive: true });
+      await writeFile(join(folder, path), code);
+    }
+    for (const { args, output } of runs) {
+      const commandArgs = [...args.matchAll(ARGUMENT_PATTERN)].map(({ groups }) => groups.quoted ?? groups.bare);
+      assert.deepEqual(runCommand(commandArgs, folder), { status: 0, stdout: output, stderr: '' }, args);
+    }
+  });
+
+  it('prints its usage for inspect --help, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['inspect', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb inspect <script> \[--scenarios <file>\] \[--scenario <name>\] \[--call <index>\] \[options\]\n[^]*\n {2}--call <index> {7}Print the call of this index in full\. The first call is 0\.\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}inspect <script> \[--scenarios <file>\] \[--scenario <name>\] \[--call <index>\]\n {35}Run a workflow script against one scenario/);
   });
 });
 

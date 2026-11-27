@@ -13,8 +13,8 @@ const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios'
  * @property {boolean} banner Defaults to true.
  * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
  *   against the contract. Defaults to true.
- * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate` with no
- *   script runs `out` against, or null for a workflow that it skips.
+ * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate` and
+ *   `dwfb inspect` run `out` against, or null for a workflow that `dwfb simulate` with no script skips.
  */
 
 /**

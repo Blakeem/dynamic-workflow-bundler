@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
 import { formatBuildCommand } from '../src/build-command.js';
 import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
+import { createInspection } from '../src/create-inspection.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatCallName } from '../src/find-scripted-return.js';
@@ -25,12 +26,18 @@ const EXIT_SUCCESS = 0;
 const EXIT_FINDINGS = 1;
 const EXIT_FAILURE = 2;
 const SCRIPT_POSITION_PATTERN = /^(?<line>\d+)(?::(?<column>\d+))?$/;
+const CALL_INDEX_PATTERN = /^\d+$/;
+const SCENARIOS_FILE_RECOVERY = 'so name the scenarios file with --scenarios <file>';
+const SCENARIOS_CONFIG_CONFLICT = 'Name --scenarios or --config, not both, since a named scenarios file needs no config file';
 
 const MAIN_USAGE = `Usage: dwfb <command> [options]
 
 Commands:
   build [<entry>] [--out <file>]   Build workflow scripts from an entry, its parts, and the modules,
                                    text files and JSON files it imports.
+  inspect <script> [--scenarios <file>] [--scenario <name>] [--call <index>]
+                                   Run a workflow script against one scenario with no model call, and
+                                   print the events of the simulation in order, or one call in full.
   locate <script> <line>[:<column>]
                                    Print the source line that a line of a built script comes from.
   simulate [<script>] [--scenarios <file>]
@@ -98,7 +105,8 @@ const SIMULATE_USAGE = `Usage: dwfb simulate [<script>] [--scenarios <file>] [op
 Runs a workflow script against each scenario of a scenarios file with no model call, as the runtime of
 Claude Code ${CONTRACT_RUNTIME_VERSION} runs it, and prints how each simulation ended. A scenario passes
 when its simulation ends as its expect says, which is returned by default. With no script, runs the out of
-each workflow of the config file that has scenarios against its scenarios file.
+each workflow of the config file that has scenarios against its scenarios file. With a script and no
+--scenarios, reads the scenarios file of the workflow of the config file whose out is the script.
 
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
@@ -111,6 +119,30 @@ Options:
 const SIMULATE_OPTIONS = Object.freeze({
   scenarios: { type: 'string' },
   scenario: { type: 'string' },
+  config: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean' },
+});
+
+const INSPECT_USAGE = `Usage: dwfb inspect <script> [--scenarios <file>] [--scenario <name>] [--call <index>] [options]
+
+Runs a workflow script against one scenario of a scenarios file with no model call, as the runtime of
+Claude Code ${CONTRACT_RUNTIME_VERSION} runs it, and prints the events of the simulation in order, or one call in full. With
+no --scenarios, reads the scenarios file of the workflow of the config file whose out is the script.
+
+Options:
+  --scenarios <file>   Read the scenarios of the script from this file.
+  --scenario <name>    Run the scenario of this name. A scenarios file of one scenario needs none.
+  --call <index>       Print the call of this index in full. The first call is 0.
+  --config <path>      Read this config file in place of ${CONFIG_FILES_TEXT}.
+  --json               Print the result as one JSON object.
+  --help               Print this help.
+`;
+
+const INSPECT_OPTIONS = Object.freeze({
+  scenarios: { type: 'string' },
+  scenario: { type: 'string' },
+  call: { type: 'string' },
   config: { type: 'string' },
   json: { type: 'boolean' },
   help: { type: 'boolean' },
@@ -146,6 +178,7 @@ async function runCommand(args) {
   const isMainOption = command === '--version' || command === '--help';
 
   if (command === 'build') return runBuild(commandArgs);
+  if (command === 'inspect') return runInspect(commandArgs);
   if (command === 'locate') return runLocate(commandArgs);
   if (command === 'simulate') return runSimulate(commandArgs);
   if (command === 'validate') return runValidate(commandArgs);
@@ -311,16 +344,13 @@ async function runSimulate(args) {
   if (values.scenarios === '') return printUsageError('dwfb simulate', `Name the scenarios file with --scenarios <file>.\n\n${SIMULATE_USAGE}`);
   if (values.scenario === '') return printUsageError('dwfb simulate', `Name the scenario with --scenario <name>.\n\n${SIMULATE_USAGE}`);
   if (values.config === '') return printUsageError('dwfb simulate', `Name the config file with --config <path>.\n\n${SIMULATE_USAGE}`);
-  if (script !== undefined && values.config !== undefined) {
-    return printUsageError('dwfb simulate', `Name a script or --config, not both, since a named script needs no config file.\n\n${SIMULATE_USAGE}`);
-  }
-  if (script !== undefined && values.scenarios === undefined) return printUsageError('dwfb simulate', `Name the scenarios file of the script with --scenarios <file>.\n\n${SIMULATE_USAGE}`);
   if (script === undefined && values.scenarios !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenarios simulates.\n\n${SIMULATE_USAGE}`);
   if (script === undefined && values.scenario !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenario simulates.\n\n${SIMULATE_USAGE}`);
+  if (values.scenarios !== undefined && values.config !== undefined) return printUsageError('dwfb simulate', `${SCENARIOS_CONFIG_CONFLICT}.\n\n${SIMULATE_USAGE}`);
 
   // Every simulation runs before any result prints, so a usage error in a later simulation prints no result.
   try {
-    targets = script === undefined ? await findConfigTargets(values.config) : [{ script, scenariosFile: /** @type {string} */ (values.scenarios), entry: null }];
+    targets = script === undefined ? await findConfigTargets(values.config) : [await findScriptTarget(script, values.scenarios, values.config)];
     for (const target of targets) {
       const fileScenarios = selectScenarios(await loadTargetScenarios(target), values.scenario, target.scenariosFile);
       for (const fileScenario of fileScenarios) simulations.push(await simulateScenario(target.script, fileScenario, target.scenariosFile));
@@ -340,7 +370,7 @@ async function runSimulate(args) {
  * @property {string} script
  * @property {string} scenariosFile
  * @property {string | null} entry The entry of the config workflow that names the scenarios file, or null for
- *   a script the command line names.
+ *   a scenarios file that `--scenarios` names.
  */
 
 /**
@@ -363,6 +393,30 @@ async function findConfigTargets(configPath) {
   if (targets.length === 0) throw new UsageError(`The config file ${commandConfig.file} has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>`);
 
   return targets;
+}
+
+/**
+ * Finds the scenarios file of a script that `dwfb simulate` or `dwfb inspect` names: the file `--scenarios`
+ * names, else the scenarios of the first workflow of the config file whose out is the script, as locate()
+ * takes the first.
+ * @param {string} script
+ * @param {string | undefined} scenariosFile The path `--scenarios` names.
+ * @param {string | undefined} configPath The path `--config` names.
+ * @returns {Promise<SimulationTarget>}
+ */
+async function findScriptTarget(script, scenariosFile, configPath) {
+  let commandConfig = null;
+  let scriptWorkflow;
+
+  if (scenariosFile !== undefined) return { script, scenariosFile, entry: null };
+  commandConfig = await loadCommandConfig(configPath);
+  if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, ${SCENARIOS_FILE_RECOVERY}`);
+  [scriptWorkflow] = await findConfigWorkflows(commandConfig.config.workflows, 'out', script);
+  if (scriptWorkflow === undefined) throw new UsageError(`The config file ${commandConfig.file} has no workflow whose out is ${script}, ${SCENARIOS_FILE_RECOVERY}`);
+  if (scriptWorkflow.scenarios === null) throw new UsageError(`The workflow whose entry is ${formatDisplayPath(scriptWorkflow.entry)} has no scenarios, ${SCENARIOS_FILE_RECOVERY}`);
+  await checkBuiltOut(scriptWorkflow, configPath);
+
+  return { script, scenariosFile: formatDisplayPath(scriptWorkflow.scenarios), entry: formatDisplayPath(scriptWorkflow.entry) };
 }
 
 /**
@@ -447,10 +501,25 @@ function formatSimulateText(simulations) {
  * @param {Simulation} simulation
  * @returns {string} Such as `FAILED review.js no reviewer: stopped at call 1 (label "review"): <message>, 2 calls.`
  */
-function formatSimulationLine({ script, scenario, passed, trace }) {
-  const callCount = trace.calls.length === 1 ? '1 call' : `${trace.calls.length} calls`;
+function formatSimulationLine(simulation) {
+  return `${simulation.passed ? '' : 'FAILED '}${formatTraceLine(simulation)}`;
+}
 
-  return `${passed ? '' : 'FAILED '}${script} ${formatHiddenCharacters(scenario)}: ${formatSimulationEnd(trace)}, ${callCount}.`;
+/**
+ * @param {Simulation} simulation
+ * @returns {string} Such as `review.js passes: returned, 1 call.`
+ */
+function formatTraceLine({ script, scenario, trace }) {
+  return `${script} ${formatHiddenCharacters(scenario)}: ${formatSimulationEnd(trace)}, ${formatCount(trace.calls.length, 'call')}.`;
+}
+
+/**
+ * @param {number} count
+ * @param {string} noun The singular, which takes an s for any other count than 1.
+ * @returns {string} Such as `1 call` or `0 calls`.
+ */
+function formatCount(count, noun) {
+  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
 }
 
 /**
@@ -476,6 +545,190 @@ function formatSimulateJson(simulations, isSuccess) {
     runtime: CONTRACT_RUNTIME_VERSION,
     simulations: simulations.map(({ script, scenario, expect, passed, trace }) => ({ script, scenario, expect, passed, trace })),
   };
+}
+
+/**
+ * @param {string[]} args
+ * @returns {Promise<number>}
+ */
+async function runInspect(args) {
+  let parsed = null;
+  let simulation = null;
+  let isRefused = false;
+  let inspection = null;
+
+  try {
+    parsed = parseArgs({ args, options: INSPECT_OPTIONS, allowPositionals: true, strict: true });
+  } catch (error) {
+    if (!String(error.code).startsWith('ERR_PARSE_ARGS')) throw error;
+    return printUsageError('dwfb inspect', `${error.message}\n\n${INSPECT_USAGE}`);
+  }
+
+  const { values, positionals } = parsed;
+  const [script] = positionals;
+  if (values.help) return printResult(INSPECT_USAGE);
+  if (positionals.length !== 1 || script === '') return printUsageError('dwfb inspect', `Name one workflow script.\n\n${INSPECT_USAGE}`);
+  if (values.scenarios === '') return printUsageError('dwfb inspect', `Name the scenarios file with --scenarios <file>.\n\n${INSPECT_USAGE}`);
+  if (values.scenario === '') return printUsageError('dwfb inspect', `Name the scenario with --scenario <name>.\n\n${INSPECT_USAGE}`);
+  if (values.call === '') return printUsageError('dwfb inspect', `Name the call with --call <index>.\n\n${INSPECT_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb inspect', `Name the config file with --config <path>.\n\n${INSPECT_USAGE}`);
+  if (values.scenarios !== undefined && values.config !== undefined) return printUsageError('dwfb inspect', `${SCENARIOS_CONFIG_CONFLICT}.\n\n${INSPECT_USAGE}`);
+  if (values.call !== undefined && !CALL_INDEX_PATTERN.test(values.call)) {
+    return printUsageError('dwfb inspect', `The call "${formatHiddenCharacters(values.call)}" is not a whole number written in digits.\n\n${INSPECT_USAGE}`);
+  }
+
+  try {
+    simulation = await simulateTarget(await findScriptTarget(script, values.scenarios, values.config), values.scenario);
+    isRefused = simulation.trace.end.kind === 'refused';
+    // The trace comes before the call check that createInspection() makes, so that a refused script, which made
+    // no call, prints its findings as dwfb simulate does in place of a usage error for the call --call names.
+    inspection = createInspection(simulation.trace, values.call === undefined || isRefused ? undefined : Number(values.call));
+  } catch (error) {
+    return printCommandFailure('dwfb inspect', error);
+  }
+
+  const exitCode = isRefused ? EXIT_FINDINGS : EXIT_SUCCESS;
+  if (values.json) return printResult(`${JSON.stringify({ ok: !isRefused, ...inspection }, null, 2)}\n`, exitCode);
+  return printResult(formatInspectionText(simulation, inspection), exitCode);
+}
+
+/**
+ * @param {SimulationTarget} target
+ * @param {string | undefined} name The name `--scenario` gives.
+ * @returns {Promise<Simulation>} The simulation of the one scenario that `dwfb inspect` runs.
+ */
+async function simulateTarget(target, name) {
+  const fileScenario = selectInspectScenario(await loadTargetScenarios(target), name, target.scenariosFile);
+
+  return simulateScenario(target.script, fileScenario, target.scenariosFile);
+}
+
+/**
+ * @param {import('../src/check-scenarios.js').FileScenario[]} fileScenarios
+ * @param {string | undefined} name The name `--scenario` gives.
+ * @param {string} scenariosFile
+ * @returns {import('../src/check-scenarios.js').FileScenario} The scenario of that name, or with no name the one
+ *   scenario of the file.
+ */
+function selectInspectScenario(fileScenarios, name, scenariosFile) {
+  const names = fileScenarios.map((fileScenario) => `"${formatHiddenCharacters(fileScenario.name)}"`);
+
+  if (name !== undefined) return selectScenarios(fileScenarios, name, scenariosFile)[0];
+  if (fileScenarios.length === 1) return fileScenarios[0];
+
+  throw new UsageError(`The scenarios file ${scenariosFile} holds ${fileScenarios.length} scenarios, so name one with --scenario <name>: ${names.join(', ')}`);
+}
+
+/**
+ * @param {Simulation} simulation
+ * @param {import('../src/create-inspection.js').Inspection} inspection
+ * @returns {string} The lines a person reads: for a refused script its findings and the line of how the
+ *   simulation ended, else one call in full, else that line and then one line per event. That line is the
+ *   line of `dwfb simulate` with no `FAILED ` mark.
+ */
+function formatInspectionText(simulation, inspection) {
+  const { end } = simulation.trace;
+
+  if (end.kind === 'refused') return [...end.findings.map(formatFinding), formatTraceLine(simulation)].map((line) => `${line}\n`).join('');
+  if (inspection.call !== undefined) return formatInspectionCallText(simulation, inspection.call, end);
+
+  return [formatTraceLine(simulation), ...(inspection.events ?? []).map(formatEventLine)].map((line) => `${line}\n`).join('');
+}
+
+/**
+ * @param {import('../src/create-inspection.js').InspectionEvent} event
+ * @returns {string} One line, since each title, text and label goes through formatHiddenCharacters.
+ */
+function formatEventLine(event) {
+  if (event.kind === 'phase') return `phase "${formatHiddenCharacters(event.title)}"`;
+  if (event.kind === 'log') return `log ${formatHiddenCharacters(event.text)}`;
+  return formatCallEventLine(event);
+}
+
+/**
+ * @param {Extract<import('../src/create-inspection.js').InspectionEvent, { kind: 'call' }>} event
+ * @returns {string} Such as `call 0 (label "review"): prompt of 32 characters, returned an object.`
+ */
+function formatCallEventLine(event) {
+  const parts = [];
+
+  if (event.phase !== null) parts.push(`phase "${formatHiddenCharacters(event.phase)}"`);
+  if (event.group !== null) parts.push(formatGroupPart(event.group));
+  parts.push(`prompt of ${formatCount(event.promptLength, 'character')}`, formatReturnedPart(event));
+
+  return `${formatCallName(event)}: ${parts.join(', ')}.`;
+}
+
+/**
+ * @param {import('../src/create-inspection.js').InspectionGroup} group
+ * @returns {string} Such as `parallel 0 item 2` or `pipeline 1 item 0 stage 1`.
+ */
+function formatGroupPart({ index, kind, item, stage }) {
+  return kind === 'parallel' ? `parallel ${index} item ${item}` : `pipeline ${index} item ${item} stage ${stage}`;
+}
+
+/**
+ * @param {{ returnedType: 'string' | 'object' | 'null' | 'none', returnedLength: number | null }} event
+ * @returns {string}
+ */
+function formatReturnedPart({ returnedType, returnedLength }) {
+  if (returnedType === 'string') return `returned a string of ${formatCount(/** @type {number} */ (returnedLength), 'character')}`;
+  if (returnedType === 'object') return 'returned an object';
+  if (returnedType === 'null') return 'returned null';
+  return 'no return';
+}
+
+/**
+ * @param {Simulation} simulation
+ * @param {import('../src/create-inspection.js').InspectionCall} call
+ * @param {import('../src/simulate.js').TraceEnd} end
+ * @returns {string}
+ */
+function formatInspectionCallText({ script, scenario }, call, end) {
+  const { phase, group, opts, prompt } = call;
+  const phaseLine = phase === null ? 'phase: none' : `phase: "${formatHiddenCharacters(phase)}"`;
+  // A trace gives null opts both for no options and for options JSON cannot hold, such as a BigInt.
+  const optionsText = opts === null ? 'options: none, or options that JSON cannot hold\n' : `options:\n${JSON.stringify(opts, null, 2)}\n`;
+
+  return [
+    `${formatCallName(call)} of ${script} ${formatHiddenCharacters(scenario)}\n`,
+    `${phaseLine}\n`,
+    `${formatGroupLine(group)}\n`,
+    optionsText,
+    `prompt:\n${formatWithLineEnd(prompt)}`,
+    formatReturnedText(call, end),
+  ].join('');
+}
+
+/**
+ * @param {import('../src/create-inspection.js').InspectionGroup | null} group
+ * @returns {string}
+ */
+function formatGroupLine(group) {
+  if (group === null) return 'group: none';
+  if (group.kind === 'parallel') return `group: parallel ${group.index}, item ${group.item} of ${group.items}`;
+  return `group: pipeline ${group.index}, item ${group.item} of ${group.items}, stage ${group.stage} of ${group.stages}`;
+}
+
+/**
+ * @param {import('../src/create-inspection.js').InspectionCall} call
+ * @param {import('../src/simulate.js').TraceEnd} end
+ * @returns {string}
+ */
+function formatReturnedText(call, end) {
+  // createInspection() gives no returned key only for the call the simulation stopped at, whose end has a message.
+  if (!Object.hasOwn(call, 'returned')) return `stopped: ${formatHiddenCharacters(/** @type {{ message: string }} */ (end).message)}\n`;
+  if (call.returned === null) return 'returned: null, an agent that died\n';
+  if (typeof call.returned === 'string') return `returned:\n${formatWithLineEnd(call.returned)}`;
+  return `returned:\n${JSON.stringify(call.returned, null, 2)}\n`;
+}
+
+/**
+ * @param {string} text
+ * @returns {string} The text with a line end added when it ends with none, so the next line starts on its own line.
+ */
+function formatWithLineEnd(text) {
+  return text.endsWith('\n') ? text : `${text}\n`;
 }
 
 /**
