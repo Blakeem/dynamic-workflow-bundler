@@ -1,5 +1,8 @@
 import { Script } from 'node:vm';
 
+/** The text wrapScriptBody puts before the text after the meta statement. */
+export const SCRIPT_BODY_PREFIX = "(async () => {'use strict';";
+
 /**
  * Wraps the text after the meta statement as the body of a strict async arrow function, the form Claude
  * Code 2.1.332 compiles.
@@ -8,7 +11,7 @@ import { Script } from 'node:vm';
  * @returns {string}
  */
 export function wrapScriptBody(script, metaEnd) {
-  return `(async () => {'use strict';${script.slice(metaEnd)}\n})`;
+  return `${SCRIPT_BODY_PREFIX}${script.slice(metaEnd)}\n})`;
 }
 
 /**

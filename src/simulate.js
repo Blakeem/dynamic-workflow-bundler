@@ -63,8 +63,9 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' } | { kind: 'never-settles' }>
  *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'call-limit', message: string, call: number }
  *   | { kind: 'stopped', reason: 'node-lacks-name' | 'never-settles', message: string }
- *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A stop's message has
- *   no closing period. `call` is the index of the call the simulation stopped at.
+ *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A `threw` end's `frames`
+ *   are as runSimulation gives them. A stop's message has no closing period. `call` is the index of the call
+ *   the simulation stopped at.
  */
 
 /**
@@ -106,6 +107,7 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * A wait for a promise that settles at once, such as `await null`, does not count.
  * A call made after the script settled that gets no usable scripted return or comes after the
  * AGENT_CALL_LIMIT calls stops nothing, and its record has no `returned` key.
+ * A `threw` end holds `frames`, which the TraceEnd typedef describes.
  * Rejects with a UsageError for options or a scenario of another shape, for a script `validate()` rejects,
  * and for a respond function that throws at a call, before or after the script settles.
  * @param {{ script: string, scenario?: Scenario }} options `script` as `validate()` takes it.
@@ -268,7 +270,7 @@ function createTraceWithoutRun(traceHead, end) {
  * Answers each agent() call from `respond` and records it. A call after AGENT_CALL_LIMIT earlier calls, a
  * call that gets no usable scripted return, and a call whose respond function throws each throw a
  * SimulationStop and are recorded with no `returned` key. The stop ends the simulation only before the
- * script settles.
+ * script's promise settles.
  * @param {Respond | undefined} respond
  */
 function createCallRecorder(respond) {

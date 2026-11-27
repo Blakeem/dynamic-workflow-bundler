@@ -42,6 +42,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | item | The part of a call's label after its role that names what the call works on, such as `u1` in `review:u1`. |
 | throw site | One `throw new <Name>(...)` statement of a script, with the fixed text its message starts with. |
 | frame | One place in a script that the stack of a thrown error names: a line and a column. The newest frame is where the error was created. |
+| call site | One entry of the stack that V8 records for an error, with a file name and an offset into the compiled code. Each call site inside the script gives one frame. |
 | end state | A named way a script ends: the `status` of the object it returns, the name a scenario gives, or a throw site. |
 | flow map | The graph of every path that the scenarios of one script reach, written as a Mermaid diagram with tables. |
 | node | One box of a flow map: the start, a role, an end state or a throw site. |

@@ -1,20 +1,46 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { promiseHooks } from 'node:v8';
 import { createContext, runInContext, Script } from 'node:vm';
-import { wrapScriptBody } from './compile-script.js';
+import { RESERVED_PREFIX } from './analyze-source.js';
+import { SCRIPT_BODY_PREFIX, wrapScriptBody } from './compile-script.js';
 import { RUNTIME_GLOBAL_NAMES } from './contract.js';
 import { readMetaObject } from './meta-statement.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
 import { installRuntimeGlobals } from './runtime-globals.js';
+import { findPosition, readPositionText } from './source-position.js';
 
 /** @typedef {import('./runtime-globals.js').InstalledRuntime} InstalledRuntime */
 
 /**
- * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string } | { kind: 'stopped' }
- *   | { kind: 'never-settles' }} SimulationEnd
- *   How the script ended. `value` is the JSON value the runtime reports for the return. `stopped` when
- *   `answerCall` threw a SimulationStop before the script settled. `never-settles` when the script waits on
- *   a promise that nothing settles, since no code can run, no answer is ready or pending and no timer is left.
+ * @typedef {object} Frame One place in the script that the stack of a thrown error names.
+ * @property {number} line From 1, with a line break at LF and at a lone CR.
+ * @property {number} column From 1.
+ */
+
+/**
+ * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string, frames: Frame[] }
+ *   | { kind: 'stopped' } | { kind: 'never-settles' }} SimulationEnd
+ *   How the script ended. `value` is the JSON value the runtime reports for the return. `frames` lists the
+ *   frames of the thrown error, newest first, and is [] for an end with no error of the script, such as the
+ *   time limit, and for each case readFrames names. `stopped` when `answerCall` throws a SimulationStop before the script's promise settles.
+ *   `never-settles` when the script waits on a promise that nothing settles, since no code can run, no
+ *   answer is ready or pending and no timer is left.
+ */
+
+/**
+ * @typedef {object} FrameSource What reads the call sites of a thrown value and places each in the script's text.
+ * @property {CallSiteReader} callSiteReader
+ * @property {import('node:vm').Context} context The script's context, which the read runs in.
+ * @property {number} scriptTimeLimit The limit in milliseconds on the read, the script's own limit.
+ * @property {string} text The entire script.
+ * @property {number} metaEnd The offset just after the meta statement.
+ */
+
+/**
+ * @typedef {object} ScriptEnding
+ * @property {SimulationEnd} end A threw end of an error of the script lists no frame yet.
+ * @property {{ value: unknown } | null} thrown The value the script threw, which the end's frames are read
+ *   from, or null for an end with no error of the script.
  */
 
 /**
@@ -94,6 +120,12 @@ const SCRIPT_FILE_NAME = 'workflow.js';
 const TIMEOUT_CODE = 'ERR_SCRIPT_EXECUTION_TIMEOUT';
 // Claude Code 2.1.332 refuses code generation from strings, and its global object holds no WebAssembly.
 const CONTEXT_OPTIONS = Object.freeze({ codeGeneration: Object.freeze({ strings: false, wasm: false }) });
+// The V8 default, so the --stack-trace-limit of the Node process that runs a simulation changes no frame.
+// The runtime's limit was not measured.
+const STACK_TRACE_LIMIT = 10;
+// A vm timeout covers only a Script run, so a frames read runs as one, through a global set for that run alone.
+const READ_GLOBAL_NAME = `${RESERVED_PREFIX}readCallSites`;
+const READ_SCRIPT = new Script(`${READ_GLOBAL_NAME}()`);
 const CYCLE = Symbol('cycle');
 // The group index of a parallel() or pipeline() invocation after the simulation ended, which records none.
 const NO_GROUP = -1;
@@ -120,28 +152,39 @@ export class SimulationStop extends Error {
  * answers are ready. Time is virtual. A timer runs once no other code of the script can run and no answer
  * is ready or pending, so a wait of any length ends at once. A timer callback that throws ends nothing, as
  * an unhandled rejection ends nothing, since the runtime's handling of it was not measured.
+ * A thrown error's frames are read from its stack once the script's promise has settled and the simulation
+ * has ended, so an error whose stack the script read before has none, and code of the script that the read
+ * runs, such as a trap of a Proxy the script made its Error, records nothing. The read runs under the
+ * script's time limit, and a read past it gives no frame.
  * Rejects when the text does not parse, does not open with the meta statement, or has a body that does not
  * compile. It checks no other rule of the contract, so a script the runtime refuses for another rule runs.
  * @param {string} text The entire script.
  * @param {SimulationOptions} options
- * @param {number} [scriptTimeLimit] The limit in milliseconds on the code before the first await. Only a
- *   test passes it, to reach the limit fast.
+ * @param {number} [scriptTimeLimit] The limit in milliseconds on the code before the first await, and on the
+ *   frames read. Only a test passes it, to reach the limit fast.
  * @returns {Promise<SimulationResult>}
  */
 export async function runSimulation(text, options, scriptTimeLimit = SCRIPT_TIME_LIMIT_MS) {
   const settings = readSettings(options);
-  const script = new Script(`${wrapScriptBody(text, readMetaEnd(text))}()`, { filename: SCRIPT_FILE_NAME });
+  const metaEnd = readMetaEnd(text);
+  const script = new Script(`${wrapScriptBody(text, metaEnd)}()`, { filename: SCRIPT_FILE_NAME });
   const { simulation, host } = createSimulation(options.answerCall);
-  const { context, runtime } = createScriptContext(host, settings);
+  const { context, runtime, callSiteReader } = createScriptContext(host, settings);
+  const frameSource = { callSiteReader, context, scriptTimeLimit, text, metaEnd };
   const stopIgnoringRejections = ignoreScriptRejections(runtime.ScriptPromise);
   const stopRecordingSettled = recordSettledPromises(simulation.settledPromises);
+  let ending = null;
   let end = null;
 
   try {
-    end = await runScript(script, context, scriptTimeLimit, simulation, runtime);
+    try {
+      ending = await runScript(script, context, scriptTimeLimit, simulation, runtime);
+    } finally {
+      simulation.isActive = false;
+      stopRecordingSettled();
+    }
+    end = ending.thrown === null ? ending.end : { ...ending.end, frames: readFrames(ending.thrown.value, frameSource) };
   } finally {
-    simulation.isActive = false;
-    stopRecordingSettled();
     // Code the script queued before it ended still runs, and may reject.
     await waitForIdle();
     stopIgnoringRejections();
@@ -164,13 +207,96 @@ export function listMissingGlobalNames() {
 /**
  * @param {import('./runtime-globals.js').RuntimeHost} host
  * @param {import('./runtime-globals.js').RuntimeSettings} settings
- * @returns {{ context: import('node:vm').Context, runtime: InstalledRuntime }}
+ * @returns {{ context: import('node:vm').Context, runtime: InstalledRuntime, callSiteReader: CallSiteReader }}
  */
 function createScriptContext(host, settings) {
   const context = createContext(Object.create(null), CONTEXT_OPTIONS);
   const installRuntime = runInContext(`(${installRuntimeGlobals})`, context);
+  const createReader = runInContext(`(${createCallSiteReader})`, context);
 
-  return { context, runtime: installRuntime(host, settings) };
+  runInContext('Error', context).stackTraceLimit = STACK_TRACE_LIMIT;
+  return { context, runtime: installRuntime(host, settings), callSiteReader: createReader(SCRIPT_FILE_NAME, READ_GLOBAL_NAME) };
+}
+
+/**
+ * @typedef {object} CallSiteReader The two steps around a read of a thrown value's call sites, each a
+ *   function of the script's realm.
+ * @property {(thrown: unknown, recordCompiledOffset: (compiledOffset: unknown) => void) => boolean} setRead
+ *   Sets the read as a function of the script's global object under the read's global name. The read calls
+ *   recordCompiledOffset with the offset into the compiled code of each call site of the thrown value in the
+ *   script's file, newest first, and gives false when it could not be made or threw. setRead gives false for
+ *   a value that is not an object and for a global object that refuses the name or already holds it.
+ * @property {() => void} removeRead Removes the name that setRead set.
+ */
+
+/**
+ * Gives the reader of a thrown value's call sites. Node 24.22.1 calls the prepareStackTrace of the Error
+ * that the global object of an error's context holds, with the error's call sites, at the first read of
+ * its stack, and never for an error a host function created. The read sets that hook for one read of the
+ * stack and puts the script's own prepareStackTrace back after it.
+ * The simulation compiles this function inside the script's context before the script runs. The read, the
+ * hook, and each descriptor a trap of a Proxy the script made its Error receives, then belong to the
+ * script's realm, whose Function refuses code from strings. For that reason it reads no name of this module.
+ * It keeps each built-in it calls, and gives each descriptor it makes no prototype, since a script may
+ * replace either.
+ * @param {string} fileName The name the script is compiled under.
+ * @param {string} readName The name of the global that holds the read while it runs.
+ * @returns {CallSiteReader}
+ */
+function createCallSiteReader(fileName, readName) {
+  'use strict';
+  const scriptGlobal = globalThis;
+  const { defineProperty, deleteProperty, getOwnPropertyDescriptor, setPrototypeOf } = Reflect;
+  const HOOK_KEY = 'prepareStackTrace';
+  const readCallSites = (thrown, recordCompiledOffset) => {
+    let ScriptError = null;
+    let original;
+    let hookDescriptor = null;
+    let isRead = true;
+    const hook = (error, callSites) => {
+      for (let index = 0; index < callSites.length; index += 1) {
+        if (callSites[index].getFileName() === fileName) recordCompiledOffset(callSites[index].getPosition());
+      }
+    };
+
+    try {
+      ScriptError = scriptGlobal.Error;
+      original = getOwnPropertyDescriptor(ScriptError, HOOK_KEY);
+      if (original !== undefined) setPrototypeOf(original, null);
+      // A partial descriptor keeps the attributes of the script's own property, so it can be put back.
+      hookDescriptor = original === undefined ? { __proto__: null, value: hook, writable: true, configurable: true } : { __proto__: null, value: hook };
+      if (!defineProperty(ScriptError, HOOK_KEY, hookDescriptor)) return false;
+    } catch {
+      return false;
+    }
+    try {
+      thrown.stack;
+    } catch {
+      isRead = false;
+    }
+    try {
+      if (original === undefined) deleteProperty(ScriptError, HOOK_KEY);
+      else defineProperty(ScriptError, HOOK_KEY, original);
+    } catch {
+      // A trap of a Proxy the script made its Error may throw here, and the hook then stays set.
+    }
+    return isRead;
+  };
+
+  return {
+    setRead: (thrown, recordCompiledOffset) => {
+      if (thrown === null || (typeof thrown !== 'object' && typeof thrown !== 'function')) return false;
+      try {
+        if (getOwnPropertyDescriptor(scriptGlobal, readName) !== undefined) return false;
+        return defineProperty(scriptGlobal, readName, { __proto__: null, value: () => readCallSites(thrown, recordCompiledOffset), configurable: true });
+      } catch {
+        return false;
+      }
+    },
+    removeRead: () => {
+      deleteProperty(scriptGlobal, readName);
+    },
+  };
 }
 
 /**
@@ -445,7 +571,7 @@ function takeNextTimer(timers) {
  * @param {number} scriptTimeLimit
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @param {InstalledRuntime} runtime
- * @returns {Promise<SimulationEnd>}
+ * @returns {Promise<ScriptEnding>}
  */
 async function runScript(script, context, scriptTimeLimit, simulation, runtime) {
   let scriptPromise = null;
@@ -454,17 +580,25 @@ async function runScript(script, context, scriptTimeLimit, simulation, runtime) 
     scriptPromise = script.runInContext(context, { timeout: scriptTimeLimit });
   } catch (error) {
     if (error?.code !== TIMEOUT_CODE) throw error;
-    if (simulation.isStopped) return { kind: 'stopped' };
-    return { kind: 'threw', name: 'Error', message: TIMEOUT_MESSAGE };
+    if (simulation.isStopped) return endWithNoError({ kind: 'stopped' });
+    return endWithNoError({ kind: 'threw', name: 'Error', message: TIMEOUT_MESSAGE, frames: [] });
   }
   simulation.scriptPromise = scriptPromise;
 
   const outcome = await settleScript(scriptPromise, simulation);
 
-  if (simulation.isStopped) return { kind: 'stopped' };
-  if (outcome === null) return { kind: 'never-settles' };
+  if (simulation.isStopped) return endWithNoError({ kind: 'stopped' });
+  if (outcome === null) return endWithNoError({ kind: 'never-settles' });
   if (outcome.isRejected) return convertThrown(outcome.value, simulation.runtimeErrors);
   return convertReturned(outcome.value, runtime.copyValue, simulation.runtimeErrors);
+}
+
+/**
+ * @param {SimulationEnd} end
+ * @returns {ScriptEnding}
+ */
+function endWithNoError(end) {
+  return { end, thrown: null };
 }
 
 /**
@@ -524,18 +658,18 @@ function runTimer(simulation, timer) {
  * @param {unknown} value
  * @param {InstalledRuntime['copyValue']} copyValue
  * @param {WeakSet<object>} runtimeErrors
- * @returns {SimulationEnd}
+ * @returns {ScriptEnding}
  */
 function convertReturned(value, copyValue, runtimeErrors) {
   let copy;
   let hasBigInt = false;
   let json;
 
-  if (typeof value === 'function') return { kind: 'threw', name: 'Error', message: FUNCTION_RESULT_MESSAGE };
+  if (typeof value === 'function') return endWithNoError({ kind: 'threw', name: 'Error', message: FUNCTION_RESULT_MESSAGE, frames: [] });
   try {
     copy = copyValue(value, () => CYCLE);
   } catch (error) {
-    if (error === CYCLE) return { kind: 'threw', name: 'TypeError', message: CYCLE_RESULT_MESSAGE };
+    if (error === CYCLE) return endWithNoError({ kind: 'threw', name: 'TypeError', message: CYCLE_RESULT_MESSAGE, frames: [] });
     return convertThrown(error, runtimeErrors);
   }
   json = JSON.stringify(copy, (key, item) => {
@@ -543,23 +677,71 @@ function convertReturned(value, copyValue, runtimeErrors) {
     hasBigInt = true;
     return null;
   });
-  if (hasBigInt) return { kind: 'threw', name: 'TypeError', message: BIGINT_RESULT_MESSAGE };
-  return { kind: 'returned', value: json === undefined ? null : JSON.parse(json) };
+  if (hasBigInt) return endWithNoError({ kind: 'threw', name: 'TypeError', message: BIGINT_RESULT_MESSAGE, frames: [] });
+  return endWithNoError({ kind: 'returned', value: json === undefined ? null : JSON.parse(json) });
 }
 
 /**
  * An error, a runtime function's error included, gives its name and message. Any other value gives the
- * name Error and its message property, or the value as a string when it has none.
+ * name Error and its message property, or the value as a string when it has none. The frames are read
+ * after the name and the message, so a getter of either that reads the stack sees the stack unchanged.
  * @param {unknown} thrown
  * @param {WeakSet<object>} runtimeErrors
- * @returns {SimulationEnd}
+ * @returns {ScriptEnding}
  */
 function convertThrown(thrown, runtimeErrors) {
   const isError = runtimeErrors.has(thrown) || readTag(thrown) === '[object Error]';
   const message = readField(thrown, 'message');
+  const name = isError ? convertToText(readField(thrown, 'name')) : 'Error';
+  const messageText = convertToText(isError || message !== undefined ? message : thrown);
 
-  if (isError) return { kind: 'threw', name: convertToText(readField(thrown, 'name')), message: convertToText(message) };
-  return { kind: 'threw', name: 'Error', message: convertToText(message === undefined ? thrown : message) };
+  return { end: { kind: 'threw', name, message: messageText, frames: [] }, thrown: { value: thrown } };
+}
+
+/**
+ * @param {unknown} thrown
+ * @param {FrameSource} frameSource
+ * @returns {Frame[]} Newest first. A call site outside the script's text after its meta statement, such as
+ *   the place that invokes the wrapping function, gives no frame. [] for a value that is not an object, an error
+ *   a runtime function throws, which has no stack, an error of the host realm, a stack read before or whose read
+ *   throws, an Error whose prepareStackTrace cannot be set, such as a frozen one, a script that set
+ *   Error.stackTraceLimit to 0, a global object that refuses the read's name, and a read that runs past the
+ *   time limit.
+ */
+function readFrames(thrown, frameSource) {
+  const { text, metaEnd } = frameSource;
+  const compiledOffsets = [];
+  // The script's code may call the hook with call sites of its own, so a compiled offset may be any value.
+  const isRead = runCallSiteRead(thrown, frameSource, (compiledOffset) => {
+    if (Number.isInteger(compiledOffset)) compiledOffsets.push(compiledOffset);
+  });
+  const offsets = isRead ? compiledOffsets.map((compiledOffset) => compiledOffset - SCRIPT_BODY_PREFIX.length + metaEnd).filter((offset) => offset >= metaEnd && offset < text.length) : [];
+
+  if (offsets.length === 0) return [];
+
+  const { positionText, markLength } = readPositionText(text);
+
+  return offsets.map((offset) => findPosition(positionText, Math.max(0, offset - markLength)));
+}
+
+/**
+ * Runs the read that setRead sets, as READ_SCRIPT in the script's context under the script's time limit.
+ * @param {unknown} thrown
+ * @param {FrameSource} frameSource
+ * @param {(compiledOffset: unknown) => void} recordCompiledOffset
+ * @returns {boolean} False when the read could not be made, threw or ran past the time limit.
+ */
+function runCallSiteRead(thrown, { callSiteReader, context, scriptTimeLimit }, recordCompiledOffset) {
+  if (!callSiteReader.setRead(thrown, recordCompiledOffset)) return false;
+  try {
+    return READ_SCRIPT.runInContext(context, { timeout: scriptTimeLimit }) === true;
+  } catch (error) {
+    if (error?.code !== TIMEOUT_CODE) throw error;
+    // The read stopped part way, so the hook may stay set on the script's Error, for code that records nothing.
+    return false;
+  } finally {
+    callSiteReader.removeRead();
+  }
 }
 
 /**

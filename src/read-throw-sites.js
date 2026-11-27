@@ -1,4 +1,4 @@
-import { findPosition, replaceLoneCarriageReturns } from './source-position.js';
+import { findPosition, readPositionText } from './source-position.js';
 import { listTreeNodes } from './syntax-tree.js';
 
 /** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */
@@ -24,10 +24,10 @@ export const EXPRESSION_MARK = '...';
  */
 export function readThrowSites(program, text) {
   const throwStatements = listTreeNodes(program).filter(isThrowSite);
-  const positionText = replaceLoneCarriageReturns(text);
+  const { positionText, markLength } = readPositionText(text);
 
   return throwStatements.map((statement) => ({
-    line: findPosition(positionText, statement.start).line,
+    line: findPosition(positionText, Math.max(0, statement.start - markLength)).line,
     ...readMessageText(statement.argument.arguments[0]),
   }));
 }

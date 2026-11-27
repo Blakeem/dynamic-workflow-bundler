@@ -1,3 +1,5 @@
+import { BYTE_ORDER_MARK } from './normalize-source-text.js';
+
 const LONE_CARRIAGE_RETURN = /\r(?!\n)/g;
 
 /**
@@ -29,6 +31,19 @@ export function findPosition(text, offset) {
  */
 export function replaceLoneCarriageReturns(text) {
   return text.replace(LONE_CARRIAGE_RETURN, '\n');
+}
+
+/**
+ * Gives the text that findPosition places an offset of the raw text in as an editor shows it: with a leading
+ * byte order mark dropped and each lone CR as LF. A caller places a raw offset with
+ * `findPosition(positionText, Math.max(0, offset - markLength))`.
+ * @param {string} text
+ * @returns {{ positionText: string, markLength: number }} `markLength` is the length of the dropped mark.
+ */
+export function readPositionText(text) {
+  const markLength = text.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK.length : 0;
+
+  return { positionText: replaceLoneCarriageReturns(text.slice(markLength)), markLength };
 }
 
 /**

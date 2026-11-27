@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { countLineBreaks, countLines, findPosition, replaceLoneCarriageReturns } from '../src/source-position.js';
+import { countLineBreaks, countLines, findPosition, readPositionText, replaceLoneCarriageReturns } from '../src/source-position.js';
 
 describe('findPosition', () => {
   it('gives the 1-based line and column of an offset', () => {
@@ -22,6 +22,14 @@ describe('replaceLoneCarriageReturns', () => {
     assert.equal(replaced, 'a\nb\r\nc\n\nd\n');
     assert.equal(replaced.length, text.length);
     assert.deepEqual(findPosition(replaced, text.indexOf('d')), { line: 5, column: 1 });
+  });
+});
+
+describe('readPositionText', () => {
+  it('drops a leading byte order mark and gives its length, and replaces each lone CR with LF', () => {
+    assert.deepEqual(readPositionText('\uFEFFa\nb'), { positionText: 'a\nb', markLength: 1 });
+    assert.deepEqual(readPositionText('a\rb\r\nc'), { positionText: 'a\nb\r\nc', markLength: 0 });
+    assert.deepEqual(readPositionText('a\uFEFFb'), { positionText: 'a\uFEFFb', markLength: 0 });
   });
 });
 

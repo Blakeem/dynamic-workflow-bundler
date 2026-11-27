@@ -20,7 +20,7 @@ describe('formatSimulationEnd', () => {
   });
 
   it('names the error a script threw, with each character a terminal does not show as its escape', () => {
-    assert.equal(formatEnd({ kind: 'threw', name: 'TypeError', message: 'boom\tnow' }), 'threw TypeError: boom\\u{0009}now');
+    assert.equal(formatEnd({ kind: 'threw', name: 'TypeError', message: 'boom\tnow', frames: [{ line: 2, column: 7 }] }), 'threw TypeError: boom\\u{0009}now');
   });
 
   it('names the call a simulation stopped at, and no call for a stop at none', () => {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { createContext, runInContext } from 'node:vm';
@@ -109,10 +110,213 @@ describe('the end of a script', () => {
   });
 
   it('gives a thrown value with no message as a string, and the name of an error a runtime function throws', async () => {
-    assert.deepEqual((await simulateBody('throw 7')).end, { kind: 'threw', name: 'Error', message: '7' });
-    assert.deepEqual((await simulateBody('throw { code: 7 }')).end, { kind: 'threw', name: 'Error', message: '[object Object]' });
-    assert.deepEqual((await simulateBody("await parallel('x')")).end, { kind: 'threw', name: 'TypeError', message: 'parallel() expects an array of functions' });
-    assert.deepEqual((await simulateBody("throw new RangeError('far')")).end, { kind: 'threw', name: 'RangeError', message: 'far' });
+    assert.deepEqual((await simulateBody('throw 7')).end, { kind: 'threw', name: 'Error', message: '7', frames: [] });
+    assert.deepEqual((await simulateBody('throw { code: 7 }')).end, { kind: 'threw', name: 'Error', message: '[object Object]', frames: [] });
+    assert.deepEqual((await simulateBody("await parallel('x')")).end, { kind: 'threw', name: 'TypeError', message: 'parallel() expects an array of functions', frames: [] });
+    assert.deepEqual((await simulateBody("throw new RangeError('far')")).end, { kind: 'threw', name: 'RangeError', message: 'far', frames: [{ line: 2, column: 7 }] });
+  });
+});
+
+describe('the frames of a thrown error', () => {
+  // A meta statement over three lines puts the body's first line on line 3 of the script.
+  const TALL_META = "export const meta = { name: 'p',\n  description: 'd',\n}";
+  const READ_TIME_LIMIT_MS = 100;
+  const CHILD_TIME_LIMIT_MS = 20000;
+
+  /**
+   * @param {string} body The text after TALL_META.
+   * @param {Partial<import('../src/run-simulation.js').SimulationOptions>} [options]
+   */
+  async function readFrames(body, options = {}) {
+    const { end } = await runSimulation(`${TALL_META}${body}`, { answerCall: () => 'ok', ...options });
+
+    assert.equal(end.kind, 'threw');
+    return end.frames;
+  }
+
+  it('places a throw new Error at its new keyword, past a meta statement of three lines', async () => {
+    assert.deepEqual(await readFrames("\nconst a = 1\n  throw new Error('x')"), [{ line: 5, column: 9 }]);
+  });
+
+  it('places a throw on the line where the meta statement ends', async () => {
+    assert.deepEqual(await readFrames("; throw new Error('x')"), [{ line: 3, column: 10 }]);
+  });
+
+  it('places a throw on the line of a one-line meta statement at the same column with a leading byte order mark as with none', async () => {
+    const text = "export const meta = { name: 'p', description: 'd' }; throw new Error('x')";
+    const ends = [(await runSimulation(text, { answerCall: () => 'ok' })).end, (await runSimulation(`\uFEFF${text}`, { answerCall: () => 'ok' })).end];
+
+    assert.deepEqual(ends.map((end) => end.frames), [[{ line: 1, column: 60 }], [{ line: 1, column: 60 }]]);
+  });
+
+  it('places an error of a class of the script, with and with no constructor', async () => {
+    assert.deepEqual(await readFrames("\nclass Gone extends Error {}\nthrow new Gone('x')"), [{ line: 5, column: 7 }]);
+    assert.deepEqual(await readFrames("\nclass Late extends Error { constructor(message) { super(message); this.name = 'Late' } }\nthrow new Late('x')"), [{ line: 5, column: 7 }]);
+  });
+
+  it('lists the frame of the function that created the error, then its caller', async () => {
+    assert.deepEqual(await readFrames("\nconst make = () => new Error('made')\nconst error = make()\nthrow error"), [{ line: 4, column: 20 }, { line: 5, column: 15 }]);
+  });
+
+  it('counts a CR LF and a lone CR as one line break each, and U+2028 as none', async () => {
+    assert.deepEqual(await readFrames("\rconst a = 1\r  throw new Error('x')"), [{ line: 5, column: 9 }]);
+    assert.deepEqual(await readFrames("\r\nconst note = 'a b'\r\n throw new Error(note)"), [{ line: 5, column: 8 }]);
+  });
+
+  it('places a TypeError of a property read of undefined at the read, then the place that invokes its function', async () => {
+    assert.deepEqual(await readFrames('\nconst read = (value) => value.name\nread(undefined)'), [{ line: 4, column: 31 }, { line: 5, column: 1 }]);
+  });
+
+  it('leaves out the call site of Array.prototype.map between a callback and its caller', async () => {
+    assert.deepEqual(await readFrames("\nconst list = [1].map(() => { throw new Error('x') })"), [{ line: 4, column: 36 }, { line: 4, column: 18 }]);
+  });
+
+  it('lists 10 frames of a deep recursion, whatever the --stack-trace-limit of the Node process', () => {
+    const moduleUrl = new URL('../src/run-simulation.js', import.meta.url).href;
+    const text = `${TALL_META}\nconst recurse = () => recurse()\nrecurse()`;
+    const code = `import { runSimulation } from '${moduleUrl}'; const { end } = await runSimulation(${JSON.stringify(text)}, { answerCall: () => 'ok' }); process.stdout.write(JSON.stringify(end.frames));`;
+    const { stdout, stderr } = spawnSync(process.execPath, ['--stack-trace-limit=50', '--input-type=module', '-e', code], { encoding: 'utf8', timeout: CHILD_TIME_LIMIT_MS });
+
+    assert.equal(stderr, '');
+    assert.deepEqual(JSON.parse(stdout), Array(10).fill({ line: 4, column: 23 }));
+  });
+
+  it('gives a list of this realm for a script that replaced its array methods', async () => {
+    assert.deepEqual(await readFrames("\nArray.prototype.filter = Array.prototype.map = () => []\nthrow new Error('x')"), [{ line: 5, column: 7 }]);
+  });
+
+  it('places an error that a getter of the returned value throws', async () => {
+    assert.deepEqual(await readFrames("\nreturn { get x() { throw new Error('x') } }"), [{ line: 4, column: 26 }]);
+  });
+
+  it('gives no frame for a return the runtime cannot report, a thrown string, a stack the script read, a stack getter that throws, a global Error that is not an object, a frozen Error, a stack trace limit of 0 and an error agent() throws', async () => {
+    assert.deepEqual(await readFrames("\nthrow { message: 'm', get stack() { throw 1 } }"), []);
+    assert.deepEqual(await readFrames("\nglobalThis.Error = undefined\nthrow new RangeError('x')"), []);
+    assert.deepEqual(await readFrames('\nreturn () => 1'), []);
+    assert.deepEqual(await readFrames('\nconst loop = {}\nloop.self = loop\nreturn loop'), []);
+    assert.deepEqual(await readFrames("\nthrow 'x'"), []);
+    assert.deepEqual(await readFrames("\nconst error = new Error('x')\nerror.stack\nthrow error"), []);
+    assert.deepEqual(await readFrames("\nObject.freeze(Error)\nthrow new Error('x')"), []);
+    assert.deepEqual(await readFrames("\nError.stackTraceLimit = 0\nthrow new Error('x')"), []);
+    assert.deepEqual(await readFrames("\nawait agent('p', { schema: 'x' })"), []);
+  });
+
+  it("puts the script's Error.prepareStackTrace back as it was: absent, or the script's own function", async () => {
+    const realms = [];
+    const answerCall = ({ opts }) => {
+      realms.push(opts);
+      return 'ok';
+    };
+    const absentFrames = await readFrames("\nawait agent('p', { realmError: Error })\nthrow new Error('x')", { answerCall });
+    const ownFrames = await readFrames("\nconst own = () => 'own'\nError.prepareStackTrace = own\nawait agent('p', { realmError: Error, own })\nthrow new Error('x')", { answerCall });
+    const [absent, own] = realms;
+
+    assert.deepEqual(absentFrames, [{ line: 5, column: 7 }]);
+    assert.equal(Object.hasOwn(absent.realmError, 'prepareStackTrace'), false);
+    assert.deepEqual(ownFrames, [{ line: 7, column: 7 }]);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(own.realmError, 'prepareStackTrace'), { value: own.own, writable: true, enumerable: true, configurable: true });
+  });
+
+  it("sets the hook and puts back the script's own prepareStackTrace for a script that gave Object.prototype a get key", async () => {
+    const realms = [];
+    const answerCall = ({ opts }) => {
+      realms.push(opts);
+      return 'ok';
+    };
+    const addGet = "Object.defineProperty(Object.prototype, 'get', { value: () => 1, configurable: true })";
+    const absentFrames = await readFrames(`\n${addGet}\nthrow new Error('x')`);
+    const ownFrames = await readFrames(`\nconst own = () => 'own'\nError.prepareStackTrace = own\n${addGet}\nawait agent('p', { realmError: Error, own })\nthrow new Error('x')`, { answerCall });
+    const [own] = realms;
+
+    assert.deepEqual(absentFrames, [{ line: 5, column: 7 }]);
+    assert.deepEqual(ownFrames, [{ line: 8, column: 7 }]);
+    assert.equal(Object.getOwnPropertyDescriptor(own.realmError, 'prepareStackTrace').value, own.own);
+  });
+
+  it('gives no frame for a compiled offset that is not an integer, from call sites the script hands the hook', async () => {
+    const forged = "{ getFileName: () => 'workflow.js', getPosition: () => COMPILED_OFFSET }";
+    const callSites = [forged.replace('COMPILED_OFFSET', '({ valueOf: () => 28 })'), forged.replace('COMPILED_OFFSET', '28.5')].join(', ');
+
+    assert.deepEqual(await readFrames(`\nthrow { message: 'm', get stack() { Error.prepareStackTrace({}, [${callSites}]); return '' } }`), []);
+  });
+
+  it('gives no frame and keeps the name and the message for a stack getter or a trap of a Proxy the script made its Error that never returns, and leaves the global names as they were', () => {
+    const moduleUrl = new URL('../src/run-simulation.js', import.meta.url).href;
+    const handOver = "\nawait agent('p', { scriptGlobal: globalThis, before: Object.getOwnPropertyNames(globalThis) })";
+    const texts = [
+      `${TALL_META}${handOver}\nthrow { message: 'm', get stack() { while (true) {} } }`,
+      `${TALL_META}${handOver}\nglobalThis.Error = new Proxy(Error, { getOwnPropertyDescriptor() { while (true) {} } })\nthrow new RangeError('x')`,
+    ];
+    // A child process, since a read with no time limit holds the event loop, and a test timer then never fires.
+    const code = `import { runSimulation } from '${moduleUrl}'; const results = []; for (const text of ${JSON.stringify(texts)}) { let opts = null; const { end } = await runSimulation(text, { answerCall: (call) => { opts = call.opts; return 'ok' } }, ${READ_TIME_LIMIT_MS}); results.push({ end, names: Object.getOwnPropertyNames(opts.scriptGlobal), before: [...opts.before] }) } process.stdout.write(JSON.stringify(results));`;
+    const { stdout, stderr } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: CHILD_TIME_LIMIT_MS });
+    const results = JSON.parse(stdout);
+
+    assert.equal(stderr, '');
+    assert.deepEqual(results.map((result) => result.end), [{ kind: 'threw', name: 'Error', message: 'm', frames: [] }, { kind: 'threw', name: 'RangeError', message: 'x', frames: [] }]);
+    for (const result of results) assert.deepEqual(result.names, result.before);
+  });
+
+  it("leaves the script's global object with the own names it held before the read, and gives no frame for a global that holds the read's name", async () => {
+    const realms = [];
+    const answerCall = ({ opts }) => {
+      realms.push(opts);
+      return 'ok';
+    };
+    const frames = await readFrames("\nawait agent('p', { scriptGlobal: globalThis, before: Object.getOwnPropertyNames(globalThis) })\nthrow new Error('x')", { answerCall });
+    const heldFrames = await readFrames("\nglobalThis.__dwfb_readCallSites = 1\nawait agent('p', { scriptGlobal: globalThis })\nthrow new Error('x')", { answerCall });
+    const [read, held] = realms;
+
+    assert.deepEqual(frames, [{ line: 5, column: 7 }]);
+    assert.deepEqual(Object.getOwnPropertyNames(read.scriptGlobal), [...read.before]);
+    assert.deepEqual(heldFrames, []);
+    assert.equal(held.scriptGlobal.__dwfb_readCallSites, 1);
+  });
+
+  it('keeps the frames when a trap of a Proxy the script made its Error throws as the hook is taken away', async () => {
+    assert.deepEqual(await readFrames("\nglobalThis.Error = new Proxy(Error, { deleteProperty() { throw 1 } })\nthrow new RangeError('x')"), [{ line: 5, column: 7 }]);
+  });
+
+  it("hands the script's code a hook and descriptors whose Function refuses code from strings", async () => {
+    const seenLists = [];
+    const answerCall = ({ opts }) => {
+      seenLists.push(opts.seen);
+      return 'ok';
+    };
+    const tryFunction = "try { seen.push(String(VALUE.constructor('return 1')())) } catch (error) { seen.push(error.name) }";
+    const fromGetter = tryFunction.replace('VALUE', 'Error.prepareStackTrace');
+    const fromTrap = tryFunction.replace('VALUE', 'descriptor.constructor');
+    const handOver = "const seen = []\nawait agent('p', { seen })";
+    const getterFrames = await readFrames(`\n${handOver}\nthrow { message: 'm', get stack() { ${fromGetter}; return '' } }`, { answerCall });
+    const trapFrames = await readFrames(`\n${handOver}\nglobalThis.Error = new Proxy(Error, { defineProperty(target, key, descriptor) { ${fromTrap}; return Reflect.defineProperty(target, key, descriptor) } })\nthrow new RangeError('x')`, { answerCall });
+
+    assert.deepEqual(getterFrames, []);
+    assert.deepEqual(trapFrames, [{ line: 7, column: 7 }]);
+    assert.deepEqual(seenLists.map((seen) => [...seen]), [['EvalError'], ['EvalError']]);
+  });
+
+  it('records no log line, phase, group or call that code of the script run by the read makes, in a microtask it queues either', async () => {
+    let callCount = 0;
+    const answerCall = () => {
+      callCount += 1;
+      return 'ok';
+    };
+    const record = "log('read'); phase('p'); agent('p'); parallel([]); Promise.resolve().then(() => log('later'))";
+    const proxyText = `\nglobalThis.Error = new Proxy(Error, { get(target, key, receiver) { ${record}; return Reflect.get(target, key, receiver) }, getOwnPropertyDescriptor(target, key) { ${record}; return Reflect.getOwnPropertyDescriptor(target, key) } })\nthrow new RangeError('x')`;
+    const getterText = `\nthrow { message: 'm', get stack() { ${record}; return '' } }`;
+    const traces = [await runSimulation(`${TALL_META}${proxyText}`, { answerCall }), await runSimulation(`${TALL_META}${getterText}`, { answerCall })];
+
+    assert.deepEqual(traces.map((trace) => trace.end.frames), [[{ line: 5, column: 7 }], []]);
+    for (const trace of traces) {
+      assert.deepEqual([trace.logs, trace.phases, trace.groups, trace.events], [[], [], [], []]);
+    }
+    assert.equal(callCount, 0);
+  });
+
+  it('records a log line of a microtask that a message getter of the thrown value queues, since the name and the message are read first', async () => {
+    const trace = await runSimulation(`${TALL_META}\nthrow { get message() { Promise.resolve().then(() => log('message')); return 'm' } }`, { answerCall: () => 'ok' });
+
+    assert.deepEqual(trace.logs, ['message']);
   });
 });
 
@@ -134,7 +338,7 @@ describe('the context', () => {
   it('refuses code generation from strings', async () => {
     const { end } = await simulateBody("return Function('return 1')()");
 
-    assert.deepEqual(end, { kind: 'threw', name: 'EvalError', message: 'Code generation from strings disallowed for this context' });
+    assert.deepEqual(end, { kind: 'threw', name: 'EvalError', message: 'Code generation from strings disallowed for this context', frames: [{ line: 2, column: 8 }] });
   });
 
   it('throws on each way to read the clock or a random number when it is called, and on no read', async () => {
@@ -279,7 +483,7 @@ describe('the time limit', () => {
     const stopped = await simulateBody('while (true) {}', {}, limit);
     const awaited = await simulateBody('await null\nlet total = 0\nfor (let index = 0; index < 1e8; index += 1) total += index\nreturn total > 0', {}, limit);
 
-    assert.deepEqual(stopped.end, { kind: 'threw', name: 'Error', message: `Script execution timed out after ${SCRIPT_TIME_LIMIT_MS}ms` });
+    assert.deepEqual(stopped.end, { kind: 'threw', name: 'Error', message: `Script execution timed out after ${SCRIPT_TIME_LIMIT_MS}ms`, frames: [] });
     assert.deepEqual(awaited.end, { kind: 'returned', value: true });
   });
 });

@@ -143,7 +143,7 @@ describe('createInspection with a call', () => {
   });
 
   it('rejects a call of a trace that threw before its first call, naming how it ended', () => {
-    const trace = { ...createReturnedTrace(0), end: { kind: 'threw', name: 'TypeError', message: 'boom\tnow' } };
+    const trace = { ...createReturnedTrace(0), end: { kind: 'threw', name: 'TypeError', message: 'boom\tnow', frames: [] } };
 
     assert.throws(() => createInspection(trace, 0), { name: 'UsageError', message: 'The simulation made no call, and it ended as threw TypeError: boom\\u{0009}now' });
   });

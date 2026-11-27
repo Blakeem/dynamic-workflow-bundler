@@ -33,10 +33,12 @@ describe('readThrowSites', () => {
     ]);
   });
 
-  it('counts a line at LF and at a lone CR, as a finding is placed, so U+2028 in a string starts no line', () => {
+  it('counts a line at LF and at a lone CR after a leading byte order mark, as a finding is placed, so U+2028 in a string starts no line', () => {
     assert.equal(readTextSites("const a = 'x y';\nthrow new Error('boom');\n")[0].line, 2);
     assert.equal(readTextSites("const a = 1;\r\rthrow new Error('boom');\r")[0].line, 3);
     assert.equal(readTextSites("const a = 1;\r\n\r\nthrow new Error('boom');\r\n")[0].line, 3);
+    // An offset lowered by the mark's length over text that still holds the mark lands on the LF, on line 1.
+    assert.equal(readTextSites("\uFEFFconst a = 1;\nthrow new Error('boom');")[0].line, 2);
   });
 
   it('reads no throw of a name, a call, a member callee or a literal', () => {

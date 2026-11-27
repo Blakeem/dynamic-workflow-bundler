@@ -2,9 +2,8 @@ import { RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from './contract
 import { listFreeReferences } from './find-free-names.js';
 import { createFinding } from './finding.js';
 import { readKeyName, readMetaObject } from './meta-statement.js';
-import { BYTE_ORDER_MARK } from './normalize-source-text.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, parseSource } from './parse-source.js';
-import { replaceLoneCarriageReturns } from './source-position.js';
+import { readPositionText } from './source-position.js';
 import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listPatternIdentifiers, listPatternTargets } from './syntax-tree.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
@@ -42,9 +41,8 @@ const RUNTIME_GLOBALS = new Set([...RUNTIME_GLOBAL_NAMES, ...RUNTIME_INHERITED_G
 export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'utf8')) {
   const findings = [];
   const treeFindings = [];
-  const markLength = text.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK.length : 0;
   // The parser reads the raw text. A finding is placed as an editor shows it, with no byte order mark and a lone CR as a line break.
-  const positionText = replaceLoneCarriageReturns(text.slice(markLength));
+  const { positionText, markLength } = readPositionText(text);
   const placeFinding = (rule, message, offset, name = null) => createFinding(rule, message, file, positionText, Math.max(0, offset - markLength), name);
   const addFinding = (rule, message, offset) => findings.push(placeFinding(rule, message, offset));
   const addTreeFinding = (rule, message, offset, name) => treeFindings.push(placeFinding(rule, message, offset, name));

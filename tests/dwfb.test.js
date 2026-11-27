@@ -978,7 +978,7 @@ describe('dwfb simulate', () => {
           scenario: 'answer died',
           expect: 'threw',
           passed: true,
-          trace: { ...traceHead, scenario: 'answer died', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, calls: [{ ...answerCall, returned: null }], ...traceTail },
+          trace: { ...traceHead, scenario: 'answer died', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died', frames: [{ line: 3, column: 28 }] }, calls: [{ ...answerCall, returned: null }], ...traceTail },
         },
         {
           script: 'answer.js',
@@ -1308,7 +1308,7 @@ describe('dwfb inspect', () => {
   it('prints one JSON object with --json, for the events and for one call', async () => {
     const folder = await writeInspectFolder();
     const args = ['inspect', 'answer.js', '--scenarios', 'answer.scenarios.js', '--json'];
-    const head = { ok: true, script: 'answer.js', scenario: 'answer died', runtime: '2.1.332', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, callCount: 1 };
+    const head = { ok: true, script: 'answer.js', scenario: 'answer died', runtime: '2.1.332', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died', frames: [{ line: 3, column: 28 }] }, callCount: 1 };
     const events = runCommand(args, folder);
     const call = runCommand([...args, '--call', '0'], folder);
 
