@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkContract } from '../src/check-contract.js';
-import { CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from '../src/contract.js';
+import { AGENT_CALL_LIMIT, CONTRACT_RULES, CONTRACT_RUNTIME_VERSION, isPastCallLimit, RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from '../src/contract.js';
 import { FIXES } from '../src/finding.js';
 import { CONTRACT_CASES } from './fixtures/contract/cases.js';
 import { sliceReadmeSection } from './support/slice-readme-section.js';
@@ -67,5 +67,13 @@ describe('contract rule table', () => {
     assert.equal(new Set(RUNTIME_INHERITED_GLOBAL_NAMES).size, 12);
     assert.ok(Object.isFrozen(RUNTIME_INHERITED_GLOBAL_NAMES));
     assert.deepEqual(RUNTIME_INHERITED_GLOBAL_NAMES.filter((name) => RUNTIME_GLOBAL_NAMES.includes(name)), []);
+  });
+});
+
+describe('isPastCallLimit', () => {
+  it('holds for a call with AGENT_CALL_LIMIT or more calls before it', () => {
+    assert.equal(isPastCallLimit(AGENT_CALL_LIMIT - 1), false);
+    assert.equal(isPastCallLimit(AGENT_CALL_LIMIT), true);
+    assert.equal(isPastCallLimit(AGENT_CALL_LIMIT + 1), true);
   });
 });

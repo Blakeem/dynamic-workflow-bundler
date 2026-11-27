@@ -79,12 +79,26 @@ describe('inspect', () => {
     assert.deepEqual(inspection.events.map((event) => event.label), ['draft', 'review', 'review']);
   });
 
-  it('gives a refused script no event, and rejects every call of it', async () => {
+  it('gives a refused script its findings and no event, with or without call', async () => {
     const script = findSimulateFixture('no-meta');
     const inspection = await inspect({ script });
 
     assert.deepEqual([inspection.end.kind, inspection.callCount, inspection.events], ['refused', 0, []]);
-    await assert.rejects(inspect({ script, call: 0 }), { name: 'UsageError', message: 'The simulation made no call' });
+    assert.ok(inspection.end.findings.length > 0);
+    assert.deepEqual(await inspect({ script, call: 0 }), inspection);
+  });
+
+  it('rejects a call that is not a whole number of 0 or more before the simulation runs', async () => {
+    let respondRan = false;
+    const scenario = { respond: () => { respondRan = true; return 'any'; } };
+
+    for (const call of ['1', null, -1, 1.5, Number.NaN]) {
+      await assert.rejects(inspect({ script: findSimulateFixture('review-loop'), scenario, call }), {
+        name: 'UsageError',
+        message: 'inspect() takes call as a whole number of 0 or more, the index of a call',
+      }, String(call));
+    }
+    assert.equal(respondRan, false);
   });
 
   it('rejects a call the simulation did not make', async () => {

@@ -10,6 +10,14 @@ export const CONTRACT_RUNTIME_VERSION = '2.1.332';
 /** The cap on agent() calls over one workflow, which the Workflow tool of Claude Code 2.1.332 documents. What the runtime does with the next call is not measured. */
 export const AGENT_CALL_LIMIT = 1000;
 
+/**
+ * @param {number} callIndex The index of a call among every call of the trace, from 0.
+ * @returns {boolean} True for a call with AGENT_CALL_LIMIT or more calls before it.
+ */
+export function isPastCallLimit(callIndex) {
+  return callIndex >= AGENT_CALL_LIMIT;
+}
+
 const RULE_IDS = [
   'script-too-large',
   'syntax-error',

@@ -1,4 +1,4 @@
-import { createInspection } from './create-inspection.js';
+import { createInspection, isCallIndexShape } from './create-inspection.js';
 import { isObject } from './is-object.js';
 import { SIMULATE_OPTION_KEYS, simulate } from './simulate.js';
 import { UsageError } from './usage-error.js';
@@ -12,7 +12,9 @@ const INSPECT_OPTION_KEYS = new Set([...SIMULATE_OPTION_KEYS, 'call']);
  * Runs one simulation as `simulate()` runs it, and gives its inspection: the events of the trace in order
  * with each call summarized, or with `call` that one call in full. Writes and prints nothing.
  * Rejects with the UsageError of `simulate()` for each options value it rejects once `call` is left out,
- * and with a UsageError for an unknown key and for a `call` that is not the index of a call of the trace.
+ * and with a UsageError for an unknown key, for a `call` that is not a whole number of 0 or more, and for a
+ * `call` that is not the index of a call of the trace. A refused script gives its findings in `end` and no
+ * call, whatever index `call` names.
  * @param {{ script: string, scenario?: import('./simulate.js').Scenario, call?: number }} options `script` and
  *   `scenario` as `simulate()` takes them. `call` is the index of a call, from 0.
  * @returns {Promise<Inspection>}
@@ -30,6 +32,9 @@ export async function inspect(options = /** @type {{ script: string }} */ ({})) 
     // Read by name, as simulate() reads its options, so that an inherited script or scenario still reaches it.
     simulateOptions = { script: options.script, scenario: options.scenario };
     call = options.call;
+    if (call !== undefined && !isCallIndexShape(call)) {
+      throw new UsageError('inspect() takes call as a whole number of 0 or more, the index of a call');
+    }
   }
   const trace = await simulate(/** @type {{ script: string }} */ (simulateOptions));
 

@@ -133,6 +133,25 @@ for (const { probe, key } of PROBES) {
   });
 }
 
+const lateMeasured = JSON.parse(await readFile(new URL('late-call-probe.measured.json', RUNTIME_FIXTURES), 'utf8'));
+
+describe('late-call-probe.js, as Claude Code 2.1.332 ran it', () => {
+  it('records the call a microtask makes after the return, and nothing of a timer due after the return', async () => {
+    const text = await readFile(new URL('late-call-probe.js', RUNTIME_FIXTURES), 'utf8');
+    const script = await writeScript('late-call-probe.js', text.replaceAll(FAILING_SCHEMA, PASSING_SCHEMA));
+    const trace = await simulate({ script, scenario: { respond: { 'before-return': {} } } });
+    const measuredLabels = lateMeasured.progress.filter((entry) => entry.type === 'call').map((entry) => entry.label);
+
+    assert.deepEqual(trace.end, { kind: 'returned', value: lateMeasured.result });
+    assert.deepEqual(trace.calls.map((call) => call.label), measuredLabels);
+    assert.deepEqual(trace.calls[0].returned, {});
+    assert.equal(Object.hasOwn(trace.calls[1], 'returned'), false);
+    assert.deepEqual(trace.phases.map((phase) => phase.title), ['Body']);
+    assert.equal(trace.logs.includes('timer ran'), false);
+    checkEvents(trace);
+  });
+});
+
 describe('the order of events', () => {
   it('lists each call where the script invoked agent(), and each phase() and log line where the script made it', async () => {
     const body = [
@@ -191,12 +210,12 @@ describe('the order of events', () => {
     checkEvents(trace);
   });
 
-  it('lists no event of a call the trace drops, and counts no such call in beforeCall', async () => {
+  it('lists the event of a call made after the script settled that got no scripted return, and counts it in beforeCall', async () => {
     const body = "Promise.resolve().then(() => { agent('Late', { label: 'late' }); phase('After') })\nreturn 'done'";
     const trace = await simulate({ script: await writeScript('late.js', `${META}${body}\n`) });
 
-    assert.deepEqual([trace.end, trace.calls], [{ kind: 'returned', value: 'done' }, []]);
-    assert.deepEqual([trace.phases, trace.events], [[{ title: 'After', beforeCall: 0 }], [{ kind: 'phase', index: 0 }]]);
+    assert.deepEqual([trace.end, trace.calls], [{ kind: 'returned', value: 'done' }, [{ index: 0, label: 'late', prompt: 'Late', opts: { label: 'late' }, group: null, phase: null }]]);
+    assert.deepEqual([trace.phases, trace.events], [[{ title: 'After', beforeCall: 1 }], [{ kind: 'call', index: 0 }, { kind: 'phase', index: 0 }]]);
     checkEvents(trace);
   });
 

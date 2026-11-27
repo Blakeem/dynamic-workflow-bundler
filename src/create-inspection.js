@@ -1,3 +1,4 @@
+import { formatSimulationEnd } from './format-simulation-end.js';
 import { UsageError } from './usage-error.js';
 
 /** @typedef {import('./simulate.js').Trace} Trace */
@@ -19,8 +20,9 @@ import { UsageError } from './usage-error.js';
  *   | { kind: 'log', text: string }
  *   | { kind: 'call', index: number, label: string | null, phase: string | null, group: InspectionGroup | null,
  *       promptLength: number, returnedType: 'string' | 'object' | 'null' | 'none', returnedLength: number | null }
- * } InspectionEvent One event of the trace. `returnedType` is 'none' for the call the simulation stopped at,
- *   and `returnedLength` is the length of a string return and null for every other `returnedType`.
+ * } InspectionEvent One event of the trace. `returnedType` is 'none' for each call of the trace with no
+ *   `returned` key, and `returnedLength` is the length of a string return and null for every other
+ *   `returnedType`.
  *   `promptLength` and `returnedLength` count UTF-16 code units, as `String.prototype.length` does.
  */
 
@@ -32,7 +34,7 @@ import { UsageError } from './usage-error.js';
  * @property {InspectionGroup | null} group
  * @property {unknown} opts
  * @property {string} prompt
- * @property {ScriptedReturn} [returned] Absent for the call the simulation stopped at.
+ * @property {ScriptedReturn} [returned] Absent when the call of the trace has no `returned` key.
  */
 
 /**
@@ -42,13 +44,15 @@ import { UsageError } from './usage-error.js';
  * @property {string} runtime
  * @property {import('./simulate.js').TraceEnd} end
  * @property {number} callCount The length of the trace's `calls`.
- * @property {InspectionEvent[]} [events] The events in the order the script made them, absent with a call.
- * @property {InspectionCall} [call] The call named, absent with no call.
+ * @property {InspectionEvent[]} [events] The events in the order the script made them, absent when `call` is
+ *   present.
+ * @property {InspectionCall} [call] The call named, absent with no call and for a refused trace.
  */
 
 /**
  * Shapes a trace into an inspection: its events in order with each call summarized, or one call in full.
- * Throws a UsageError for a call that is not the index of a call of the trace.
+ * A refused trace gives its findings in `end` and no call, whatever `call` names.
+ * Throws a UsageError for a call that is not the index of a call of a trace that was not refused.
  * @param {Trace} trace
  * @param {unknown} [call] The index of the call to give in full, or undefined for the events.
  * @returns {Inspection}
@@ -56,18 +60,28 @@ import { UsageError } from './usage-error.js';
 export function createInspection(trace, call) {
   const head = { script: trace.script, scenario: trace.scenario, runtime: trace.runtime, end: trace.end, callCount: trace.calls.length };
 
-  if (call === undefined) return { ...head, events: trace.events.map((event) => convertEvent(trace, event)) };
-  checkCallIndex(call, head.callCount);
+  if (call === undefined || trace.end.kind === 'refused') return { ...head, events: trace.events.map((event) => convertEvent(trace, event)) };
+  checkCallIndex(call, trace);
   return { ...head, call: convertCall(trace, trace.calls[/** @type {number} */ (call)]) };
 }
 
 /**
  * @param {unknown} call
- * @param {number} callCount
+ * @returns {call is number} True for a whole number of 0 or more, which a call index of some trace can be.
  */
-function checkCallIndex(call, callCount) {
-  if (Number.isInteger(call) && /** @type {number} */ (call) >= 0 && /** @type {number} */ (call) < callCount) return;
-  if (callCount === 0) throw new UsageError('The simulation made no call');
+export function isCallIndexShape(call) {
+  return Number.isInteger(call) && /** @type {number} */ (call) >= 0;
+}
+
+/**
+ * @param {unknown} call
+ * @param {Trace} trace A trace that was not refused.
+ */
+function checkCallIndex(call, trace) {
+  const callCount = trace.calls.length;
+
+  if (isCallIndexShape(call) && call < callCount) return;
+  if (callCount === 0) throw new UsageError(`The simulation made no call, and it ended as ${formatSimulationEnd(trace)}`);
   if (callCount === 1) throw new UsageError('The simulation made 1 call, so the one call is 0');
   throw new UsageError(`The simulation made ${callCount} calls, so name a call from 0 to ${callCount - 1}`);
 }
@@ -121,7 +135,7 @@ function convertGroup(trace, call) {
 
 /**
  * @param {TraceCall} call
- * @returns {'string' | 'object' | 'null' | 'none'} 'none' for the call the simulation stopped at.
+ * @returns {'string' | 'object' | 'null' | 'none'} 'none' for a call with no `returned` key.
  */
 function findReturnedType(call) {
   if (!Object.hasOwn(call, 'returned')) return 'none';

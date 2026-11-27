@@ -242,14 +242,32 @@ describe('a stop', () => {
     await rejectRespond(() => { throw new Error(''); }, 'The scenario\'s respond threw at call 0 (label "answer"). Its code threw a value that has no text');
   });
 
-  it('ignores a stop at a call made after the script settled, and records only a late call that got a scripted return', async () => {
+  it('ignores a stop at a call made after the script settled, and records the call with or without a scripted return', async () => {
+    const lateCall = { index: 0, label: 'late', prompt: 'Late', opts: { label: 'late' }, group: null, phase: null };
     const unanswered = await simulateFixture('late-call', SCENARIOS.answerUnanswered);
-    const respondThrew = await simulateFixture('late-call', SCENARIOS.respondThrows);
+    const wrongType = await simulateFixture('late-call', { respond: { late: 5 } });
     const answered = await simulateFixture('late-call', { respond: { late: 'late return' } });
 
-    assert.deepEqual([unanswered.end, unanswered.calls, unanswered.events], [{ kind: 'returned', value: 'done' }, [], []]);
-    assert.deepEqual([respondThrew.end, respondThrew.calls], [{ kind: 'returned', value: 'done' }, []]);
-    assert.deepEqual(answered.calls, [{ index: 0, label: 'late', prompt: 'Late', opts: { label: 'late' }, group: null, phase: null, returned: 'late return' }]);
+    assert.deepEqual([unanswered.end, unanswered.calls, unanswered.events], [{ kind: 'returned', value: 'done' }, [lateCall], [{ kind: 'call', index: 0 }]]);
+    assert.deepEqual([wrongType.end, wrongType.calls], [{ kind: 'returned', value: 'done' }, [lateCall]]);
+    assert.deepEqual(answered.calls, [{ ...lateCall, returned: 'late return' }]);
+  });
+
+  it('rejects with a UsageError that names the call when a respond function throws at a call made after the script settled', async () => {
+    await assert.rejects(simulate({ script: findSimulateFixture('late-call'), scenario: SCENARIOS.respondThrows }), {
+      name: 'UsageError',
+      message: 'The scenario\'s respond threw at call 0 (label "late"). No answer written',
+    });
+  });
+
+  it('gives each call made after the script settled its own index, and counts it among the earlier calls of a later call', async () => {
+    const body = "Promise.resolve().then(() => { agent('A', { label: 'a' }); agent('B', { label: 'b' }); agent('C', { label: 'c' }) })\nreturn 'done'";
+    const earlierCounts = [];
+    const respond = { a: 1, b: (call, earlierCalls) => { earlierCounts.push(earlierCalls.length); return 'b return'; }, c: [5] };
+    const trace = await simulateScript(await writeScript('late-calls.js', body), { respond });
+
+    assert.deepEqual(trace.calls.map((call) => [call.index, call.label, call.returned ?? 'none']), [[0, 'a', 'none'], [1, 'b', 'b return'], [2, 'c', 'none']]);
+    assert.deepEqual(earlierCounts, [1]);
   });
 
   const missingName = listMissingGlobalNames().includes('Temporal') ? null : `Node ${process.version} defines Temporal`;
@@ -293,6 +311,14 @@ describe('a stop', () => {
     assert.deepEqual(capped.calls[999].returned, { bugs: [] });
     assert.ok(!Object.hasOwn(capped.calls[1000], 'returned'));
     assert.deepEqual([counted.end, counted.calls.length], [{ kind: 'returned', value: 1000 }, 1000]);
+  });
+
+  it('answers no call made after the script settled past the cap', { timeout: CALL_LIMIT_TEST_TIMEOUT }, async () => {
+    const body = "for (let index = 0; index < 1000; index += 1) await agent('x');\nPromise.resolve().then(() => { agent('late 1'); agent('late 2') });\nreturn 'done';\n";
+    const trace = await simulateScript(await writeScript('late-past-cap.js', body), { respond: { '': 'any' } });
+
+    assert.deepEqual([trace.end, trace.calls.length], [{ kind: 'returned', value: 'done' }, 1002]);
+    assert.deepEqual(trace.calls.slice(1000).map((call) => Object.hasOwn(call, 'returned')), [false, false]);
   });
 
   it('stops at the cap a loop that waits for a timer between calls it does not await', { timeout: CALL_LIMIT_TEST_TIMEOUT }, async () => {

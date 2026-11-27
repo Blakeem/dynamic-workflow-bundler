@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createInspection } from '../src/create-inspection.js';
+import { createInspection, isCallIndexShape } from '../src/create-inspection.js';
 import { UsageError } from '../src/usage-error.js';
 
 const HEAD = { script: 'flow.js', scenario: 'stops at the last call', runtime: '2.1.332' };
@@ -139,10 +139,30 @@ describe('createInspection with a call', () => {
       assert.throws(() => createInspection(createStoppedTrace(), call), (error) => error instanceof UsageError && error.message === severalCalls, String(call));
     }
     assert.throws(() => createInspection(createReturnedTrace(1), 1), { name: 'UsageError', message: 'The simulation made 1 call, so the one call is 0' });
-    assert.throws(() => createInspection(createReturnedTrace(0), 0), { name: 'UsageError', message: 'The simulation made no call' });
+    assert.throws(() => createInspection(createReturnedTrace(0), 0), { name: 'UsageError', message: 'The simulation made no call, and it ended as returned' });
+  });
+
+  it('rejects a call of a trace that threw before its first call, naming how it ended', () => {
+    const trace = { ...createReturnedTrace(0), end: { kind: 'threw', name: 'TypeError', message: 'boom\tnow' } };
+
+    assert.throws(() => createInspection(trace, 0), { name: 'UsageError', message: 'The simulation made no call, and it ended as threw TypeError: boom\\u{0009}now' });
+  });
+
+  it('gives a refused trace its findings and no event for any call', () => {
+    const end = { kind: 'refused', findings: [{ rule: 'meta-not-first', message: 'The first statement is not export const meta', fix: 'Make export const meta = { ... } the first statement', file: 'flow.js', line: 1, column: 1 }] };
+    const trace = { ...HEAD, end, calls: [], groups: [], phases: [], logs: [], events: [] };
+
+    for (const call of [0, 5, '1']) assert.deepEqual(inspectTrace(trace, call), { ...HEAD, end, callCount: 0, events: [] }, String(call));
   });
 
   it('gives the one call of a trace with one call', () => {
     assert.equal(inspectTrace(createReturnedTrace(1), 0).call.index, 0);
+  });
+});
+
+describe('isCallIndexShape', () => {
+  it('holds for a whole number of 0 or more and for no other value', () => {
+    for (const call of [0, 1, 1000]) assert.equal(isCallIndexShape(call), true, String(call));
+    for (const call of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '1', null, undefined]) assert.equal(isCallIndexShape(call), false, String(call));
   });
 });

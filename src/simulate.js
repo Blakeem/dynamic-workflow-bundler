@@ -1,4 +1,4 @@
-import { AGENT_CALL_LIMIT, CONTRACT_RUNTIME_VERSION } from './contract.js';
+import { AGENT_CALL_LIMIT, CONTRACT_RUNTIME_VERSION, isPastCallLimit } from './contract.js';
 import { findFreeNames } from './find-free-names.js';
 import { findNonJsonValue, isPlainObject } from './find-non-json-value.js';
 import { findScriptedReturn, formatCallName } from './find-scripted-return.js';
@@ -52,8 +52,11 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  *   options JSON cannot hold, such as options with a cycle or a BigInt.
  * @property {import('./run-simulation.js').GroupStamp | null} group
  * @property {string | null} phase The title the runtime groups the call under, or null for none.
- * @property {ScriptedReturn} [returned] The scripted return the script got, absent for the call the
- *   simulation stopped at.
+ * @property {ScriptedReturn} [returned] The scripted return the script got. Absent for the call the
+ *   simulation stopped at, and for a call made after the script settled that got no usable scripted return
+ *   or came after the AGENT_CALL_LIMIT calls. The simulation does not stop at such a call, since the runtime
+ *   of Claude Code 2.1.332 reports a call made after the script settled. That was measured for a call under
+ *   the cap, and a call past the cap follows the same rule unmeasured.
  */
 
 /**
@@ -76,8 +79,9 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  *   `calls`.
  * @property {string[]} logs
  * @property {TraceEvent[]} events One event per element of `calls`, `phases` and `logs`, in the order the
- *   script made them. A call that the argument check of agent() rejects is not in `calls` and has no event,
- *   although the runtime reports it. A script that did not run has none.
+ *   script made them, a call made after the script settled included. A call that the argument check of
+ *   agent() rejects is not in `calls` and has no event, although the runtime reports it. A script that did
+ *   not run has none.
  */
 
 /**
@@ -100,8 +104,10 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * there with no end keeps the simulation from ending, unless it calls `agent()` and waits for an `agent()`
  * answer or a timer between those calls, since the simulation then stops at the cap on `agent()` calls.
  * A wait for a promise that settles at once, such as `await null`, does not count.
+ * A call made after the script settled that gets no usable scripted return or comes after the
+ * AGENT_CALL_LIMIT calls stops nothing, and its record has no `returned` key.
  * Rejects with a UsageError for options or a scenario of another shape, for a script `validate()` rejects,
- * and for a respond function that throws at a call made before the script settles.
+ * and for a respond function that throws at a call, before or after the script settles.
  * @param {{ script: string, scenario?: Scenario }} options `script` as `validate()` takes it.
  * @returns {Promise<Trace>}
  */
@@ -118,18 +124,16 @@ export async function simulate(options = /** @type {{ script: string }} */ ({}))
 
   const recorder = createCallRecorder(scenario.respond);
   const result = await runSimulation(text, { args: scenario.args, budget: scenario.budget, answerCall: recorder.answerCall });
-  // runSimulation ignores a stop at a call made after the script settled, so its record is dropped too.
-  const isStopped = result.end.kind === 'stopped';
 
-  if (isStopped && recorder.stop.end === null) throw await createRespondFailure(recorder.stop.call, recorder.stop.respondError);
+  if (recorder.respondFailure !== null) throw await createRespondFailure(recorder.respondFailure.call, recorder.respondFailure.error);
 
-  const droppedCalls = isStopped ? recorder.rejectedCalls : new Set([...recorder.rejectedCalls, ...recorder.stoppedCalls]);
-  const { events, phases } = convertEvents(result, droppedCalls);
+  const { events, phases } = convertEvents(result, recorder.rejectedCalls);
 
   return {
     ...traceHead,
-    end: isStopped ? recorder.stop.end : convertRunEnd(result.end),
-    calls: isStopped ? [...recorder.calls, recorder.stop.call] : recorder.calls,
+    // runSimulation ignores a stop at a call made after the script settled, so only a stop before it ends the trace.
+    end: result.end.kind === 'stopped' ? /** @type {TraceEnd} */ (recorder.stopEnd) : convertRunEnd(result.end),
+    calls: recorder.calls,
     groups: result.groups,
     phases,
     logs: result.logs,
@@ -255,28 +259,28 @@ function createTraceWithoutRun(traceHead, end) {
 }
 
 /**
- * @typedef {object} CallStop The call that stopped the simulation, kept apart from the answered calls.
+ * @typedef {object} RespondFailure The first call whose respond function threw.
  * @property {Omit<TraceCall, 'returned'>} call
- * @property {TraceEnd | null} end Null when the respond function threw.
- * @property {unknown} respondError What the respond function threw, when `end` is null.
+ * @property {unknown} error What the respond function threw.
  */
 
 /**
- * Answers each agent() call from `respond` and records it. A call after AGENT_CALL_LIMIT answered calls, a
- * call that gets no usable scripted return, and a call whose respond function throws each stop the
- * simulation.
+ * Answers each agent() call from `respond` and records it. A call after AGENT_CALL_LIMIT earlier calls, a
+ * call that gets no usable scripted return, and a call whose respond function throws each throw a
+ * SimulationStop and are recorded with no `returned` key. The stop ends the simulation only before the
+ * script settles.
  * @param {Respond | undefined} respond
  */
 function createCallRecorder(respond) {
   const recorder = {
-    /** @type {TraceCall[]} The calls that got a scripted return. */
+    /** @type {TraceCall[]} The calls of the trace, in call order. */
     calls: [],
-    /** @type {CallStop | null} The latest stop, which a call after the script settled may give. */
-    stop: null,
+    /** @type {TraceEnd | null} The end of the latest stop, which a call after the script settled may give. */
+    stopEnd: null,
+    /** @type {RespondFailure | null} */
+    respondFailure: null,
     /** The count of calls answerCall got. */
     receivedCount: 0,
-    /** @type {Set<number>} The index among those calls of each call that stopped the simulation. */
-    stoppedCalls: new Set(),
     /** @type {Set<number>} The index among those calls of each call rejected for options it cannot read. */
     rejectedCalls: new Set(),
     /** @param {AgentCall} agentCall */
@@ -295,13 +299,13 @@ function createCallRecorder(respond) {
       try {
         outcome = findCallOutcome(respond, call, recorder.calls, agentCall.opts);
       } catch (error) {
-        recorder.stop = { call, end: null, respondError: error };
-        recorder.stoppedCalls.add(receivedIndex);
+        recorder.respondFailure ??= { call, error };
+        recorder.calls.push(call);
         throw new SimulationStop();
       }
       if (outcome.kind === 'stopped') {
-        recorder.stop = { call, end: { kind: 'stopped', reason: outcome.reason, message: outcome.message, call: call.index }, respondError: null };
-        recorder.stoppedCalls.add(receivedIndex);
+        recorder.stopEnd = { kind: 'stopped', reason: outcome.reason, message: outcome.message, call: call.index };
+        recorder.calls.push(call);
         throw new SimulationStop();
       }
       recorder.calls.push({ ...call, returned: outcome.returned });
@@ -315,13 +319,13 @@ function createCallRecorder(respond) {
 /**
  * @param {Respond | undefined} respond
  * @param {Omit<TraceCall, 'returned'>} call
- * @param {TraceCall[]} earlierCalls The calls that got a scripted return.
+ * @param {TraceCall[]} earlierCalls The earlier calls of the trace.
  * @param {unknown} opts The call's options, of the script's realm.
  * @returns {import('./find-scripted-return.js').ScriptedReturnResult | { kind: 'stopped', reason: 'call-limit', message: string }}
  *   A stop for a call past the cap, which reads no respond, or the scripted return of the call.
  */
 function findCallOutcome(respond, call, earlierCalls, opts) {
-  if (earlierCalls.length === AGENT_CALL_LIMIT) return { kind: 'stopped', reason: 'call-limit', message: formatCallLimitMessage(call) };
+  if (isPastCallLimit(call.index)) return { kind: 'stopped', reason: 'call-limit', message: formatCallLimitMessage(call) };
   return findScriptedReturn(respond, call, earlierCalls, hasSchemaObject(opts));
 }
 

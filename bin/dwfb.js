@@ -5,13 +5,14 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
 import { formatBuildCommand } from '../src/build-command.js';
-import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
+import { AGENT_CALL_LIMIT, CONTRACT_RUNTIME_VERSION, isPastCallLimit } from '../src/contract.js';
 import { createInspection } from '../src/create-inspection.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { formatCallName } from '../src/find-scripted-return.js';
 import { formatFinding } from '../src/format-finding.js';
 import { formatHiddenCharacters } from '../src/format-hidden-characters.js';
+import { formatSimulationEnd } from '../src/format-simulation-end.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
 import { loadScenarios } from '../src/load-scenarios.js';
 import { MISSING_FILE_CODES } from '../src/load-sources.js';
@@ -29,6 +30,8 @@ const SCRIPT_POSITION_PATTERN = /^(?<line>\d+)(?::(?<column>\d+))?$/;
 const CALL_INDEX_PATTERN = /^\d+$/;
 const SCENARIOS_FILE_RECOVERY = 'so name the scenarios file with --scenarios <file>';
 const SCENARIOS_CONFIG_CONFLICT = 'Name --scenarios or --config, not both, since a named scenarios file needs no config file';
+const LATE_CALL_LINE = 'no return, since the script had settled and the scenario holds no usable scripted return for this call';
+const LATE_CAP_LINE = `no return, since the script had settled and the call came after the cap of ${AGENT_CALL_LIMIT} agent() calls`;
 
 const MAIN_USAGE = `Usage: dwfb <command> [options]
 
@@ -523,18 +526,6 @@ function formatCount(count, noun) {
 }
 
 /**
- * @param {import('../src/simulate.js').Trace} trace
- * @returns {string} How the simulation ended, such as `returned` or `threw TypeError: <message>`.
- */
-function formatSimulationEnd({ end, calls }) {
-  if (end.kind === 'returned' || end.kind === 'refused') return end.kind;
-  if (end.kind === 'threw') return `threw ${formatHiddenCharacters(end.name)}: ${formatHiddenCharacters(end.message)}`;
-  // The node-lacks-name stop comes before the script runs and the never-settles stop at no call, so neither names one.
-  if (!('call' in end)) return `stopped: ${formatHiddenCharacters(end.message)}`;
-  return `stopped at ${formatCallName(calls[end.call])}: ${formatHiddenCharacters(end.message)}`;
-}
-
-/**
  * @param {Simulation[]} simulations In the order run.
  * @param {boolean} isSuccess
  * @returns {object} The `--json` shape, which is part of the public interface.
@@ -580,13 +571,7 @@ async function runInspect(args) {
   try {
     simulation = await simulateTarget(await findScriptTarget(script, values.scenarios, values.config), values.scenario);
     isRefused = simulation.trace.end.kind === 'refused';
-    // The trace comes before the call check that createInspection() makes, so that a refused script, which made
-    // no call, prints its findings as dwfb simulate does in place of a usage error for the call --call names.
-    // The no-call error of createInspection() names no end, so it would hide how a script ended before its first call.
-    if (values.call !== undefined && !isRefused && simulation.trace.calls.length === 0) {
-      throw new UsageError(`The simulation made no call, and it ended as ${formatSimulationEnd(simulation.trace)}`);
-    }
-    inspection = createInspection(simulation.trace, values.call === undefined || isRefused ? undefined : Number(values.call));
+    inspection = createInspection(simulation.trace, values.call === undefined ? undefined : Number(values.call));
   } catch (error) {
     return printCommandFailure('dwfb inspect', error);
   }
@@ -699,7 +684,7 @@ function formatInspectionCallText({ script, scenario }, call, end) {
     `${phaseLine}\n`,
     `${formatGroupLine(group)}\n`,
     optionsText,
-    `prompt:\n${formatWithLineEnd(prompt)}`,
+    `prompt of ${formatCount(prompt.length, 'character')}:\n${formatWithLineEnd(prompt)}`,
     formatReturnedText(call, end),
   ].join('');
 }
@@ -720,10 +705,13 @@ function formatGroupLine(group) {
  * @returns {string}
  */
 function formatReturnedText(call, end) {
-  // createInspection() gives no returned key only for the call the simulation stopped at, whose end has a message.
-  if (!Object.hasOwn(call, 'returned')) return `stopped: ${formatHiddenCharacters(/** @type {{ message: string }} */ (end).message)}\n`;
+  const isStoppedCall = end.kind === 'stopped' && 'call' in end && end.call === call.index;
+
+  if (isStoppedCall) return `stopped: ${formatHiddenCharacters(end.message)}\n`;
+  // Any other call with no returned key was made after the script settled, where a stop ends nothing.
+  if (!Object.hasOwn(call, 'returned')) return isPastCallLimit(call.index) ? `${LATE_CAP_LINE}\n` : `${LATE_CALL_LINE}\n`;
   if (call.returned === null) return 'returned: null, an agent that died\n';
-  if (typeof call.returned === 'string') return `returned:\n${formatWithLineEnd(call.returned)}`;
+  if (typeof call.returned === 'string') return `returned a string of ${formatCount(call.returned.length, 'character')}:\n${formatWithLineEnd(call.returned)}`;
   return `returned:\n${JSON.stringify(call.returned, null, 2)}\n`;
 }
 

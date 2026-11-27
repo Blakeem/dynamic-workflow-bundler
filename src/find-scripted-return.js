@@ -29,7 +29,8 @@ const ignoreRejection = () => {};
  * Throws what a respond function throws.
  * @param {Respond | undefined} respond
  * @param {PendingCall} call
- * @param {TraceCall[]} earlierCalls In call order.
+ * @param {TraceCall[]} earlierCalls In call order, as the trace records them, so a call made after the
+ *   script settled may have no `returned` key.
  * @param {boolean} hasSchema True when the call passes a schema object.
  * @returns {ScriptedReturnResult} `returned` is a JSON copy of the scripted return.
  */

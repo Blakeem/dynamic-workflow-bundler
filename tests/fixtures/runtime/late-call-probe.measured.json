@@ -1,0 +1,32 @@
+{
+  "note": "One launched script, run on Claude Code 2.1.332 on 2026-11-27. Every agent() call fails its argument check (schema: []), so no agent starts. progress is the order the runtime reported phases and calls in. The runtime recorded the call made in a microtask after the return, and nothing of the timer that was due after the return: no log line, no phase and no call.",
+  "result": "returned",
+  "logs": [
+    "before-return threw TelemetrySafeError: agent({schema}) received an invalid JSON Schema: data must be object,boolean",
+    "microtask ran"
+  ],
+  "agentCount": 2,
+  "progress": [
+    {
+      "type": "phase",
+      "index": 1,
+      "title": "Body"
+    },
+    {
+      "type": "call",
+      "index": 1,
+      "label": "before-return",
+      "phaseIndex": 1,
+      "phaseTitle": "Body",
+      "state": "error"
+    },
+    {
+      "type": "call",
+      "index": 2,
+      "label": "late-microtask",
+      "phaseIndex": 1,
+      "phaseTitle": "Body",
+      "state": "start"
+    }
+  ]
+}

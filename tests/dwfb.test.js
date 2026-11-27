@@ -1165,22 +1165,72 @@ describe('dwfb inspect', () => {
 
     assert.deepEqual(runCommand([...args, '0'], folder), {
       status: 0,
-      stdout: 'call 0 (label "plan") of events.js judged\nphase: "Plan"\ngroup: parallel 0, item 0 of 2\noptions:\n{\n  "label": "plan"\n}\nprompt:\nPlan A\nreturned:\nthe plan\n',
+      stdout: 'call 0 (label "plan") of events.js judged\nphase: "Plan"\ngroup: parallel 0, item 0 of 2\noptions:\n{\n  "label": "plan"\n}\nprompt of 6 characters:\nPlan A\nreturned a string of 8 characters:\nthe plan\n',
       stderr: '',
     });
     assert.deepEqual(runCommand([...args, '1'], folder), {
       status: 0,
-      stdout: 'call 1 (label "plan") of events.js judged\nphase: "Side"\ngroup: parallel 0, item 1 of 2\noptions:\n{\n  "label": "plan",\n  "phase": "Side"\n}\nprompt:\nPlan B\nreturned:\nthe plan\n',
+      stdout: 'call 1 (label "plan") of events.js judged\nphase: "Side"\ngroup: parallel 0, item 1 of 2\noptions:\n{\n  "label": "plan",\n  "phase": "Side"\n}\nprompt of 7 characters:\nPlan B\nreturned a string of 8 characters:\nthe plan\n',
       stderr: '',
     });
     assert.deepEqual(runCommand([...args, '3'], folder), {
       status: 0,
-      stdout: 'call 3 (label "check") of events.js judged\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 1 of 2\noptions:\n{\n  "label": "check",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt:\nCheck\nreturned: null, an agent that died\n',
+      stdout: 'call 3 (label "check") of events.js judged\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 1 of 2\noptions:\n{\n  "label": "check",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt of 5 characters:\nCheck\nreturned: null, an agent that died\n',
       stderr: '',
     });
     assert.deepEqual(runCommand([...args, '4'], folder), {
       status: 0,
-      stdout: 'call 4 (label "judge") of events.js judged\nphase: "Plan"\ngroup: none\noptions:\n{\n  "label": "judge",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt:\nJudge\nreturned:\n{\n  "verdict": "pass"\n}\n',
+      stdout: 'call 4 (label "judge") of events.js judged\nphase: "Plan"\ngroup: none\noptions:\n{\n  "label": "judge",\n  "schema": {\n    "type": "object"\n  }\n}\nprompt of 5 characters:\nJudge\nreturned:\n{\n  "verdict": "pass"\n}\n',
+      stderr: '',
+    });
+  });
+
+  it('prints an empty prompt or string return apart from one of a line end, with --call', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'ends.js'), `${META}await agent('', { label: 'empty' });\nawait agent('\\n', { label: 'line end' });\nreturn 'done';\n`);
+    await writeFile(join(folder, 'ends.scenarios.js'), "export default [{ name: 'ends', respond: { empty: '', 'line end': '\\n' } }];\n");
+    const args = ['inspect', 'ends.js', '--scenarios', 'ends.scenarios.js', '--call'];
+    const empty = runCommand([...args, '0'], folder);
+    const lineEnd = runCommand([...args, '1'], folder);
+
+    assert.deepEqual(empty, {
+      status: 0,
+      stdout: 'call 0 (label "empty") of ends.js ends\nphase: none\ngroup: none\noptions:\n{\n  "label": "empty"\n}\nprompt of 0 characters:\n\nreturned a string of 0 characters:\n\n',
+      stderr: '',
+    });
+    assert.deepEqual(lineEnd, {
+      status: 0,
+      stdout: 'call 1 (label "line end") of ends.js ends\nphase: none\ngroup: none\noptions:\n{\n  "label": "line end"\n}\nprompt of 1 character:\n\nreturned a string of 1 character:\n\n',
+      stderr: '',
+    });
+    assert.notEqual(empty.stdout.slice(empty.stdout.indexOf('prompt')), lineEnd.stdout.slice(lineEnd.stdout.indexOf('prompt')));
+  });
+
+  it('prints a call made after the script settled that got no scripted return as no return, in the events and in full', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'late.js'), `${META}Promise.resolve().then(() => agent('Late', { label: 'late' }));\nreturn 'done';\n`);
+    const args = ['inspect', 'late.js', '--scenarios', 'answer.scenarios.js'];
+
+    assert.deepEqual(runCommand(args, folder), {
+      status: 0,
+      stdout: 'late.js answer died: returned, 1 call.\ncall 0 (label "late"): prompt of 4 characters, no return.\n',
+      stderr: '',
+    });
+    assert.deepEqual(runCommand([...args, '--call', '0'], folder), {
+      status: 0,
+      stdout: 'call 0 (label "late") of late.js answer died\nphase: none\ngroup: none\noptions:\n{\n  "label": "late"\n}\nprompt of 4 characters:\nLate\nno return, since the script had settled and the scenario holds no usable scripted return for this call\n',
+      stderr: '',
+    });
+  });
+
+  it('prints a call made after the script settled past the cap as no return, with --call', async () => {
+    const folder = await writeInspectFolder();
+    await writeFile(join(folder, 'cap.js'), `${META}for (let index = 0; index < 1000; index += 1) await agent('x');\nPromise.resolve().then(() => agent('Late', { label: 'late' }));\nreturn 'done';\n`);
+    await writeFile(join(folder, 'cap.scenarios.js'), "export default [{ name: 'cap', respond: { '': 'any' } }];\n");
+
+    assert.deepEqual(runCommand(['inspect', 'cap.js', '--scenarios', 'cap.scenarios.js', '--call', '1000'], folder), {
+      status: 0,
+      stdout: 'call 1000 (label "late") of cap.js cap\nphase: none\ngroup: none\noptions:\n{\n  "label": "late"\n}\nprompt of 4 characters:\nLate\nno return, since the script had settled and the call came after the cap of 1000 agent() calls\n',
       stderr: '',
     });
   });
@@ -1190,7 +1240,7 @@ describe('dwfb inspect', () => {
 
     assert.deepEqual(runCommand(['inspect', 'events.js', '--scenarios', 'events.scenarios.js', '--scenario', 'no draft', '--call', '2'], folder), {
       status: 0,
-      stdout: `call 2 (no label) of events.js no draft\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 0 of 2\noptions: none, or options that JSON cannot hold\nprompt:\nDraft x\nstopped: ${NO_DRAFT_MESSAGE}\n`,
+      stdout: `call 2 (no label) of events.js no draft\nphase: "Plan"\ngroup: pipeline 1, item 0 of 1, stage 0 of 2\noptions: none, or options that JSON cannot hold\nprompt of 7 characters:\nDraft x\nstopped: ${NO_DRAFT_MESSAGE}\n`,
       stderr: '',
     });
   });
@@ -1202,7 +1252,7 @@ describe('dwfb inspect', () => {
 
     assert.deepEqual(runCommand(['inspect', 'big.js', '--scenarios', 'big.scenarios.js', '--call', '0'], folder), {
       status: 0,
-      stdout: 'call 0 (label "a") of big.js big\nphase: none\ngroup: none\noptions: none, or options that JSON cannot hold\nprompt:\nA\nreturned:\ny\n',
+      stdout: 'call 0 (label "a") of big.js big\nphase: none\ngroup: none\noptions: none, or options that JSON cannot hold\nprompt of 1 character:\nA\nreturned a string of 1 character:\ny\n',
       stderr: '',
     });
   });
