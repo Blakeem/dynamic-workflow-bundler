@@ -18,7 +18,8 @@ export function isFunctionNode(node) {
 }
 
 /**
- * Lists the direct child nodes of a node, in source order.
+ * Lists the direct child nodes of a node, in the order of its keys. Acorn 8.19.0 sets that order to source order,
+ * apart from a labeled statement, a switch case and a template literal.
  * @param {SyntaxNode} node
  * @returns {SyntaxNode[]}
  */
@@ -39,6 +40,27 @@ export function listChildNodes(node) {
 }
 
 /**
+ * Lists a node and every node below it, in source order, each node before the nodes below it.
+ * It keeps its own stack, so it reads a tree that a recursive walk overflows on.
+ * @param {SyntaxNode} node
+ * @returns {SyntaxNode[]}
+ */
+export function listTreeNodes(node) {
+  const nodes = [];
+  const pending = [node];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const children = listChildNodes(current);
+    nodes.push(current);
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
+  }
+
+  // listChildNodes gives some children out of source order. A stable sort keeps a parent before a child of the same start.
+  return nodes.sort((first, second) => first.start - second.start);
+}
+
+/**
  * Finds the first node, in source order, at the greatest depth below a node.
  * It keeps its own stack, so it reads a tree that a recursive walk overflows on.
  * @param {SyntaxNode} node
@@ -51,7 +73,9 @@ export function findDeepestNode(node) {
   while (pending.length > 0) {
     const current = pending.pop();
     const children = listChildNodes(current.node);
-    if (current.depth > deepest.depth) deepest = current;
+    // listChildNodes gives some children out of source order, so a tie in depth goes to the earlier start.
+    const isNewDeepest = current.depth > deepest.depth || (current.depth === deepest.depth && current.node.start < deepest.node.start);
+    if (isNewDeepest) deepest = current;
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], depth: current.depth + 1 });
   }
 

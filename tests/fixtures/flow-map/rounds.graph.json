@@ -1,0 +1,145 @@
+{
+  "nodes": [
+    {
+      "key": "a:work",
+      "kind": "agent",
+      "role": "work",
+      "label": "work",
+      "phase": "Fixture",
+      "model": "sonnet",
+      "concurrency": 2,
+      "id": "a1"
+    },
+    {
+      "key": "a:check",
+      "kind": "agent",
+      "role": "check",
+      "label": "check",
+      "phase": "Fixture",
+      "model": "sonnet",
+      "concurrency": 1,
+      "id": "a2"
+    },
+    {
+      "key": "t:fixture done",
+      "kind": "terminal",
+      "label": "fixture done",
+      "source": "derived",
+      "scenarios": [
+        "two rounds"
+      ],
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "id": "t1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "S0",
+      "to": "a:work",
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "S0",
+      "toId": "a1"
+    },
+    {
+      "from": "a:work",
+      "to": "a:check",
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "a1",
+      "toId": "a2"
+    },
+    {
+      "from": "a:check",
+      "to": "a:work",
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "back": true,
+      "boundary": false,
+      "repeat": 2,
+      "labelled": false,
+      "fromId": "a2",
+      "toId": "a1"
+    },
+    {
+      "from": "a:check",
+      "to": "t:fixture done",
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": true,
+      "fromId": "a2",
+      "toId": "t1"
+    }
+  ],
+  "terminals": [
+    {
+      "id": "t1",
+      "label": "fixture done",
+      "source": "derived",
+      "line": null,
+      "scenarios": [
+        "two rounds"
+      ],
+      "whens": [
+        "a check loops back into two lanes"
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "title": "Fixture",
+      "detail": "Every call runs here.",
+      "nodes": [
+        "a1",
+        "a2"
+      ]
+    }
+  ],
+  "loops": [
+    {
+      "from": "a2",
+      "to": "a1",
+      "whens": [
+        "a check loops back into two lanes"
+      ],
+      "repeat": 2
+    }
+  ],
+  "coverage": {
+    "scenarios": 1,
+    "roles": {
+      "total": 2,
+      "covered": 2,
+      "uncovered": []
+    },
+    "throws": {
+      "total": 0,
+      "covered": 0,
+      "uncovered": []
+    },
+    "statuses": {
+      "total": 0,
+      "covered": 0,
+      "uncovered": []
+    },
+    "terminals": 1
+  }
+}

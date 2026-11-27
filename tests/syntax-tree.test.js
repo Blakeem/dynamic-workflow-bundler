@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { findDeepestNode, isStackOverflowError, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listPatternTargets, listTopLevelNames, listVarNames } from '../src/syntax-tree.js';
+import { findDeepestNode, isStackOverflowError, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listPatternTargets, listTopLevelNames, listTreeNodes, listVarNames } from '../src/syntax-tree.js';
 
 /** @param {string} text */
 function parseBody(text) {
@@ -9,16 +9,30 @@ function parseBody(text) {
 }
 
 describe('syntax-tree', () => {
-  it('lists the children of a node in source order', () => {
-    const [statement] = parseBody('a = b;');
+  it('lists the children of a node in the order of its keys', () => {
+    const [statement, switched] = parseBody('a = b;\nswitch (x) { case y: z; }');
     assert.deepEqual(listChildNodes(statement.expression).map((node) => node.name), ['a', 'b']);
+    assert.deepEqual(listChildNodes(switched.cases[0]).map((node) => node.type), ['ExpressionStatement', 'Identifier']);
+  });
+
+  it('lists a node and every node below it in source order, in a tree a recursive walk overflows on', () => {
+    const [statement, switched, labeled, template] = parseBody('a = b(c);\nswitch (x) { case y: z; }\nl: m;\n`${n}o`;');
+    const program = parse(`y${'.z'.repeat(20000)};\n`, { ecmaVersion: 'latest', sourceType: 'module' });
+    const listNames = (node) => listTreeNodes(node).map((child) => child.name ?? child.value?.cooked ?? child.type);
+
+    assert.deepEqual(listNames(statement), ['ExpressionStatement', 'AssignmentExpression', 'a', 'CallExpression', 'b', 'c']);
+    assert.deepEqual(listNames(switched), ['SwitchStatement', 'x', 'SwitchCase', 'y', 'ExpressionStatement', 'z']);
+    assert.deepEqual(listNames(labeled), ['LabeledStatement', 'l', 'ExpressionStatement', 'm']);
+    assert.deepEqual(listNames(template.expression), ['TemplateLiteral', '', 'n', 'o']);
+    assert.equal(listTreeNodes(program).length, 2 + 20000 * 2 + 1);
   });
 
   it('finds the first node in source order at the greatest depth, and the node itself when it has no child', () => {
-    const [shallow, deep, tied] = parseBody('a;\nb.c.d;\ne(f);\n');
+    const [shallow, deep, tied, switched] = parseBody('a;\nb.c.d;\ne(f);\nswitch (x) { case g(h.i): j.k; }\n');
     const program = parse(`x;\ny${'.z'.repeat(20000)};\n`, { ecmaVersion: 'latest', sourceType: 'module' });
     assert.equal(findDeepestNode(deep).name, 'b');
     assert.equal(findDeepestNode(tied).name, 'e');
+    assert.equal(findDeepestNode(switched).name, 'h');
     assert.equal(findDeepestNode(shallow.expression), shallow.expression);
     assert.equal(findDeepestNode(program).name, 'y');
   });

@@ -1,0 +1,152 @@
+{
+  "nodes": [
+    {
+      "key": "a:review",
+      "kind": "agent",
+      "role": "review",
+      "label": "review",
+      "phase": "Review",
+      "model": "sonnet",
+      "concurrency": 2,
+      "id": "a1"
+    },
+    {
+      "key": "a:verify",
+      "kind": "agent",
+      "role": "verify",
+      "label": "verify",
+      "phase": "Verify",
+      "model": "sonnet",
+      "concurrency": 2,
+      "id": "a2"
+    },
+    {
+      "key": "t:inventory of N units written",
+      "kind": "terminal",
+      "label": "inventory of N units written",
+      "source": "declared",
+      "scenarios": [
+        "two units"
+      ],
+      "whens": [
+        "both units are reviewed"
+      ],
+      "id": "t1"
+    }
+  ],
+  "edges": [
+    {
+      "from": "S0",
+      "to": "a:review",
+      "whens": [
+        "both units are reviewed"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "S0",
+      "toId": "a1"
+    },
+    {
+      "from": "a:review",
+      "to": "a:review",
+      "whens": [
+        "both units are reviewed"
+      ],
+      "back": true,
+      "boundary": false,
+      "repeat": 2,
+      "labelled": false,
+      "fromId": "a1",
+      "toId": "a1"
+    },
+    {
+      "from": "a:review",
+      "to": "a:verify",
+      "whens": [
+        "both units are reviewed"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "a1",
+      "toId": "a2"
+    },
+    {
+      "from": "a:verify",
+      "to": "t:inventory of N units written",
+      "whens": [
+        "both units are reviewed"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": true,
+      "fromId": "a2",
+      "toId": "t1"
+    }
+  ],
+  "terminals": [
+    {
+      "id": "t1",
+      "label": "inventory of N units written",
+      "source": "declared",
+      "line": null,
+      "scenarios": [
+        "two units"
+      ],
+      "whens": [
+        "both units are reviewed"
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "title": "Review",
+      "detail": "Reviews each unit through each lens.",
+      "nodes": [
+        "a1"
+      ]
+    },
+    {
+      "id": "p2",
+      "title": "Verify",
+      "detail": "(not in meta.phases)",
+      "nodes": [
+        "a2"
+      ]
+    }
+  ],
+  "loops": [
+    {
+      "from": "a1",
+      "to": "a1",
+      "whens": [
+        "both units are reviewed"
+      ],
+      "repeat": 2
+    }
+  ],
+  "coverage": {
+    "scenarios": 1,
+    "roles": {
+      "total": 2,
+      "covered": 2,
+      "uncovered": []
+    },
+    "throws": {
+      "total": 0,
+      "covered": 0,
+      "uncovered": []
+    },
+    "statuses": {
+      "total": 0,
+      "covered": 0,
+      "uncovered": []
+    },
+    "terminals": 1
+  }
+}

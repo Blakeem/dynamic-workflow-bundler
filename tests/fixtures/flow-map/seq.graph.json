@@ -1,0 +1,262 @@
+{
+  "nodes": [
+    {
+      "key": "a:dev",
+      "kind": "agent",
+      "role": "dev",
+      "label": "dev",
+      "phase": "Dev",
+      "model": "opus",
+      "concurrency": 1,
+      "id": "a1"
+    },
+    {
+      "key": "a:check",
+      "kind": "agent",
+      "role": "check",
+      "label": "check",
+      "phase": "Check",
+      "model": "opus",
+      "concurrency": 1,
+      "id": "a2"
+    },
+    {
+      "key": "t:done (N blocks)",
+      "kind": "terminal",
+      "label": "done (N blocks)",
+      "source": "derived",
+      "scenarios": [
+        "pass in round 2",
+        "pass in round 1"
+      ],
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1"
+      ],
+      "id": "t1"
+    },
+    {
+      "key": "x:12",
+      "kind": "throw",
+      "label": "throw: No block to build",
+      "line": 12,
+      "source": "throw",
+      "scenarios": [
+        "no block"
+      ],
+      "whens": [
+        "the args name no block"
+      ],
+      "id": "x1"
+    },
+    {
+      "key": "x:20",
+      "kind": "throw",
+      "label": "throw: Dead in round ...",
+      "line": 20,
+      "source": "throw",
+      "scenarios": [
+        "dies in round 1",
+        "dies in round 3"
+      ],
+      "whens": [
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ],
+      "id": "x2"
+    }
+  ],
+  "edges": [
+    {
+      "from": "S0",
+      "to": "a:dev",
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1",
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "S0",
+      "toId": "a1"
+    },
+    {
+      "from": "S0",
+      "to": "x:12",
+      "whens": [
+        "the args name no block"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": true,
+      "fromId": "S0",
+      "toId": "x1"
+    },
+    {
+      "from": "a:dev",
+      "to": "a:check",
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1",
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "a1",
+      "toId": "a2"
+    },
+    {
+      "from": "a:check",
+      "to": "a:dev",
+      "whens": [
+        "each check passes in round 2"
+      ],
+      "back": true,
+      "boundary": false,
+      "repeat": 2,
+      "labelled": false,
+      "fromId": "a2",
+      "toId": "a1"
+    },
+    {
+      "from": "a:check",
+      "to": "a:dev",
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1",
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ],
+      "back": false,
+      "boundary": true,
+      "repeat": 0,
+      "labelled": false,
+      "fromId": "a2",
+      "toId": "a1"
+    },
+    {
+      "from": "a:check",
+      "to": "t:done (N blocks)",
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": true,
+      "fromId": "a2",
+      "toId": "t1"
+    },
+    {
+      "from": "a:check",
+      "to": "x:20",
+      "whens": [
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ],
+      "back": false,
+      "boundary": false,
+      "repeat": 0,
+      "labelled": true,
+      "fromId": "a2",
+      "toId": "x2"
+    }
+  ],
+  "terminals": [
+    {
+      "id": "t1",
+      "label": "done (N blocks)",
+      "source": "derived",
+      "line": null,
+      "scenarios": [
+        "pass in round 2",
+        "pass in round 1"
+      ],
+      "whens": [
+        "each check passes in round 2",
+        "each check passes in round 1"
+      ]
+    },
+    {
+      "id": "x1",
+      "label": "throw: No block to build",
+      "source": "throw",
+      "line": 12,
+      "scenarios": [
+        "no block"
+      ],
+      "whens": [
+        "the args name no block"
+      ]
+    },
+    {
+      "id": "x2",
+      "label": "throw: Dead in round ...",
+      "source": "throw",
+      "line": 20,
+      "scenarios": [
+        "dies in round 1",
+        "dies in round 3"
+      ],
+      "whens": [
+        "the run dies in round 1",
+        "the run dies in round 3"
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "title": "Dev",
+      "detail": "Builds one block.",
+      "nodes": [
+        "a1"
+      ]
+    },
+    {
+      "id": "p2",
+      "title": "Check",
+      "detail": "Checks one block.",
+      "nodes": [
+        "a2"
+      ]
+    }
+  ],
+  "loops": [
+    {
+      "from": "a2",
+      "to": "a1",
+      "whens": [
+        "each check passes in round 2"
+      ],
+      "repeat": 2
+    }
+  ],
+  "coverage": {
+    "scenarios": 5,
+    "roles": {
+      "total": 2,
+      "covered": 2,
+      "uncovered": []
+    },
+    "throws": {
+      "total": 2,
+      "covered": 2,
+      "uncovered": []
+    },
+    "statuses": {
+      "total": 0,
+      "covered": 0,
+      "uncovered": []
+    },
+    "terminals": 3
+  }
+}
