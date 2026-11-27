@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { simulate } from 'dynamic-workflow-bundler';
+import { createInspection } from '../src/create-inspection.js';
+import { findSimulateFixture } from './support/find-simulate-fixture.js';
 
 const RUNTIME_FIXTURES = new URL('./fixtures/runtime/', import.meta.url);
 const META = "export const meta = { name: 'p', description: 'd' }\n";
@@ -121,6 +122,14 @@ for (const { probe, key } of PROBES) {
       assert.deepEqual(deriveProgress(trace), progress.map(pickProgressKeys));
       checkEvents(trace);
     });
+
+    it('gives an inspection whose call events, in order, are the calls of the trace', async () => {
+      const trace = await simulateProbe();
+      const callEvents = createInspection(trace).events.filter((event) => event.kind === 'call');
+      const pickCallKeys = ({ index, label, phase }) => ({ index, label, phase });
+
+      assert.deepEqual(callEvents.map(pickCallKeys), trace.calls.map(pickCallKeys));
+    });
   });
 }
 
@@ -211,7 +220,7 @@ describe('the order of events', () => {
   });
 
   it('lists no event for a script that did not run', async () => {
-    const script = fileURLToPath(new URL('./fixtures/simulate/no-meta.js', import.meta.url));
+    const script = findSimulateFixture('no-meta');
     const trace = await simulate({ script });
 
     assert.equal(trace.end.kind, 'refused');

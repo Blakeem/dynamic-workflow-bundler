@@ -3,7 +3,7 @@
 const VERDICT_FAIL = { verdict: 'fail' };
 const VERDICT_PASS = { verdict: 'pass' };
 
-/** @type {Record<string, Scenario>} The scenarios of tests/simulate.test.js, by the fixture script they run with. */
+/** @type {Record<string, Scenario>} The scenarios of tests/simulate.test.js and tests/inspect.test.js, by the fixture script they run with. */
 export const SCENARIOS = {
   plansAnswered: { name: 'every plan answered', respond: { plan: (call) => `plan for ${call.label}` } },
   writerUnanswered: { name: 'no writer plan', respond: { 'plan parser': 'parser plan', 'plan loader': 'loader plan' } },

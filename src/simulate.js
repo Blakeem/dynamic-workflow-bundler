@@ -13,7 +13,7 @@ import { checkScriptFile } from './validate.js';
 /** @typedef {import('./run-simulation.js').AgentCall} AgentCall */
 
 // A misspelled key such as `scenarios` would otherwise read as a missing scenario.
-const SIMULATE_OPTION_KEYS = new Set(['script', 'scenario']);
+export const SIMULATE_OPTION_KEYS = new Set(['script', 'scenario']);
 export const SCENARIO_KEYS = new Set(['name', 'args', 'respond', 'budget']);
 const BUDGET_KEYS = new Set(['total', 'spent', 'spentPerCall']);
 // A run of such a script on Claude Code 2.1.332 did not end while it was watched, and no runtime fixture

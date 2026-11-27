@@ -3,29 +3,19 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { simulate, validate } from 'dynamic-workflow-bundler';
 import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
 import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { formatRealDisplayPath } from '../src/real-path.js';
 import { listMissingGlobalNames } from '../src/run-simulation.js';
 import { SCENARIOS } from './fixtures/simulate/scenarios.js';
+import { findSimulateFixture } from './support/find-simulate-fixture.js';
 import { writeSizedFile } from './support/write-sized-file.js';
-
-const FIXTURES = new URL('./fixtures/simulate/', import.meta.url);
 
 const temporaryFolders = [];
 after(async () => {
   for (const folder of temporaryFolders) await rm(folder, { recursive: true, force: true });
 });
-
-/**
- * @param {string} name A script of tests/fixtures/simulate/, without its ending.
- * @returns {string}
- */
-function findFixture(name) {
-  return fileURLToPath(new URL(`${name}.js`, FIXTURES));
-}
 
 /**
  * @param {string} name
@@ -59,22 +49,22 @@ async function simulateScript(script, scenario = undefined) {
  * @param {import('../src/simulate.js').Scenario} [scenario]
  */
 function simulateFixture(name, scenario = undefined) {
-  return simulateScript(findFixture(name), scenario);
+  return simulateScript(findSimulateFixture(name), scenario);
 }
 
 describe('simulate options', () => {
   it('rejects options of another shape with a UsageError, as validate() does', async () => {
-    const script = findFixture('budget-args');
+    const script = findSimulateFixture('budget-args');
 
     await assert.rejects(simulate(null), { name: 'UsageError', message: 'simulate() takes an options object' });
     await assert.rejects(simulate({ script, scenarios: [] }), { name: 'UsageError', message: 'simulate() takes no option scenarios' });
     await assert.rejects(simulate({}), { name: 'UsageError', message: 'simulate() needs script, the path of a workflow script' });
-    await assert.rejects(simulate({ script: findFixture('missing') }), { name: 'UsageError', message: /does not exist/ });
+    await assert.rejects(simulate({ script: findSimulateFixture('missing') }), { name: 'UsageError', message: /does not exist/ });
     await assert.rejects(simulate({ script, scenario: [] }), { name: 'UsageError', message: /takes scenario, an object/ });
   });
 
   it('rejects a scenario with an unknown key or a value of another shape', async () => {
-    const script = findFixture('budget-args');
+    const script = findSimulateFixture('budget-args');
     const rejectScenario = (scenario, message) => assert.rejects(simulate({ script, scenario }), { name: 'UsageError', message });
 
     await rejectScenario({ respnd: {} }, 'The scenario takes no key respnd');
@@ -118,7 +108,7 @@ describe('simulate options', () => {
 
 describe('the trace', () => {
   it('records three calls in a parallel with their group stamps, the group, the phase and the log', async () => {
-    const script = findFixture('parallel-plans');
+    const script = findSimulateFixture('parallel-plans');
     const trace = await simulateScript(script, SCENARIOS.plansAnswered);
     const plans = ['plan for plan parser', 'plan for plan loader', 'plan for plan writer'];
 
@@ -240,7 +230,7 @@ describe('a stop', () => {
   });
 
   it('rejects with a UsageError that names the call when a respond function throws', async () => {
-    const script = findFixture('catch-agent');
+    const script = findSimulateFixture('catch-agent');
     const scriptPath = await formatRealDisplayPath(script);
     const rejectRespond = (respond, message) => assert.rejects(simulate({ script, scenario: { respond } }), { name: 'UsageError', message });
 
@@ -333,7 +323,7 @@ describe('a stop', () => {
 
 describe('a refused script', () => {
   it('runs no code of a script that breaks the contract, and gives the findings validate() gives', async () => {
-    const script = findFixture('no-meta');
+    const script = findSimulateFixture('no-meta');
     const trace = await simulateScript(script, SCENARIOS.answerUnanswered);
 
     assert.deepEqual(trace.end, { kind: 'refused', findings: (await validate({ script })).findings });
