@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { checkScenarios } from '../src/check-scenarios.js';
 
 const FILE_LABEL = 'The scenarios file s.js';
-const ROW_FORM = '{ name, args, respond, budget, expect }';
+const ROW_FORM = '{ name, args, respond, budget, expect, when, endState }';
 
 /**
  * @param {unknown} value
@@ -14,13 +14,26 @@ function assertUsageError(value, message) {
 }
 
 describe('checkScenarios', () => {
-  it('gives each scenario with its name, its expect defaulted to returned, and the scenario simulate() takes', () => {
+  it('gives each scenario with its name, its expect defaulted to returned, its when defaulted to its name, no endState, and the scenario simulate() takes', () => {
     const respond = { review: 'pass' };
 
     assert.deepEqual(checkScenarios([{ name: 'a', args: { n: 1 }, respond, budget: { total: null } }, { name: 'b', expect: 'threw' }], 's.js'), [
-      { name: 'a', expect: 'returned', scenario: { name: 'a', args: { n: 1 }, respond, budget: { total: null } } },
-      { name: 'b', expect: 'threw', scenario: { name: 'b' } },
+      { name: 'a', expect: 'returned', when: 'a', endState: null, scenario: { name: 'a', args: { n: 1 }, respond, budget: { total: null } } },
+      { name: 'b', expect: 'threw', when: 'b', endState: null, scenario: { name: 'b' } },
     ]);
+  });
+
+  it('gives the when and the endState of a scenario that names them, and keeps both out of the scenario simulate() takes', () => {
+    assert.deepEqual(checkScenarios([{ name: 'a', when: 'the review passes', endState: 'review written' }], 's.js'), [
+      { name: 'a', expect: 'returned', when: 'the review passes', endState: 'review written', scenario: { name: 'a' } },
+    ]);
+  });
+
+  it('names a when or an endState that is not a string of 1 or more characters', () => {
+    const label = 'Scenario 1 of the scenarios file s.js';
+
+    for (const when of ['', null, 5, ['a']]) assertUsageError([{ name: 'a', when }], `${label} takes when as a string of 1 or more characters that says when its path is taken`);
+    for (const endState of ['', null, 5, { status: 'done' }]) assertUsageError([{ name: 'a', endState }], `${label} takes endState as a string of 1 or more characters that names its end state`);
   });
 
   it('names a value that is not a list and an empty list', () => {

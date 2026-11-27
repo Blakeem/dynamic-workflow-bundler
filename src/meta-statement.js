@@ -15,3 +15,11 @@ export function readMetaObject(statement) {
 
   return isMeta ? declarator.init : null;
 }
+
+/**
+ * @param {SyntaxNode} key A key that is not computed: a name, a keyword, a string, a number or a bigint.
+ * @returns {string}
+ */
+export function readKeyName(key) {
+  return key.type === 'Identifier' ? key.name : String(key.value);
+}

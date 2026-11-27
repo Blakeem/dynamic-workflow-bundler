@@ -18,7 +18,7 @@ import { loadScenarios } from '../src/load-scenarios.js';
 import { MISSING_FILE_CODES } from '../src/load-sources.js';
 import { locate } from '../src/locate.js';
 import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
-import { simulate } from '../src/simulate.js';
+import { simulateFileScenario } from '../src/simulate-file-scenario.js';
 import { UsageError } from '../src/usage-error.js';
 import { validate } from '../src/validate.js';
 import { writeScript } from '../src/write-script.js';
@@ -461,18 +461,8 @@ function selectScenarios(fileScenarios, name, scenariosFile) {
  * @returns {Promise<Simulation>}
  */
 async function simulateScenario(script, fileScenario, scenariosFile) {
-  const { name, expect, scenario } = fileScenario;
-  let trace = null;
-
-  try {
-    trace = await simulate({ script, scenario });
-  } catch (error) {
-    if (!(error instanceof UsageError)) throw error;
-    // simulate() names neither the scenario nor its file, such as for a respond function that throws.
-    const failure = new UsageError(`The simulation of ${script} with the scenario "${formatHiddenCharacters(name)}" of ${scenariosFile} cannot run. ${error.message}`);
-    failure.cause = error;
-    throw failure;
-  }
+  const { name, expect } = fileScenario;
+  const trace = await simulateFileScenario(script, fileScenario, scenariosFile);
 
   return { script: trace.script, scenario: name, expect, passed: trace.end.kind === expect, trace };
 }

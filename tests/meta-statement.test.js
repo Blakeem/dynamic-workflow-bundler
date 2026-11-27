@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { readMetaObject } from '../src/meta-statement.js';
+import { readKeyName, readMetaObject } from '../src/meta-statement.js';
 import { PARSE_OPTIONS } from '../src/parse-source.js';
 
 /**
@@ -24,5 +24,13 @@ describe('readMetaObject', () => {
       assert.equal(readFirstMetaText(text), null, text);
     }
     assert.equal(readMetaObject(undefined), null);
+  });
+});
+
+describe('readKeyName', () => {
+  it('reads a name, a keyword, a string, a number and a bigint key as a string', () => {
+    const metaObject = readMetaObject(parse("export const meta = { name: 1, if: 1, 'a b': 1, 2: 1, 3n: 1 };", PARSE_OPTIONS).body[0]);
+
+    assert.deepEqual(metaObject.properties.map((property) => readKeyName(property.key)), ['name', 'if', 'a b', '2', '3']);
   });
 });

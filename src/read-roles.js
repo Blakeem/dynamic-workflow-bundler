@@ -3,9 +3,11 @@ import { listTreeNodes } from './syntax-tree.js';
 /** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */
 
 const LABEL_KEY = 'label';
+/** The regular expression class of the characters that separate a role, an item and a round marker in a label. */
+export const LABEL_SEPARATOR = String.raw`[\s:/]`;
 // After a separator, an `r` at the end of the fixed start opens a round marker such as `r${round}`.
-const ROUND_MARKER_START = /[\s:/]r$/;
-const TRAILING_SEPARATORS = /[\s:/]+$/;
+const ROUND_MARKER_START = new RegExp(`${LABEL_SEPARATOR}r$`);
+const TRAILING_SEPARATORS = new RegExp(`${LABEL_SEPARATOR}+$`);
 
 /**
  * Lists the roles that the call labels of a workflow script start with, from each `label` property of an

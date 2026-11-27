@@ -1,3 +1,5 @@
+const LONE_CARRIAGE_RETURN = /\r(?!\n)/g;
+
 /**
  * Gives the 1-based line and column of an offset, counting only LF as a line break.
  * Acorn also counts U+2028 and U+2029, which no editor shows as a line break.
@@ -17,6 +19,16 @@ export function findPosition(text, offset) {
   }
 
   return { line, column: offset - lineStart + 1 };
+}
+
+/**
+ * Replaces each lone CR with LF and keeps every offset, so that findPosition places an offset as an editor
+ * shows the text, which breaks a line at a lone CR.
+ * @param {string} text
+ * @returns {string}
+ */
+export function replaceLoneCarriageReturns(text) {
+  return text.replace(LONE_CARRIAGE_RETURN, '\n');
 }
 
 /**

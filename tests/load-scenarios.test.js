@@ -35,8 +35,8 @@ describe('loadScenarios', () => {
     const file = await writeScenariosFile('list.js', "export default [{ name: 'a', respond: { review: 'pass' } }, { name: 'b', expect: 'threw' }];\n");
 
     assert.deepEqual(await loadScenarios(file), [
-      { name: 'a', expect: 'returned', scenario: { name: 'a', respond: { review: 'pass' } } },
-      { name: 'b', expect: 'threw', scenario: { name: 'b' } },
+      { name: 'a', expect: 'returned', when: 'a', endState: null, scenario: { name: 'a', respond: { review: 'pass' } } },
+      { name: 'b', expect: 'threw', when: 'b', endState: null, scenario: { name: 'b' } },
     ]);
   });
 
@@ -46,7 +46,7 @@ describe('loadScenarios', () => {
 
     await assertUsageError(join(folder, 'missing.js'), `The scenarios file ${join(folder, 'missing.js')} does not exist`);
     await assertUsageError(join(folder, 'sub'), `The scenarios file ${join(folder, 'sub')} is not a file`);
-    await assertUsageError(noDefault, `The scenarios file ${noDefault} does not export default a list of scenarios of the form { name, args, respond, budget, expect }`);
+    await assertUsageError(noDefault, `The scenarios file ${noDefault} does not export default a list of scenarios of the form { name, args, respond, budget, expect, when, endState }`);
   });
 
   it('names the cause when the file throws as it loads or as its default export is read', async () => {

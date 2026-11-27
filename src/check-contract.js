@@ -1,9 +1,10 @@
 import { RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from './contract.js';
 import { listFreeReferences } from './find-free-names.js';
 import { createFinding } from './finding.js';
-import { readMetaObject } from './meta-statement.js';
+import { readKeyName, readMetaObject } from './meta-statement.js';
 import { BYTE_ORDER_MARK } from './normalize-source-text.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, parseSource } from './parse-source.js';
+import { replaceLoneCarriageReturns } from './source-position.js';
 import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listPatternIdentifiers, listPatternTargets } from './syntax-tree.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
@@ -13,7 +14,6 @@ import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, li
 
 const SCRIPT_PARSER_DEPTH_MESSAGE = 'The script nests code deeper than the parser can read';
 const SCRIPT_TREE_DEPTH_MESSAGE = 'The script nests code deeper than dwfb can read';
-const LONE_CR_PATTERN = /\r(?!\n)/g;
 // `&&=` writes a property only when it already holds a truthy value, so it never defines a name.
 const NON_DEFINING_ASSIGNMENT = '&&=';
 const IMMEDIATE_FUNCTION_TYPES = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
@@ -44,7 +44,7 @@ export function checkContract(text, file, byteCount = Buffer.byteLength(text, 'u
   const treeFindings = [];
   const markLength = text.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK.length : 0;
   // The parser reads the raw text. A finding is placed as an editor shows it, with no byte order mark and a lone CR as a line break.
-  const positionText = text.slice(markLength).replace(LONE_CR_PATTERN, '\n');
+  const positionText = replaceLoneCarriageReturns(text.slice(markLength));
   const placeFinding = (rule, message, offset, name = null) => createFinding(rule, message, file, positionText, Math.max(0, offset - markLength), name);
   const addFinding = (rule, message, offset) => findings.push(placeFinding(rule, message, offset));
   const addTreeFinding = (rule, message, offset, name) => treeFindings.push(placeFinding(rule, message, offset, name));
@@ -184,14 +184,6 @@ function listPropertyRefusals(property) {
     ...(RESERVED_META_KEYS.has(keyName) ? refuse(`The meta object holds the key ${keyName}, which the runtime refuses`, property.key) : []),
     ...listMetaRefusals(property.value),
   ];
-}
-
-/**
- * @param {SyntaxNode} key A key that is not computed: a name, a keyword, a string, a number or a bigint.
- * @returns {string}
- */
-function readKeyName(key) {
-  return key.type === 'Identifier' ? key.name : String(key.value);
 }
 
 /**

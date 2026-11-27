@@ -16,11 +16,11 @@ function readTextSites(text) {
 
 /**
  * @param {string} message The source text of the first argument of the `new` expression.
- * @returns {{ prefix: string, template: string }}
+ * @returns {{ prefix: string, template: string, isMessageBuilt: boolean }}
  */
 function readMessageText(message) {
-  const [site] = readTextSites(`throw new Error(${message});`);
-  return { prefix: site.prefix, template: site.template };
+  const [{ prefix, template, isMessageBuilt }] = readTextSites(`throw new Error(${message});`);
+  return { prefix, template, isMessageBuilt };
 }
 
 describe('readThrowSites', () => {
@@ -28,13 +28,15 @@ describe('readThrowSites', () => {
     const text = "const a = 1;\nif (a) throw new Error('No block');\nthrow new TypeError(\n  'Wrong type');\n";
 
     assert.deepEqual(readTextSites(text), [
-      { line: 2, prefix: 'No block', template: 'No block' },
-      { line: 3, prefix: 'Wrong type', template: 'Wrong type' },
+      { line: 2, prefix: 'No block', template: 'No block', isMessageBuilt: false },
+      { line: 3, prefix: 'Wrong type', template: 'Wrong type', isMessageBuilt: false },
     ]);
   });
 
-  it('counts a line by LF alone, so U+2028 in a string starts no line', () => {
+  it('counts a line at LF and at a lone CR, as a finding is placed, so U+2028 in a string starts no line', () => {
     assert.equal(readTextSites("const a = 'x y';\nthrow new Error('boom');\n")[0].line, 2);
+    assert.equal(readTextSites("const a = 1;\r\rthrow new Error('boom');\r")[0].line, 3);
+    assert.equal(readTextSites("const a = 1;\r\n\r\nthrow new Error('boom');\r\n")[0].line, 3);
   });
 
   it('reads no throw of a name, a call, a member callee or a literal', () => {
@@ -46,28 +48,32 @@ describe('readThrowSites', () => {
   });
 
   it('reads a template literal as its text before the first expression and its text with ... per expression', () => {
-    assert.deepEqual(readMessageText('`Dead in round ${round}. Resume with ${args}.`'), { prefix: 'Dead in round ', template: 'Dead in round .... Resume with ....' });
-    assert.deepEqual(readMessageText('`No block`'), { prefix: 'No block', template: 'No block' });
-    assert.deepEqual(readMessageText('`${count} blocks left`'), { prefix: '', template: '... blocks left' });
+    assert.deepEqual(readMessageText('`Dead in round ${round}. Resume with ${args}.`'), { prefix: 'Dead in round ', template: 'Dead in round .... Resume with ....', isMessageBuilt: true });
+    assert.deepEqual(readMessageText('`No block`'), { prefix: 'No block', template: 'No block', isMessageBuilt: false });
+    assert.deepEqual(readMessageText('`${count} blocks left`'), { prefix: '', template: '... blocks left', isMessageBuilt: true });
   });
 
   it('reads a template literal nested in an expression of another as one expression', () => {
-    assert.deepEqual(readMessageText('`Bad ${isLate ? `late ${round}` : `early`} run`'), { prefix: 'Bad ', template: 'Bad ... run' });
+    assert.deepEqual(readMessageText('`Bad ${isLate ? `late ${round}` : `early`} run`'), { prefix: 'Bad ', template: 'Bad ... run', isMessageBuilt: true });
   });
 
-  it('reads a concatenation as its leftmost operand', () => {
-    assert.deepEqual(readMessageText("'Invalid args (' + error.message + ').'"), { prefix: 'Invalid args (', template: 'Invalid args (' });
-    assert.deepEqual(readMessageText("`Round ${round}: ` + reason + '.'"), { prefix: 'Round ', template: 'Round ...: ' });
-    assert.deepEqual(readMessageText("reason + ' failed'"), { prefix: '', template: '' });
+  it('reads a concatenation as its leftmost operand, with a message the runtime builds', () => {
+    assert.deepEqual(readMessageText("'Invalid args (' + error.message + ').'"), { prefix: 'Invalid args (', template: 'Invalid args (', isMessageBuilt: true });
+    assert.deepEqual(readMessageText("`Round ${round}: ` + reason + '.'"), { prefix: 'Round ', template: 'Round ...: ', isMessageBuilt: true });
+    assert.deepEqual(readMessageText("'' + reason"), { prefix: '', template: '', isMessageBuilt: true });
+    assert.deepEqual(readMessageText("reason + ' failed'"), { prefix: '', template: '', isMessageBuilt: true });
   });
 
-  it('gives an empty prefix and template for no argument or an expression of another kind', () => {
+  it('gives an empty prefix and template for no argument, an empty literal or an expression of another kind', () => {
     assert.deepEqual(readTextSites('throw new Error;\nthrow new Error();'), [
-      { line: 1, prefix: '', template: '' },
-      { line: 2, prefix: '', template: '' },
+      { line: 1, prefix: '', template: '', isMessageBuilt: false },
+      { line: 2, prefix: '', template: '', isMessageBuilt: false },
     ]);
+    for (const message of ["''", '``']) {
+      assert.deepEqual(readMessageText(message), { prefix: '', template: '', isMessageBuilt: false }, message);
+    }
     for (const message of ['message', 'formatMessage(round)', '...parts', "isLate ? 'late' : 'early'", '1']) {
-      assert.deepEqual(readMessageText(message), { prefix: '', template: '' }, message);
+      assert.deepEqual(readMessageText(message), { prefix: '', template: '', isMessageBuilt: true }, message);
     }
   });
 
@@ -80,12 +86,12 @@ describe('readThrowSites', () => {
     assert.deepEqual(readTextSites(switched).map((site) => [site.line, site.template]), [[2, 'first'], [3, 'second']]);
   });
 
-  it('gives the sites of the reference readers for the three oracle scripts', async () => {
+  it('gives the lines, prefixes and templates of the reference readers for the three oracle scripts', async () => {
     const readOracleSites = async (name) => readTextSites(await readFile(new URL(`${name}.js`, ORACLE), 'utf8'));
 
     assert.deepEqual(await readOracleSites('seq'), [
-      { line: 12, prefix: 'No block to build', template: 'No block to build' },
-      { line: 20, prefix: 'Dead in round ', template: 'Dead in round .... Resume with the same args.' },
+      { line: 12, prefix: 'No block to build', template: 'No block to build', isMessageBuilt: false },
+      { line: 20, prefix: 'Dead in round ', template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
     ]);
     assert.deepEqual(await readOracleSites('fan'), []);
     assert.deepEqual(await readOracleSites('rounds'), []);
