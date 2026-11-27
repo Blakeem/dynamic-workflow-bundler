@@ -38,10 +38,19 @@ import { installRuntimeGlobals } from './runtime-globals.js';
  */
 
 /**
- * @typedef {object} AgentCall The arguments of one agent() call.
+ * @typedef {object} SimulationEvent One agent() call, phase() invocation or log line, in the order the
+ *   script made them.
+ * @property {'call' | 'phase' | 'log'} kind
+ * @property {number} index For a call, the count of calls that `answerCall` got before it. For a phase or
+ *   a log line, its index in `phases` or `logs`.
+ */
+
+/**
+ * @typedef {object} AgentCall One agent() call, as `answerCall` gets it.
  * @property {unknown} prompt
  * @property {unknown} opts
  * @property {Readonly<GroupStamp> | null} group
+ * @property {string | null} phase The title the runtime groups the call under, or null for none.
  */
 
 /**
@@ -61,6 +70,7 @@ import { installRuntimeGlobals } from './runtime-globals.js';
  * @property {string[]} logs
  * @property {Phase[]} phases
  * @property {Group[]} groups In call order.
+ * @property {SimulationEvent[]} events
  */
 
 /**
@@ -133,7 +143,7 @@ export async function runSimulation(text, options, scriptTimeLimit = SCRIPT_TIME
     stopIgnoringRejections();
   }
 
-  return { end, logs: simulation.logs, phases: simulation.phases, groups: simulation.groups };
+  return { end, logs: simulation.logs, phases: simulation.phases, groups: simulation.groups, events: simulation.events };
 }
 
 /**
@@ -244,14 +254,18 @@ function createSimulation(answerCall) {
     phases: [],
     /** @type {Group[]} */
     groups: [],
+    /** @type {SimulationEvent[]} */
+    events: [],
   };
   /** @type {import('./runtime-globals.js').RuntimeHost} */
   const host = {
     log: (line) => {
-      if (simulation.isActive) simulation.logs.push(line);
+      if (!simulation.isActive) return;
+      simulation.events.push({ kind: 'log', index: simulation.logs.push(line) - 1 });
     },
     phase: (title) => {
-      if (simulation.isActive) simulation.phases.push({ title, beforeCall: simulation.callCount });
+      if (!simulation.isActive) return;
+      simulation.events.push({ kind: 'phase', index: simulation.phases.push({ title, beforeCall: simulation.callCount }) - 1 });
     },
     agent: (prompt, opts, resolve, reject) => answerAgentCall(simulation, answerCall, { prompt, opts, group: groupStore.getStore() ?? null }, resolve, reject),
     setTimeout: (callback, delay) => addTimer(simulation, callback, delay),
@@ -279,14 +293,17 @@ function createSimulation(answerCall) {
  * keeps the simulation waiting until it settles. No answer settles once the simulation has ended.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
  * @param {SimulationOptions['answerCall']} answerCall
- * @param {AgentCall} call
+ * @param {Omit<AgentCall, 'phase'>} callArguments
  * @param {(value: unknown) => void} resolve
  * @param {(reason: unknown) => void} reject
  */
-function answerAgentCall(simulation, answerCall, call, resolve, reject) {
+function answerAgentCall(simulation, answerCall, callArguments, resolve, reject) {
+  let call = null;
   let answer;
 
   if (!simulation.isActive) return;
+  call = { ...callArguments, phase: findCallPhase(callArguments.opts, simulation.phases) };
+  simulation.events.push({ kind: 'call', index: simulation.callCount });
   simulation.callCount += 1;
   try {
     answer = answerCall(call);
@@ -307,6 +324,38 @@ function answerAgentCall(simulation, answerCall, call, resolve, reject) {
   );
   simulation.pendingAnswers.add(settled);
   settled.then(() => simulation.pendingAnswers.delete(settled));
+}
+
+/**
+ * Gives a call its phase as the runtime of Claude Code 2.1.332 does, measured with two launched scripts:
+ * the call's `phase` option, or else the title of the latest phase() invocation, from any group.
+ * @param {unknown} opts The call's options, of the script's realm.
+ * @param {Phase[]} phases The phase() invocations made before the call.
+ * @returns {string | null}
+ */
+function findCallPhase(opts, phases) {
+  const phaseOption = readPhaseOption(opts);
+
+  if (phaseOption !== null) return phaseOption;
+  return phases.length === 0 ? null : phases[phases.length - 1].title;
+}
+
+/**
+ * Not measured: options that are not an object give no phase option, nor does an option whose read or
+ * whose conversion with `String` throws.
+ * @param {unknown} opts
+ * @returns {string | null} `String` of the `phase` option, or null for an option of undefined or null.
+ */
+function readPhaseOption(opts) {
+  let phaseOption;
+
+  if (opts === null || typeof opts !== 'object') return null;
+  try {
+    phaseOption = opts.phase;
+    return phaseOption === undefined || phaseOption === null ? null : String(phaseOption);
+  } catch {
+    return null;
+  }
 }
 
 /**

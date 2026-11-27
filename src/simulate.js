@@ -51,6 +51,7 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * @property {unknown} opts A JSON copy of the options without functions, or null for no options or for
  *   options JSON cannot hold, such as options with a cycle or a BigInt.
  * @property {import('./run-simulation.js').GroupStamp | null} group
+ * @property {string | null} phase The title the runtime groups the call under, or null for none.
  * @property {ScriptedReturn} [returned] The scripted return the script got, absent for the call the
  *   simulation stopped at.
  */
@@ -71,8 +72,18 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * @property {TraceEnd} end
  * @property {TraceCall[]} calls
  * @property {import('./run-simulation.js').Group[]} groups
- * @property {import('./run-simulation.js').Phase[]} phases
+ * @property {import('./run-simulation.js').Phase[]} phases Each `beforeCall` counts only the calls of
+ *   `calls`.
  * @property {string[]} logs
+ * @property {TraceEvent[]} events One event per element of `calls`, `phases` and `logs`, in the order the
+ *   script made them. A call that the argument check of agent() rejects is not in `calls` and has no event,
+ *   although the runtime reports it. A script that did not run has none.
+ */
+
+/**
+ * @typedef {object} TraceEvent
+ * @property {'call' | 'phase' | 'log'} kind
+ * @property {number} index The index in `calls`, `phases` or `logs`.
  */
 
 /**
@@ -111,14 +122,44 @@ export async function simulate(options = /** @type {{ script: string }} */ ({}))
   const isStopped = result.end.kind === 'stopped';
 
   if (isStopped && recorder.stop.end === null) throw await createRespondFailure(recorder.stop.call, recorder.stop.respondError);
+
+  const droppedCalls = isStopped ? recorder.rejectedCalls : new Set([...recorder.rejectedCalls, ...recorder.stoppedCalls]);
+  const { events, phases } = convertEvents(result, droppedCalls);
+
   return {
     ...traceHead,
     end: isStopped ? recorder.stop.end : convertRunEnd(result.end),
     calls: isStopped ? [...recorder.calls, recorder.stop.call] : recorder.calls,
     groups: result.groups,
-    phases: result.phases,
+    phases,
     logs: result.logs,
+    events,
   };
+}
+
+/**
+ * Gives each call event the index of its call in the trace, and drops the event of each call the trace
+ * drops, so each phase's beforeCall counts only the calls of the trace.
+ * @param {import('./run-simulation.js').SimulationResult} result
+ * @param {Set<number>} droppedCalls The index of each dropped call among the calls `answerCall` got.
+ * @returns {{ events: TraceEvent[], phases: import('./run-simulation.js').Phase[] }}
+ */
+function convertEvents(result, droppedCalls) {
+  const events = [];
+  const phases = [];
+  let callCount = 0;
+
+  for (const event of result.events) {
+    if (event.kind === 'call' && droppedCalls.has(event.index)) continue;
+    if (event.kind === 'call') {
+      events.push({ kind: 'call', index: callCount });
+      callCount += 1;
+      continue;
+    }
+    if (event.kind === 'phase') phases.push({ ...result.phases[event.index], beforeCall: callCount });
+    events.push({ kind: event.kind, index: event.index });
+  }
+  return { events, phases };
 }
 
 /**
@@ -210,7 +251,7 @@ function formatLackedNameMessage(name) {
  * @returns {Trace}
  */
 function createTraceWithoutRun(traceHead, end) {
-  return { ...traceHead, end, calls: [], groups: [], phases: [], logs: [] };
+  return { ...traceHead, end, calls: [], groups: [], phases: [], logs: [], events: [] };
 }
 
 /**
@@ -232,19 +273,35 @@ function createCallRecorder(respond) {
     calls: [],
     /** @type {CallStop | null} The latest stop, which a call after the script settled may give. */
     stop: null,
+    /** The count of calls answerCall got. */
+    receivedCount: 0,
+    /** @type {Set<number>} The index among those calls of each call that stopped the simulation. */
+    stoppedCalls: new Set(),
+    /** @type {Set<number>} The index among those calls of each call rejected for options it cannot read. */
+    rejectedCalls: new Set(),
     /** @param {AgentCall} agentCall */
     answerCall: (agentCall) => {
-      const call = convertCall(agentCall, recorder.calls.length);
+      const receivedIndex = recorder.receivedCount;
+      let call = null;
       let outcome = null;
 
+      recorder.receivedCount += 1;
+      try {
+        call = convertCall(agentCall, recorder.calls.length);
+      } catch (error) {
+        recorder.rejectedCalls.add(receivedIndex);
+        throw error;
+      }
       try {
         outcome = findCallOutcome(respond, call, recorder.calls, agentCall.opts);
       } catch (error) {
         recorder.stop = { call, end: null, respondError: error };
+        recorder.stoppedCalls.add(receivedIndex);
         throw new SimulationStop();
       }
       if (outcome.kind === 'stopped') {
         recorder.stop = { call, end: { kind: 'stopped', reason: outcome.reason, message: outcome.message, call: call.index }, respondError: null };
+        recorder.stoppedCalls.add(receivedIndex);
         throw new SimulationStop();
       }
       recorder.calls.push({ ...call, returned: outcome.returned });
@@ -273,7 +330,7 @@ function findCallOutcome(respond, call, earlierCalls, opts) {
  * @returns {string}
  */
 function formatCallLimitMessage(call) {
-  return `The script made more than ${AGENT_CALL_LIMIT} agent() calls, the cap the runtime puts on one workflow. Check the loop that makes ${formatCallName(call)}`;
+  return `The script made more than ${AGENT_CALL_LIMIT} agent() calls, the cap the runtime puts on one workflow. Check the code that makes ${formatCallName(call)}`;
 }
 
 /**
@@ -282,7 +339,7 @@ function formatCallLimitMessage(call) {
  * @returns {Omit<TraceCall, 'returned'>}
  */
 function convertCall(agentCall, index) {
-  const { prompt, opts, group } = agentCall;
+  const { prompt, opts, group, phase } = agentCall;
   const label = isScriptObject(opts) && typeof opts.label === 'string' ? opts.label : null;
 
   return {
@@ -291,6 +348,7 @@ function convertCall(agentCall, index) {
     prompt: convertToText(prompt),
     opts: copyOptions(opts),
     group: group === null ? null : { group: group.group, item: group.item, stage: group.stage },
+    phase,
   };
 }
 

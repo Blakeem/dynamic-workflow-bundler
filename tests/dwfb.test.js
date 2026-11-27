@@ -906,7 +906,7 @@ describe('dwfb simulate', () => {
 
   it('prints a stop at the call after the 1000th with the call it names, and exits 1', async () => {
     const folder = await writeSimulateFolder();
-    const message = 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the loop that makes call 1000 (label "find")';
+    const message = 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the code that makes call 1000 (label "find")';
     await writeFile(join(folder, 'find-loop.js'), `${META}const bugs = [];\nwhile (bugs.length < 10) {\n  const found = await agent('Find bugs', { label: 'find', schema: { type: 'object' } });\n  bugs.push(...found.bugs);\n}\nreturn bugs;\n`);
     await writeFile(join(folder, 'find.scenarios.js'), "export default [{ name: 'no bugs', respond: { find: { bugs: [] } } }];\n");
 
@@ -937,8 +937,9 @@ describe('dwfb simulate', () => {
   it('prints one JSON object with --json, with the trace of each simulation', async () => {
     const folder = await writeSimulateFolder();
     const { status, stdout, stderr } = runCommand(['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--json'], folder);
-    const answerCall = { index: 0, label: 'answer', prompt: 'Answer', opts: { label: 'answer' }, group: null };
+    const answerCall = { index: 0, label: 'answer', prompt: 'Answer', opts: { label: 'answer' }, group: null, phase: null };
     const traceHead = { script: 'answer.js', runtime: '2.1.332' };
+    const traceTail = { groups: [], phases: [], logs: [], events: [{ kind: 'call', index: 0 }] };
 
     assert.deepEqual({ status, stderr }, { status: 1, stderr: '' });
     assert.deepEqual(JSON.parse(stdout), {
@@ -950,14 +951,14 @@ describe('dwfb simulate', () => {
           scenario: 'answer died',
           expect: 'threw',
           passed: true,
-          trace: { ...traceHead, scenario: 'answer died', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, calls: [{ ...answerCall, returned: null }], groups: [], phases: [], logs: [] },
+          trace: { ...traceHead, scenario: 'answer died', end: { kind: 'threw', name: 'TypeError', message: 'The answer agent died' }, calls: [{ ...answerCall, returned: null }], ...traceTail },
         },
         {
           script: 'answer.js',
           scenario: 'answer given',
           expect: 'threw',
           passed: false,
-          trace: { ...traceHead, scenario: 'answer given', end: { kind: 'returned', value: 'yes' }, calls: [{ ...answerCall, returned: 'yes' }], groups: [], phases: [], logs: [] },
+          trace: { ...traceHead, scenario: 'answer given', end: { kind: 'returned', value: 'yes' }, calls: [{ ...answerCall, returned: 'yes' }], ...traceTail },
         },
       ],
     });

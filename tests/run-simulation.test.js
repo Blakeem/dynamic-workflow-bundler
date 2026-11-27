@@ -227,7 +227,7 @@ describe('the context', () => {
     const result = await simulateBody(body, { answerCall });
 
     await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.deepEqual(result, { end: { kind: 'returned', value: { value: 'early' } }, logs: [], phases: [], groups: [] });
+    assert.deepEqual(result, { end: { kind: 'returned', value: { value: 'early' } }, logs: [], phases: [], groups: [], events: [{ kind: 'call', index: 0 }] });
   });
 
   it('rejects options it cannot pass to the script, and a script the runtime refuses', async () => {
@@ -371,6 +371,28 @@ describe('groups and phases', () => {
     assert.deepEqual(result.groups, [{ kind: 'parallel', items: 4, stages: 1 }, { kind: 'pipeline', items: 2, stages: 2 }]);
     assert.deepEqual(result.phases, [{ title: 'One', beforeCall: 0 }, { title: '2', beforeCall: 5 }]);
   });
+
+  it('gives a call String of its phase option, or the latest phase() for options that are not an object and for an option that reading or String throws for', async () => {
+    const phases = [];
+    const answerCall = (call) => {
+      phases.push(call.phase);
+      return 'x';
+    };
+    const body = [
+      "await agent('none')",
+      "await agent('option', { phase: 'Own' })",
+      "phase('Base')",
+      "await agent('not an object', 'Own')",
+      "await agent('symbol', { phase: Symbol('Own') })",
+      "await agent('throwing String', { phase: { toString() { throw new Error('no text') } } })",
+      "await agent('throwing read', { get phase() { throw new Error('no read') } })",
+      "await agent('null', { phase: null })",
+    ].join('\n');
+    const { end } = await simulateBody(body, { answerCall });
+
+    assert.deepEqual(end, { kind: 'returned', value: null });
+    assert.deepEqual(phases, [null, 'Own', 'Base', 'Symbol(Own)', 'Base', 'Base', 'Base']);
+  });
 });
 
 describe('answers', () => {
@@ -402,7 +424,7 @@ describe('a stop', () => {
     const body = "log('before')\ntry { await agent('a') } catch { log('caught') }\nagent('b')\nreturn 'after'";
     const result = await simulateBody(body, { answerCall });
 
-    assert.deepEqual(result, { end: { kind: 'stopped' }, logs: ['before'], phases: [], groups: [] });
+    assert.deepEqual(result, { end: { kind: 'stopped' }, logs: ['before'], phases: [], groups: [], events: [{ kind: 'log', index: 0 }, { kind: 'call', index: 0 }] });
     assert.equal(callCount, 1);
   });
 

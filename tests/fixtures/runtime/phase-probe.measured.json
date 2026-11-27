@@ -1,0 +1,284 @@
+{
+  "note": "Two launched scripts, run on Claude Code 2.1.332 on 2026-11-26. Every agent() call fails its argument check (schema: []), so no agent starts. progress is the order the runtime reported phases and calls in.",
+  "order": {
+    "result": [
+      "before-any-phase TelemetrySafeError",
+      "in-one TelemetrySafeError",
+      "explicit-two TelemetrySafeError",
+      "after-explicit TelemetrySafeError",
+      "thunk-a TelemetrySafeError",
+      "thunk-b TelemetrySafeError",
+      "one-again TelemetrySafeError",
+      "phase-number TelemetrySafeError",
+      "phase-empty TelemetrySafeError"
+    ],
+    "logs": [
+      "log after phase One"
+    ],
+    "agentCount": 9,
+    "progress": [
+      {
+        "type": "call",
+        "index": 1,
+        "label": "before-any-phase",
+        "phaseIndex": null,
+        "phaseTitle": null,
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 1,
+        "title": "One"
+      },
+      {
+        "type": "call",
+        "index": 2,
+        "label": "in-one",
+        "phaseIndex": 1,
+        "phaseTitle": "One",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 2,
+        "title": "Two"
+      },
+      {
+        "type": "call",
+        "index": 3,
+        "label": "explicit-two",
+        "phaseIndex": 2,
+        "phaseTitle": "Two",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 4,
+        "label": "after-explicit",
+        "phaseIndex": 1,
+        "phaseTitle": "One",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 3,
+        "title": "Three"
+      },
+      {
+        "type": "phase",
+        "index": 4,
+        "title": "Four"
+      },
+      {
+        "type": "call",
+        "index": 5,
+        "label": "thunk-a",
+        "phaseIndex": 4,
+        "phaseTitle": "Four",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 6,
+        "label": "thunk-b",
+        "phaseIndex": 4,
+        "phaseTitle": "Four",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 7,
+        "label": "one-again",
+        "phaseIndex": 1,
+        "phaseTitle": "One",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 5,
+        "title": "5"
+      },
+      {
+        "type": "call",
+        "index": 8,
+        "label": "phase-number",
+        "phaseIndex": 5,
+        "phaseTitle": "5",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 6,
+        "title": ""
+      },
+      {
+        "type": "call",
+        "index": 9,
+        "label": "phase-empty",
+        "phaseIndex": 6,
+        "phaseTitle": "",
+        "state": "error"
+      }
+    ]
+  },
+  "values": {
+    "result": [
+      "option-null TelemetrySafeError",
+      "option-undefined TelemetrySafeError",
+      "option-false TelemetrySafeError",
+      "option-object TelemetrySafeError",
+      "option-zero TelemetrySafeError",
+      "phase-number gave undefined",
+      "after-phase-number TelemetrySafeError",
+      "phase-empty gave undefined",
+      "after-phase-empty TelemetrySafeError",
+      "phase-none gave undefined",
+      "after-phase-none TelemetrySafeError",
+      "phase-null gave undefined",
+      "after-phase-null TelemetrySafeError",
+      "no-label-string TelemetrySafeError",
+      "no label TelemetrySafeError",
+      "label number TelemetrySafeError"
+    ],
+    "logs": [],
+    "agentCount": 12,
+    "progress": [
+      {
+        "type": "phase",
+        "index": 1,
+        "title": "Base"
+      },
+      {
+        "type": "call",
+        "index": 1,
+        "label": "option-null",
+        "phaseIndex": 1,
+        "phaseTitle": "Base",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 2,
+        "label": "option-undefined",
+        "phaseIndex": 1,
+        "phaseTitle": "Base",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 2,
+        "title": "false"
+      },
+      {
+        "type": "call",
+        "index": 3,
+        "label": "option-false",
+        "phaseIndex": 2,
+        "phaseTitle": "false",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 3,
+        "title": "[object Object]"
+      },
+      {
+        "type": "call",
+        "index": 4,
+        "label": "option-object",
+        "phaseIndex": 3,
+        "phaseTitle": "[object Object]",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 4,
+        "title": "0"
+      },
+      {
+        "type": "call",
+        "index": 5,
+        "label": "option-zero",
+        "phaseIndex": 4,
+        "phaseTitle": "0",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 5,
+        "title": "5"
+      },
+      {
+        "type": "call",
+        "index": 6,
+        "label": "after-phase-number",
+        "phaseIndex": 5,
+        "phaseTitle": "5",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 6,
+        "title": ""
+      },
+      {
+        "type": "call",
+        "index": 7,
+        "label": "after-phase-empty",
+        "phaseIndex": 6,
+        "phaseTitle": "",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 7,
+        "title": "undefined"
+      },
+      {
+        "type": "call",
+        "index": 8,
+        "label": "after-phase-none",
+        "phaseIndex": 7,
+        "phaseTitle": "undefined",
+        "state": "error"
+      },
+      {
+        "type": "phase",
+        "index": 8,
+        "title": "null"
+      },
+      {
+        "type": "call",
+        "index": 9,
+        "label": "after-phase-null",
+        "phaseIndex": 8,
+        "phaseTitle": "null",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 10,
+        "label": "no-label-string",
+        "phaseIndex": 1,
+        "phaseTitle": "Base",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 11,
+        "label": "p2",
+        "phaseIndex": 1,
+        "phaseTitle": "Base",
+        "state": "error"
+      },
+      {
+        "type": "call",
+        "index": 12,
+        "label": "7",
+        "phaseIndex": 1,
+        "phaseTitle": "Base",
+        "state": "error"
+      }
+    ]
+  }
+}

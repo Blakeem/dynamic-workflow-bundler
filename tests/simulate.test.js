@@ -128,13 +128,14 @@ describe('the trace', () => {
       runtime: CONTRACT_RUNTIME_VERSION,
       end: { kind: 'returned', value: plans },
       calls: [
-        { index: 0, label: 'plan parser', prompt: 'Plan the parser', opts: { label: 'plan parser' }, group: { group: 0, item: 0, stage: 0 }, returned: plans[0] },
-        { index: 1, label: 'plan loader', prompt: 'Plan the loader', opts: { label: 'plan loader' }, group: { group: 0, item: 1, stage: 0 }, returned: plans[1] },
-        { index: 2, label: 'plan writer', prompt: 'Plan the writer', opts: { label: 'plan writer' }, group: { group: 0, item: 2, stage: 0 }, returned: plans[2] },
+        { index: 0, label: 'plan parser', prompt: 'Plan the parser', opts: { label: 'plan parser' }, group: { group: 0, item: 0, stage: 0 }, phase: 'Plan', returned: plans[0] },
+        { index: 1, label: 'plan loader', prompt: 'Plan the loader', opts: { label: 'plan loader' }, group: { group: 0, item: 1, stage: 0 }, phase: 'Plan', returned: plans[1] },
+        { index: 2, label: 'plan writer', prompt: 'Plan the writer', opts: { label: 'plan writer' }, group: { group: 0, item: 2, stage: 0 }, phase: 'Plan', returned: plans[2] },
       ],
       groups: [{ kind: 'parallel', items: 3, stages: 1 }],
       phases: [{ title: 'Plan', beforeCall: 0 }],
       logs: ['plans: 3'],
+      events: [{ kind: 'phase', index: 0 }, { kind: 'call', index: 0 }, { kind: 'call', index: 1 }, { kind: 'call', index: 2 }, { kind: 'log', index: 0 }],
     });
   });
 
@@ -256,9 +257,9 @@ describe('a stop', () => {
     const respondThrew = await simulateFixture('late-call', SCENARIOS.respondThrows);
     const answered = await simulateFixture('late-call', { respond: { late: 'late return' } });
 
-    assert.deepEqual([unanswered.end, unanswered.calls], [{ kind: 'returned', value: 'done' }, []]);
+    assert.deepEqual([unanswered.end, unanswered.calls, unanswered.events], [{ kind: 'returned', value: 'done' }, [], []]);
     assert.deepEqual([respondThrew.end, respondThrew.calls], [{ kind: 'returned', value: 'done' }, []]);
-    assert.deepEqual(answered.calls, [{ index: 0, label: 'late', prompt: 'Late', opts: { label: 'late' }, group: null, returned: 'late return' }]);
+    assert.deepEqual(answered.calls, [{ index: 0, label: 'late', prompt: 'Late', opts: { label: 'late' }, group: null, phase: null, returned: 'late return' }]);
   });
 
   const missingName = listMissingGlobalNames().includes('Temporal') ? null : `Node ${process.version} defines Temporal`;
@@ -270,7 +271,7 @@ describe('a stop', () => {
       reason: 'node-lacks-name',
       message: `The script reads Temporal, which the runtime defines and Node ${process.version} does not, so the simulation cannot run it. Run it on a Node that defines Temporal`,
     });
-    assert.deepEqual(trace.calls, []);
+    assert.deepEqual([trace.calls, trace.events], [[], []]);
   });
 
   it('stops with no call when the script waits on a promise that nothing settles', async () => {
@@ -295,7 +296,7 @@ describe('a stop', () => {
     assert.deepEqual(capped.end, {
       kind: 'stopped',
       reason: 'call-limit',
-      message: 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the loop that makes call 1000 (label "find")',
+      message: 'The script made more than 1000 agent() calls, the cap the runtime puts on one workflow. Check the code that makes call 1000 (label "find")',
       call: 1000,
     });
     assert.equal(capped.calls.length, 1001);
@@ -336,7 +337,7 @@ describe('a refused script', () => {
     const trace = await simulateScript(script, SCENARIOS.answerUnanswered);
 
     assert.deepEqual(trace.end, { kind: 'refused', findings: (await validate({ script })).findings });
-    assert.deepEqual([trace.calls, trace.groups, trace.phases, trace.logs], [[], [], [], []]);
+    assert.deepEqual([trace.calls, trace.groups, trace.phases, trace.logs, trace.events], [[], [], [], [], []]);
   });
 
   it('refuses a script larger than READ_BYTE_LIMIT as validate() refuses it', async () => {
