@@ -7,6 +7,7 @@ import { checkContract } from './check-contract.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
 import { formatDisplayPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
+import { isObject } from './is-object.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
 import { formatOversizeReason } from './read-byte-limit.js';
@@ -64,7 +65,7 @@ const LOCATE_OPTION_KEYS = new Set(['script', 'line', 'column', 'runtime', 'entr
  * @returns {Promise<LocateResult>}
  */
 export async function locate(options = /** @type {LocateOptions} */ ({})) {
-  if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('locate() takes an options object');
+  if (!isObject(options)) throw new UsageError('locate() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !LOCATE_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`locate() takes no option ${unknownKey}`);
   const { script, line, column = 1, runtime = false, entry, config } = options;

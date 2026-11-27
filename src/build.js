@@ -6,6 +6,7 @@ import { formatForwardSlashes, isFolderPath } from './display-path.js';
 import { findLineOrigin } from './expand-parts.js';
 import { findDifferentLine } from './find-different-line.js';
 import { createFinding } from './finding.js';
+import { isObject } from './is-object.js';
 import { joinModules } from './join-modules.js';
 import { linkModules } from './link-modules.js';
 import { loadSources, MISSING_FILE_CODES } from './load-sources.js';
@@ -85,7 +86,7 @@ export async function build(options) {
  * @returns {Promise<MappedBuild>}
  */
 export async function buildMappedScript(options = /** @type {BuildOptions} */ ({})) {
-  if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('build() takes an options object');
+  if (!isObject(options)) throw new UsageError('build() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !BUILD_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`build() takes no option ${unknownKey}`);
   const { entry, out, banner = true, check = false, validate = true } = options;

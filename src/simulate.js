@@ -3,6 +3,7 @@ import { findFreeNames } from './find-free-names.js';
 import { findNonJsonValue, isPlainObject } from './find-non-json-value.js';
 import { findScriptedReturn, formatCallName } from './find-scripted-return.js';
 import { formatErrorCause } from './format-error-cause.js';
+import { isObject } from './is-object.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
 import { convertToText, listMissingGlobalNames, runSimulation, SimulationStop } from './run-simulation.js';
 import { UsageError } from './usage-error.js';
@@ -161,14 +162,6 @@ function checkBudget(budget) {
   const { total, spent } = budget;
   if (total !== undefined && total !== null && typeof total !== 'number') throw new UsageError('The scenario budget total must be a number or null');
   if (spent !== undefined && typeof spent !== 'number') throw new UsageError('The scenario budget spent must be a number');
-}
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>} True for an object that is not null and not an array.
- */
-function isObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

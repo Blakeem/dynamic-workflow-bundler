@@ -1,5 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { isFolderPath } from './display-path.js';
+import { isObject } from './is-object.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
@@ -119,12 +120,4 @@ function checkScenariosFiles(workflows, rows, configPath) {
     if (sameIndex !== -1) throw new UsageError(message);
     throw new UsageError(`${message} where file names ignore letter case`);
   });
-}
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

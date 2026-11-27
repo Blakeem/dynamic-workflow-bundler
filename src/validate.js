@@ -1,5 +1,6 @@
 import { checkContract, checkScriptSize } from './check-contract.js';
 import { CONTRACT_RUNTIME_VERSION } from './contract.js';
+import { isObject } from './is-object.js';
 import { readScript } from './read-script.js';
 import { formatRealDisplayPath } from './real-path.js';
 import { UsageError } from './usage-error.js';
@@ -33,7 +34,7 @@ const VALIDATE_OPTION_KEYS = new Set(['script']);
  * @returns {Promise<ValidateResult>}
  */
 export async function validate(options = /** @type {ValidateOptions} */ ({})) {
-  if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new UsageError('validate() takes an options object');
+  if (!isObject(options)) throw new UsageError('validate() takes an options object');
   const unknownKey = Object.keys(options).find((key) => !VALIDATE_OPTION_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`validate() takes no option ${unknownKey}`);
   const { script } = options;

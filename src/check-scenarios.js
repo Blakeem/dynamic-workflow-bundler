@@ -1,4 +1,5 @@
 import { formatHiddenCharacters } from './format-hidden-characters.js';
+import { isObject } from './is-object.js';
 import { checkScenario, SCENARIO_KEYS } from './simulate.js';
 import { UsageError } from './usage-error.js';
 
@@ -67,12 +68,4 @@ function checkScenarioRow(row, rowLabel) {
   }
 
   return { name: scenario.name, expect: /** @type {'returned' | 'threw'} */ (expect), scenario: /** @type {Scenario} */ (scenario) };
-}
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
