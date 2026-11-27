@@ -25,7 +25,8 @@
  * @typedef {object} InstalledRuntime
  * @property {PromiseConstructor} ScriptPromise The Promise of the script's realm.
  * @property {(value: unknown, createCycleError: () => unknown) => unknown} copyValue Copies a value as a
- *   list leaving parallel() or pipeline() is copied, and throws what createCycleError gives for a cycle.
+ *   list leaving parallel() or pipeline() and an answer reaching agent() are copied, and throws what
+ *   createCycleError gives for a cycle.
  */
 
 /**
@@ -63,6 +64,10 @@ export function installRuntimeGlobals(host, settings) {
   const WORKFLOW_TARGET_MESSAGE = 'workflow() expects a workflow name (string) or {scriptPath: string}';
   const WORKFLOW_MESSAGE = 'workflow() is not simulated';
   const CYCLE_MESSAGE = 'Maximum call stack size exceeded.';
+  // The runtime's texts for a schema it refuses before any agent starts.
+  const SCHEMA_KIND_MESSAGE = 'WeakMap keys must be objects or non-registered symbols';
+  const SCHEMA_INVALID_MESSAGE = 'agent({schema}) received an invalid JSON Schema: data must be object,boolean';
+  const SCHEMA_UNUSABLE_MESSAGE = "agent({schema}) received an unusable JSON Schema — the API only accepts an object-rooted tool input schema, so every request would be rejected: the root schema must declare type: 'object' (the API rejects any other root type for a tool input schema); wrap arrays or primitives in an object property. The subagent was not started — fix the schema and call agent() again.";
 
   const convertToText = (value) => {
     try {
@@ -182,6 +187,29 @@ export function installRuntimeGlobals(host, settings) {
     return copyValue(await awaitEach(runs), createListCycleError);
   };
 
+  // Options that are not an object, and a schema of null or undefined, give a call with no schema.
+  const checkSchema = (opts) => {
+    const schema = opts !== null && typeof opts === 'object' ? opts.schema : undefined;
+    if (schema === undefined || schema === null) return;
+    // Measured for a string. Not measured: a number, a boolean, a BigInt, a function or a symbol gets the same error.
+    if (typeof schema !== 'object') throwRuntimeError('TypeError', SCHEMA_KIND_MESSAGE);
+    if (isArray(schema)) throwRuntimeError('TelemetrySafeError', SCHEMA_INVALID_MESSAGE);
+    if (schema.type !== 'object') throwRuntimeError('TelemetrySafeError', SCHEMA_UNUSABLE_MESSAGE);
+  };
+  // The script gets a copy of each answer, made of its own realm's objects. Not measured: an answer that holds a
+  // cycle rejects as a list leaving parallel() that holds one does.
+  const runAgent = (prompt, opts) => new ScriptPromise((resolve, reject) => {
+    checkSchema(opts);
+    const settleAnswer = (value) => {
+      try {
+        resolve(copyValue(value, createListCycleError));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    host.agent(prompt, opts, settleAnswer, reject);
+  });
+
   const runWorkflow = async (target) => {
     const isName = typeof target === 'string';
     const isScriptPath = target !== null && typeof target === 'object' && typeof target.scriptPath === 'string';
@@ -214,7 +242,7 @@ export function installRuntimeGlobals(host, settings) {
     throw new ScriptError(RANDOM_MESSAGE);
   };
   // A function assigned to a property gets no name, which matches the runtime's empty function names.
-  globalThis.agent = (...callArgs) => new ScriptPromise((resolve, reject) => host.agent(callArgs[0], callArgs[1], resolve, reject));
+  globalThis.agent = (...callArgs) => runAgent(callArgs[0], callArgs[1]);
   globalThis.parallel = (thunks) => runParallel(thunks);
   globalThis.pipeline = (items, ...stages) => runPipeline(items, stages);
   globalThis.workflow = (target) => runWorkflow(target);

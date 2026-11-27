@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { createContext, runInContext } from 'node:vm';
 import { RUNTIME_GLOBAL_NAMES } from '../src/contract.js';
-import { runSimulation, SCRIPT_TIME_LIMIT_MS } from '../src/run-simulation.js';
+import { listMissingGlobalNames, runSimulation, SCRIPT_TIME_LIMIT_MS, SimulationStop } from '../src/run-simulation.js';
 
 const FIXTURES = new URL('./fixtures/runtime/', import.meta.url);
 const META = "export const meta = { name: 'p', description: 'd' }\n";
@@ -18,11 +18,6 @@ const LEFT_OUT_KEYS = [
   { probe: 'sim-probe-values', key: 'budget spent', reason: SESSION_VALUE },
   { probe: 'sim-probe-values', key: 'workflow unknown name', reason: NO_CHILD_SCRIPT },
   { probe: 'sim-probe-values', key: 'workflow missing path', reason: NO_CHILD_SCRIPT },
-  { probe: 'sim-probe-values', key: 'agent schema array', reason: CALLS_AGENT },
-  { probe: 'sim-probe-values', key: 'agent schema null', reason: CALLS_AGENT },
-  { probe: 'sim-probe-values', key: 'agent opts string', reason: CALLS_AGENT },
-  { probe: 'sim-probe-names', key: 'agent schema string', reason: CALLS_AGENT },
-  { probe: 'sim-probe-names', key: 'agent schema root array type', reason: CALLS_AGENT },
   { probe: 'sim-probe-names', key: 'agent unknown agentType', reason: CALLS_AGENT },
   { probe: 'sim-probe-names', key: 'budget assign', reason: OTHER_ENGINE },
 ];
@@ -309,5 +304,78 @@ describe('groups and phases', () => {
     });
     assert.deepEqual(result.groups, [{ kind: 'parallel', items: 4, stages: 1 }, { kind: 'pipeline', items: 2, stages: 2 }]);
     assert.deepEqual(result.phases, [{ title: 'One', beforeCall: 0 }, { title: '2', beforeCall: 5 }]);
+  });
+});
+
+describe('answers', () => {
+  it('gives the script a copy of each answer, made of objects of its realm', async () => {
+    const shared = { items: [1] };
+    const body = "const first = await agent('a')\nfirst.items.push(2)\nconst second = await agent('b')\nreturn [Object.getPrototypeOf(first) === Object.prototype, first.items instanceof Array, second.items]";
+    const { end } = await simulateBody(body, { answerCall: () => shared });
+
+    assert.deepEqual(end.value, [true, true, [1]]);
+    assert.deepEqual(shared, { items: [1] });
+  });
+
+  it('rejects the call for an answer that holds a cycle', async () => {
+    const cyclic = {};
+    cyclic.self = cyclic;
+    const { end } = await simulateBody("try { await agent('a') } catch (error) { return error.message }", { answerCall: () => cyclic });
+
+    assert.deepEqual(end, { kind: 'returned', value: 'Maximum call stack size exceeded.' });
+  });
+});
+
+describe('a stop', () => {
+  it('ends the simulation at the call whose answerCall throws a SimulationStop, which the script cannot catch', async () => {
+    let callCount = 0;
+    const answerCall = () => {
+      callCount += 1;
+      throw new SimulationStop();
+    };
+    const body = "log('before')\ntry { await agent('a') } catch { log('caught') }\nagent('b')\nreturn 'after'";
+    const result = await simulateBody(body, { answerCall });
+
+    assert.deepEqual(result, { end: { kind: 'stopped' }, logs: ['before'], phases: [], groups: [] });
+    assert.equal(callCount, 1);
+  });
+
+  it('ends the simulation for a SimulationStop that an answer rejects with, and before a return that follows it', async () => {
+    const rejected = await simulateBody("await agent('a')", { answerCall: () => Promise.reject(new SimulationStop()) });
+    const returned = await simulateBody("agent('a')\nreturn 'done'", { answerCall: () => { throw new SimulationStop(); } });
+
+    assert.deepEqual(rejected.end, { kind: 'stopped' });
+    assert.deepEqual(returned.end, { kind: 'stopped' });
+  });
+
+  it('ends the simulation as stopped when code after the stop runs past the time limit', async () => {
+    const { end } = await simulateBody("agent('a')\nwhile (true) {}", { answerCall: () => { throw new SimulationStop(); } }, 5);
+
+    assert.deepEqual(end, { kind: 'stopped' });
+  });
+
+  it('ends nothing once the script has settled, at a call that a microtask queued before the return makes', async () => {
+    const answerCall = (call) => {
+      if (call.prompt === 'late') throw new SimulationStop();
+      return 'first';
+    };
+    const bodies = [
+      "Promise.resolve().then(() => agent('late'))\nreturn 'done'",
+      "Promise.resolve().then(() => null).then(() => null).then(() => agent('late'))\nreturn 'done'",
+      "await agent('first')\nPromise.resolve().then(() => agent('late'))\nreturn 'done'",
+    ];
+
+    for (const body of bodies) {
+      assert.deepEqual((await simulateBody(body, { answerCall })).end, { kind: 'returned', value: 'done' }, body);
+    }
+  });
+});
+
+describe('missing global names', () => {
+  it('lists each runtime global name that neither the running Node nor the stand-in defines', () => {
+    const nodeNames = new Set(runInContext('Object.getOwnPropertyNames(globalThis)', createContext({})));
+    const expected = RUNTIME_GLOBAL_NAMES.filter((name) => !nodeNames.has(name) && !STAND_IN_NAMES.includes(name));
+
+    assert.deepEqual(listMissingGlobalNames(), expected);
   });
 });

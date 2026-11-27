@@ -34,6 +34,8 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | simulation | One execution of a script against a scenario. A run is a real execution by the runtime. |
 | trace | The record of one simulation. |
 | call | One `agent()` invocation in a trace. |
+| scripted return | The value a scenario gives one call. `null` stands for an agent that died. |
+| stop | The end of a simulation before its script settles, at a call that gets no usable scripted return or before a script that reads a name the running Node lacks. |
 | group | One `parallel()` or `pipeline()` invocation in a simulation. Each call made inside it records the group's index. |
 | runtime | The Claude Code Workflow runtime. The simulator is this project's stand-in for it. |
 

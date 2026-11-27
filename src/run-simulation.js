@@ -10,8 +10,9 @@ import { installRuntimeGlobals } from './runtime-globals.js';
 /** @typedef {import('./runtime-globals.js').InstalledRuntime} InstalledRuntime */
 
 /**
- * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string }} SimulationEnd
- *   How the script ended. `value` is the JSON value the runtime reports for the return.
+ * @typedef {{ kind: 'returned', value: unknown } | { kind: 'threw', name: string, message: string } | { kind: 'stopped' }} SimulationEnd
+ *   How the script ended. `value` is the JSON value the runtime reports for the return. `stopped` when
+ *   `answerCall` threw a SimulationStop before the script settled.
  */
 
 /**
@@ -45,9 +46,10 @@ import { installRuntimeGlobals } from './runtime-globals.js';
  * @typedef {object} SimulationOptions
  * @property {unknown} [args] A JSON value, or absent for no args.
  * @property {{ total?: number | null, spent?: number }} [budget]
- * @property {(call: AgentCall) => unknown} answerCall Gives the value the script gets from one agent()
- *   call. A thrown error, or a promise it gives that rejects, rejects that call. The script gets that
- *   value or error itself, not a copy of the script's realm.
+ * @property {(call: AgentCall) => unknown} answerCall Gives the value of one agent() call, and the script
+ *   gets a copy of it made as a list leaving parallel() is copied. A thrown error, or a promise it gives
+ *   that rejects, rejects that call, and the script gets that error itself. A SimulationStop thrown or
+ *   rejected that way ends the simulation instead, and the call never settles.
  */
 
 /**
@@ -85,12 +87,23 @@ const CYCLE = Symbol('cycle');
 const NO_GROUP = -1;
 const hasInstance = Function.prototype[Symbol.hasInstance];
 const ignoreRejection = () => {};
+// A context that runs no script reads no args and no budget.
+const IDLE_SETTINGS = Object.freeze({ globalNames: RUNTIME_GLOBAL_NAMES, argsText: undefined, budgetTotal: null, budgetSpent: 0 });
+
+/** Ends a simulation at the agent() call whose `answerCall` throws it, so the script runs no further. */
+export class SimulationStop extends Error {
+  constructor() {
+    super('The simulation stopped at an agent() call');
+    this.name = 'SimulationStop';
+  }
+}
 
 /**
  * Runs a workflow script as the runtime of Claude Code 2.1.332 runs it, with no model call: each agent()
- * call gets what `answerCall` gives. Time is virtual. A timer runs once no other code of the script can
- * run and no answer is pending, so a wait of any length ends at once. A timer callback that throws ends
- * nothing, as an unhandled rejection ends nothing, since the runtime's handling of it was not measured.
+ * call gets what `answerCall` gives, once agent() has checked the call's schema. Time is virtual. A timer
+ * runs once no other code of the script can run and no answer is pending, so a wait of any length ends at
+ * once. A timer callback that throws ends nothing, as an unhandled rejection ends nothing, since the
+ * runtime's handling of it was not measured.
  * Rejects when the text does not parse, does not open with the meta statement, or has a body that does not
  * compile. It checks no other rule of the contract, so a script the runtime refuses for another rule runs.
  * @param {string} text The entire script.
@@ -103,23 +116,45 @@ export async function runSimulation(text, options, scriptTimeLimit = SCRIPT_TIME
   const settings = readSettings(options);
   const script = new Script(`${wrapScriptBody(text, readMetaEnd(text))}()`, { filename: SCRIPT_FILE_NAME });
   const { simulation, host } = createSimulation(options.answerCall);
-  const context = createContext(Object.create(null), CONTEXT_OPTIONS);
-  const installRuntime = runInContext(`(${installRuntimeGlobals})`, context);
-  /** @type {InstalledRuntime} */
-  const runtime = installRuntime(host, settings);
+  const { context, runtime } = createScriptContext(host, settings);
   const stopIgnoringRejections = ignoreScriptRejections(runtime.ScriptPromise);
+  const stopRecordingSettled = recordSettledPromises(simulation.settledPromises);
   let end = null;
 
   try {
     end = await runScript(script, context, scriptTimeLimit, simulation, runtime);
   } finally {
     simulation.isActive = false;
+    stopRecordingSettled();
     // Code the script queued before it ended still runs, and may reject.
     await waitForIdle();
     stopIgnoringRejections();
   }
 
   return { end, logs: simulation.logs, phases: simulation.phases, groups: simulation.groups };
+}
+
+/**
+ * @returns {string[]} The names of RUNTIME_GLOBAL_NAMES that a simulation's global object lacks, since the
+ *   running Node does not define them, such as Temporal on Node 24.
+ */
+export function listMissingGlobalNames() {
+  const { context } = createScriptContext(createSimulation(() => null).host, IDLE_SETTINGS);
+  const definedNames = new Set(runInContext('Object.getOwnPropertyNames(globalThis)', context));
+
+  return RUNTIME_GLOBAL_NAMES.filter((name) => !definedNames.has(name));
+}
+
+/**
+ * @param {import('./runtime-globals.js').RuntimeHost} host
+ * @param {import('./runtime-globals.js').RuntimeSettings} settings
+ * @returns {{ context: import('node:vm').Context, runtime: InstalledRuntime }}
+ */
+function createScriptContext(host, settings) {
+  const context = createContext(Object.create(null), CONTEXT_OPTIONS);
+  const installRuntime = runInContext(`(${installRuntimeGlobals})`, context);
+
+  return { context, runtime: installRuntime(host, settings) };
 }
 
 /**
@@ -163,6 +198,12 @@ function createSimulation(answerCall) {
   const groupStore = new AsyncLocalStorage();
   const simulation = {
     isActive: true,
+    // A stop ends the simulation only before the script's promise settles, and the earlier of the two wins.
+    /** @type {Promise<unknown> | null} */
+    scriptPromise: null,
+    /** @type {WeakSet<Promise<unknown>>} */
+    settledPromises: new WeakSet(),
+    isStopped: false,
     callCount: 0,
     time: 0,
     nextTimerId: 1,
@@ -225,7 +266,7 @@ function answerAgentCall(simulation, answerCall, call, resolve, reject) {
   try {
     answer = answerCall(call);
   } catch (error) {
-    reject(error);
+    rejectAgentCall(simulation, error, reject);
     return;
   }
   if (!isThenable(answer)) {
@@ -238,11 +279,28 @@ function answerAgentCall(simulation, answerCall, call, resolve, reject) {
       if (simulation.isActive) resolve(value);
     },
     (error) => {
-      if (simulation.isActive) reject(error);
+      if (simulation.isActive) rejectAgentCall(simulation, error, reject);
     },
   );
   simulation.pendingAnswers.add(settled);
   settled.then(() => simulation.pendingAnswers.delete(settled));
+}
+
+/**
+ * Rejects one agent() call with what `answerCall` threw, or stops the simulation for a SimulationStop and
+ * leaves the call unsettled.
+ * @param {ReturnType<typeof createSimulation>['simulation']} simulation
+ * @param {unknown} error
+ * @param {(reason: unknown) => void} reject
+ */
+function rejectAgentCall(simulation, error, reject) {
+  if (!(error instanceof SimulationStop)) {
+    reject(error);
+    return;
+  }
+  if (simulation.settledPromises.has(simulation.scriptPromise)) return;
+  simulation.isStopped = true;
+  simulation.isActive = false;
 }
 
 /**
@@ -306,11 +364,14 @@ async function runScript(script, context, scriptTimeLimit, simulation, runtime) 
     scriptPromise = script.runInContext(context, { timeout: scriptTimeLimit });
   } catch (error) {
     if (error?.code !== TIMEOUT_CODE) throw error;
+    if (simulation.isStopped) return { kind: 'stopped' };
     return { kind: 'threw', name: 'Error', message: TIMEOUT_MESSAGE };
   }
+  simulation.scriptPromise = scriptPromise;
 
   const outcome = await settleScript(scriptPromise, simulation);
 
+  if (simulation.isStopped) return { kind: 'stopped' };
   if (outcome === null) return { kind: 'threw', name: 'Error', message: NEVER_SETTLES_MESSAGE };
   if (outcome.isRejected) return convertThrown(outcome.value, simulation.runtimeErrors);
   return convertReturned(outcome.value, runtime.copyValue, simulation.runtimeErrors);
@@ -320,23 +381,23 @@ async function runScript(script, context, scriptTimeLimit, simulation, runtime) 
  * Runs the script's queued code, then its pending answers and timers, until its promise settles.
  * @param {Promise<unknown>} scriptPromise A promise of the script's realm.
  * @param {ReturnType<typeof createSimulation>['simulation']} simulation
- * @returns {Promise<{ isRejected: boolean, value: unknown } | null>} Null when the promise can never settle.
+ * @returns {Promise<{ isRejected: boolean, value: unknown } | null>} Null when the promise can never settle,
+ *   or settles after a stop.
  */
 async function settleScript(scriptPromise, simulation) {
   let outcome = null;
+  const settle = (isRejected, value) => {
+    if (!simulation.isStopped) outcome = { isRejected, value };
+  };
 
   // The host's then, since the script may replace the one of its own realm.
   Promise.prototype.then.call(
     scriptPromise,
-    (value) => {
-      outcome = { isRejected: false, value };
-    },
-    (value) => {
-      outcome = { isRejected: true, value };
-    },
+    (value) => settle(false, value),
+    (value) => settle(true, value),
   );
   await waitForIdle();
-  while (outcome === null) {
+  while (outcome === null && !simulation.isStopped) {
     if (simulation.pendingAnswers.size > 0) {
       await Promise.race(simulation.pendingAnswers);
     } else {
@@ -440,7 +501,7 @@ function readTag(value) {
  * @returns {string} `String` of the value, or its tag for a value `String` refuses, such as an object with
  *   no prototype.
  */
-function convertToText(value) {
+export function convertToText(value) {
   try {
     return String(value);
   } catch {
@@ -464,6 +525,19 @@ function ignoreScriptRejections(ScriptPromise) {
     } catch {
       // A script that replaced its promises' constructor may throw here, and its rejection then shows.
     }
+  });
+}
+
+/**
+ * Records each promise the moment it settles. The host's then reaction on the script's promise runs only
+ * after the microtasks the script queued before it settled, and an agent() call one of them makes comes
+ * after the script settled.
+ * @param {WeakSet<Promise<unknown>>} settledPromises
+ * @returns {() => void} Stops it.
+ */
+function recordSettledPromises(settledPromises) {
+  return promiseHooks.onSettled((promise) => {
+    settledPromises.add(promise);
   });
 }
 

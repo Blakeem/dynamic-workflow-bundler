@@ -39,11 +39,24 @@ export async function validate(options = /** @type {ValidateOptions} */ ({})) {
   const { script } = options;
   if (typeof script !== 'string' || script === '') throw new UsageError('validate() needs script, the path of a workflow script');
 
+  const { scriptPath, findings } = await checkScriptFile(script);
+
+  return { ok: findings.length === 0, script: scriptPath, runtime: CONTRACT_RUNTIME_VERSION, findings };
+}
+
+/**
+ * Reads a workflow script file and checks it against the contract, as validate() does.
+ * @param {string} script A path that is not empty, as ValidateOptions holds it.
+ * @returns {Promise<{ scriptPath: string, text: string | null, findings: Finding[] }>} `scriptPath` as
+ *   ValidateResult names it. `text` is null for a file larger than READ_BYTE_LIMIT.
+ */
+export async function checkScriptFile(script) {
   const { size, bytes } = await readScript(script);
   const scriptPath = await formatRealDisplayPath(script);
   // The runtime of Claude Code 2.1.332 decodes the file with toString('utf-8'), which reads a byte sequence that
   // is not valid UTF-8 as U+FFFD.
-  const findings = bytes === null ? checkScriptSize(size, scriptPath) : checkContract(bytes.toString('utf8'), scriptPath, size);
+  const text = bytes === null ? null : bytes.toString('utf8');
+  const findings = text === null ? checkScriptSize(size, scriptPath) : checkContract(text, scriptPath, size);
 
-  return { ok: findings.length === 0, script: scriptPath, runtime: CONTRACT_RUNTIME_VERSION, findings };
+  return { scriptPath, text, findings };
 }
