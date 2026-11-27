@@ -26,8 +26,8 @@ function createStoppedTrace() {
       { index: 3, label: null, prompt: 'Merge', opts: null, group: { group: 1, item: 0, stage: 1 }, phase: null },
     ],
     groups: [
-      { kind: 'parallel', items: 2, stages: 1 },
-      { kind: 'pipeline', items: 1, stages: 2 },
+      { kind: 'parallel', items: 2, stages: 1, parent: null, beforeCall: 1 },
+      { kind: 'pipeline', items: 1, stages: 2, parent: null, beforeCall: 3 },
     ],
     phases: [
       { title: 'Plan', beforeCall: 0 },

@@ -75,7 +75,8 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * @property {string} runtime The Claude Code version the simulation stands in for.
  * @property {TraceEnd} end
  * @property {TraceCall[]} calls
- * @property {import('./run-simulation.js').Group[]} groups
+ * @property {import('./run-simulation.js').Group[]} groups Each `beforeCall` counts only the calls of
+ *   `calls`.
  * @property {import('./run-simulation.js').Phase[]} phases Each `beforeCall` counts only the calls of
  *   `calls`.
  * @property {string[]} logs
@@ -129,15 +130,16 @@ export async function simulate(options = /** @type {{ script: string }} */ ({}))
 
   if (recorder.respondFailure !== null) throw await createRespondFailure(recorder.respondFailure.call, recorder.respondFailure.error);
 
-  const { events, phases } = convertEvents(result, recorder.rejectedCalls);
+  const droppedCalls = recorder.rejectedCalls;
+  const events = convertEvents(result.events, droppedCalls);
 
   return {
     ...traceHead,
     // runSimulation ignores a stop at a call made after the script settled, so only a stop before it ends the trace.
     end: result.end.kind === 'stopped' ? /** @type {TraceEnd} */ (recorder.stopEnd) : convertRunEnd(result.end),
     calls: recorder.calls,
-    groups: result.groups,
-    phases,
+    groups: result.groups.map((group) => ({ ...group, parent: copyGroupStamp(group.parent), beforeCall: countTraceCalls(group.beforeCall, droppedCalls) })),
+    phases: result.phases.map((phase) => ({ ...phase, beforeCall: countTraceCalls(phase.beforeCall, droppedCalls) })),
     logs: result.logs,
     events,
   };
@@ -145,27 +147,47 @@ export async function simulate(options = /** @type {{ script: string }} */ ({}))
 
 /**
  * Gives each call event the index of its call in the trace, and drops the event of each call the trace
- * drops, so each phase's beforeCall counts only the calls of the trace.
- * @param {import('./run-simulation.js').SimulationResult} result
+ * drops.
+ * @param {import('./run-simulation.js').SimulationEvent[]} simulationEvents
  * @param {Set<number>} droppedCalls The index of each dropped call among the calls `answerCall` got.
- * @returns {{ events: TraceEvent[], phases: import('./run-simulation.js').Phase[] }}
+ * @returns {TraceEvent[]}
  */
-function convertEvents(result, droppedCalls) {
+function convertEvents(simulationEvents, droppedCalls) {
   const events = [];
-  const phases = [];
   let callCount = 0;
 
-  for (const event of result.events) {
+  for (const event of simulationEvents) {
     if (event.kind === 'call' && droppedCalls.has(event.index)) continue;
     if (event.kind === 'call') {
       events.push({ kind: 'call', index: callCount });
       callCount += 1;
       continue;
     }
-    if (event.kind === 'phase') phases.push({ ...result.phases[event.index], beforeCall: callCount });
     events.push({ kind: event.kind, index: event.index });
   }
-  return { events, phases };
+  return events;
+}
+
+/**
+ * @param {number} beforeCall The count of the calls `answerCall` got before a phase or a group.
+ * @param {Set<number>} droppedCalls The index of each dropped call among those calls.
+ * @returns {number} The count of the trace's calls before that phase or group.
+ */
+function countTraceCalls(beforeCall, droppedCalls) {
+  let droppedBefore = 0;
+
+  for (const index of droppedCalls) {
+    if (index < beforeCall) droppedBefore += 1;
+  }
+  return beforeCall - droppedBefore;
+}
+
+/**
+ * @param {Readonly<import('./run-simulation.js').GroupStamp> | null} stamp A stamp of the simulation.
+ * @returns {import('./run-simulation.js').GroupStamp | null} A copy of the stamp for the trace.
+ */
+function copyGroupStamp(stamp) {
+  return stamp === null ? null : { group: stamp.group, item: stamp.item, stage: stamp.stage };
 }
 
 /**
@@ -353,7 +375,7 @@ function convertCall(agentCall, index) {
     label,
     prompt: convertToText(prompt),
     opts: copyOptions(opts),
-    group: group === null ? null : { group: group.group, item: group.item, stage: group.stage },
+    group: copyGroupStamp(group),
     phase,
   };
 }

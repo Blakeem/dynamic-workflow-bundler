@@ -122,11 +122,67 @@ describe('the trace', () => {
         { index: 1, label: 'plan loader', prompt: 'Plan the loader', opts: { label: 'plan loader' }, group: { group: 0, item: 1, stage: 0 }, phase: 'Plan', returned: plans[1] },
         { index: 2, label: 'plan writer', prompt: 'Plan the writer', opts: { label: 'plan writer' }, group: { group: 0, item: 2, stage: 0 }, phase: 'Plan', returned: plans[2] },
       ],
-      groups: [{ kind: 'parallel', items: 3, stages: 1 }],
+      groups: [{ kind: 'parallel', items: 3, stages: 1, parent: null, beforeCall: 0 }],
       phases: [{ title: 'Plan', beforeCall: 0 }],
       logs: ['plans: 3'],
       events: [{ kind: 'phase', index: 0 }, { kind: 'call', index: 0 }, { kind: 'call', index: 1 }, { kind: 'call', index: 2 }, { kind: 'log', index: 0 }],
     });
+  });
+
+  it('records the lane that invoked each group and the count of calls made before it, and stamps each call with its innermost group', async () => {
+    const body = [
+      "await parallel([() => agent('Top', { label: 'top' })])",
+      "await pipeline(['p'], () => parallel([() => agent('Stage', { label: 'stage' })]))",
+      'await parallel([',
+      "  () => agent('Sibling', { label: 'sibling' }),",
+      "  async () => { await agent('Before', { label: 'before' }); return parallel([() => agent('After', { label: 'after' })]) },",
+      '])',
+      "await parallel([() => new Promise((resolve) => setTimeout(() => resolve(parallel([() => agent('Timer', { label: 'timer' })])), 10))])",
+      "await Promise.all([parallel([() => agent('Left', { label: 'left' })]), parallel([() => agent('Right', { label: 'right' })])])",
+      "return 'done'",
+    ].join('\n');
+    const trace = await simulateScript(await writeScript('group-parents.js', body), { respond: { '': 'any' } });
+    const parallelGroup = (items, parent, beforeCall) => ({ kind: 'parallel', items, stages: 1, parent, beforeCall });
+
+    assert.deepEqual(trace.end, { kind: 'returned', value: 'done' });
+    assert.deepEqual(trace.groups, [
+      parallelGroup(1, null, 0),
+      { kind: 'pipeline', items: 1, stages: 1, parent: null, beforeCall: 1 },
+      parallelGroup(1, { group: 1, item: 0, stage: 0 }, 1),
+      parallelGroup(2, null, 2),
+      parallelGroup(1, { group: 3, item: 1, stage: 0 }, 4),
+      parallelGroup(1, null, 5),
+      parallelGroup(1, { group: 5, item: 0, stage: 0 }, 5),
+      parallelGroup(1, null, 6),
+      parallelGroup(1, null, 6),
+    ]);
+    assert.deepEqual(trace.calls.map((call) => [call.label, call.group]), [
+      ['top', { group: 0, item: 0, stage: 0 }],
+      ['stage', { group: 2, item: 0, stage: 0 }],
+      ['sibling', { group: 3, item: 0, stage: 0 }],
+      ['before', { group: 3, item: 1, stage: 0 }],
+      ['after', { group: 4, item: 0, stage: 0 }],
+      ['timer', { group: 6, item: 0, stage: 0 }],
+      ['left', { group: 7, item: 0, stage: 0 }],
+      ['right', { group: 8, item: 0, stage: 0 }],
+    ]);
+  });
+
+  it("counts a group's beforeCall without a call rejected for options the simulation cannot read, as a phase's", async () => {
+    const body = [
+      "try { await agent('Bad', { get label() { throw new Error('no label') } }) } catch {}",
+      "phase('After')",
+      "await parallel([() => agent('Good', { label: 'good' })])",
+      "return 'done'",
+    ].join('\n');
+    const trace = await simulateScript(await writeScript('rejected-before-group.js', body), { respond: { '': 'any' } });
+
+    assert.deepEqual(trace.end, { kind: 'returned', value: 'done' });
+    assert.deepEqual([trace.calls.map((call) => call.label), trace.phases, trace.groups], [
+      ['good'],
+      [{ title: 'After', beforeCall: 0 }],
+      [{ kind: 'parallel', items: 1, stages: 1, parent: null, beforeCall: 0 }],
+    ]);
   });
 
   it('answers a review loop from a list, fail then pass', async () => {

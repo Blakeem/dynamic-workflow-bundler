@@ -55,6 +55,9 @@ import { findPosition, readPositionText } from './source-position.js';
  * @property {'parallel' | 'pipeline'} kind
  * @property {number} items The count of thunks or items.
  * @property {number} stages 1 for parallel().
+ * @property {Readonly<GroupStamp> | null} parent The lane that invoked it, or null for an invocation outside
+ *   every group.
+ * @property {number} beforeCall The count of agent() calls made before it.
  */
 
 /**
@@ -404,7 +407,7 @@ function createSimulation(answerCall) {
     },
     openGroup: (kind, items, stages) => {
       if (!simulation.isActive) return NO_GROUP;
-      return simulation.groups.push({ kind, items, stages }) - 1;
+      return simulation.groups.push({ kind, items, stages, parent: groupStore.getStore() ?? null, beforeCall: simulation.callCount }) - 1;
     },
     runInGroup: (group, item, stage, run) => groupStore.run(Object.freeze({ group, item, stage }), run),
     createRuntimeError: (name, message) => {

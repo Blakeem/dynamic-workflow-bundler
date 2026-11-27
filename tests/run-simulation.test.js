@@ -572,7 +572,10 @@ describe('groups and phases', () => {
       'stage 1 b': { group: 1, item: 1, stage: 1 },
       last: null,
     });
-    assert.deepEqual(result.groups, [{ kind: 'parallel', items: 4, stages: 1 }, { kind: 'pipeline', items: 2, stages: 2 }]);
+    assert.deepEqual(result.groups, [
+      { kind: 'parallel', items: 4, stages: 1, parent: null, beforeCall: 1 },
+      { kind: 'pipeline', items: 2, stages: 2, parent: null, beforeCall: 5 },
+    ]);
     assert.deepEqual(result.phases, [{ title: 'One', beforeCall: 0 }, { title: '2', beforeCall: 5 }]);
   });
 
