@@ -43,6 +43,14 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | throw site | One `throw new <Name>(...)` statement of a script, with the fixed text its message starts with. |
 | end state | A named way a script ends: the `status` of the object it returns, the name a scenario gives, or a throw site. |
 | flow map | The graph of every path that the scenarios of one script reach, written as a Mermaid diagram with tables. |
+| node | One box of a flow map: the start, a role, an end state or a throw site. |
+| edge | One step of a flow map, from a node to the node a path reaches next. |
+| context | The top level of a trace, or one lane of a group, with the calls it made and the groups it started. |
+| segment | A part of the calls of one context that a flow map folds as one unit: a run of its own calls, or the groups it started that ran at the same time. |
+| lane | The calls of one item of a group. |
+| back edge | An edge into a node that the path reached before, which closes a loop. |
+| next-item edge | An edge between two calls whose items differ, the step from one item of work to the next. |
+| loop | A back edge, with the count of times one lane walks it. |
 | scripted return | The value a scenario gives one call. `null` stands for an agent that died. |
 | stop | The end of a simulation that cannot go on: at a call that gets no usable scripted return, at the call after the runtime's cap on `agent()` calls, when the script waits on a promise that nothing settles, or before a script that reads a name the running Node lacks. |
 | group | One `parallel()` or `pipeline()` invocation in a simulation. Each call made inside it records the group's index. |
