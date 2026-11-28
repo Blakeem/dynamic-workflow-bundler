@@ -61,7 +61,7 @@ describe('checkConfig', () => {
   it('names promptBudgets of another shape, the role of a prompt budget of another shape and promptBudgets with no snapshot', () => {
     const label = 'Workflow 1 of the config file dwfb.config.js';
     const row = { entry: 'a.js', out: 'a.out.js', scenarios: 's.js', snapshot: 'a.md' };
-    const refusedShapes = [null, 5, 'review', [4000]];
+    const refusedShapes = [null, 5, 'review', [4000], new Map()];
     const refusedPromptBudgets = [0, 1.5, '4000', Number.NaN, Number.POSITIVE_INFINITY, -1];
 
     for (const promptBudgets of refusedShapes) assertUsageError({ workflows: [{ ...row, promptBudgets }] }, `${label} takes promptBudgets as an object that gives a role a whole number of 1 or more`);

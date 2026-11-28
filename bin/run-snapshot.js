@@ -24,11 +24,11 @@ snapshot.
 
 A variant is one distinct prompt of a role. Two prompts of one role are one variant when they have one schema
 and are equal once three masks are applied in this order: the item of the call's label is written as <item>
-where no letter or digit touches it, unless the later masks turn the item into one N, each UUID and each
-lowercase hex word of 8 or more characters is written as N, and each run of digits is written as N. The role
-of a call is the longest role of the script that its label starts with, else its label when the label is not
-empty, else (no label). The promptBudgets of the config workflow give each role the most characters its
-largest prompt may hold.
+where no letter or decimal digit of any script touches it, unless the later masks turn the item into one N,
+each UUID and each lowercase hex word of 8 or more characters is written as N, and each run of decimal digits
+of any script is written as N. The role of a call is the longest role of the script that its label starts
+with, else its label when the label is not empty, else (no label). The promptBudgets of the config workflow
+give each role the most characters its largest prompt may hold.
 
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.

@@ -1520,6 +1520,20 @@ describe('dwfb map', () => {
     assert.equal(await readFile(file, 'utf8'), await formatExpectedFlowMap(folder));
   });
 
+  it('writes a lone surrogate and a U+0000 of the title and an end state as escapes, so the file holds no NUL byte and no replacement character, and is fresh', async () => {
+    const folder = await writeMapFolder();
+    const args = ['map', 'lone.js', '--scenarios', 'lone.scenarios.js', '--out', 'lone.md'];
+    await writeFile(join(folder, 'lone.js'), "export const meta = { name: 'fl\\uD83Dow', description: 'd' };\nawait agent('Work.', { label: 'work' });\nreturn { status: 'done \\u0000 y' };\n");
+    await writeFile(join(folder, 'lone.scenarios.js'), "export default [{ name: 'works', respond: { work: 'ok' } }];\n");
+
+    assert.deepEqual(runCommand(args, folder), { status: 0, stdout: 'Wrote lone.md.\n', stderr: '' });
+    const bytes = await readFile(join(folder, 'lone.md'));
+    assert.equal(bytes.includes(0x00), false);
+    assert.equal(bytes.includes(Buffer.from([0xef, 0xbf, 0xbd])), false);
+    assert.match(bytes.toString('utf8'), /^# fl\\\\u\{D83D\}ow flow map\n[^]*\(\["done \\u\{0000\} y"\]\)\n[^]*\n\| done \\\\u\{0000\} y \| works \| returned \|\n/);
+    assert.deepEqual(runCommand([...args, '--check'], folder), { status: 0, stdout: 'Fresh lone.md.\n', stderr: '' });
+  });
+
   it('writes the map of the config workflow whose out is the script, and with no script the map of each workflow that has one', async () => {
     const folder = await writeMapFolder();
     const flowMap = await formatExpectedFlowMap(folder);
@@ -2121,6 +2135,28 @@ describe('dwfb snapshot', () => {
     assert.deepEqual(await readdir(join(folder, 'prompts')), ['flow.prompts.md']);
   });
 
+  it('writes a prompt snapshot file that names the flow map file of a config workflow with --scenarios, since a named scenarios file reads no config file', async () => {
+    const folder = await writeSnapshotFolder();
+    await mkdir(join(folder, 'maps'));
+    await writeFile(join(folder, 'maps', 'flow.flow-map.md'), 'map\n');
+
+    assert.deepEqual(runCommand(['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'maps/flow.flow-map.md'], folder), { status: 0, stdout: `Wrote maps/flow.flow-map.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal(await readFile(join(folder, 'maps', 'flow.flow-map.md'), 'utf8'), await readOracleDocument());
+  });
+
+  it('writes a lone surrogate and a U+0000 of a prompt as escapes, so the file holds no NUL byte and no replacement character, and is fresh', async () => {
+    const folder = await writeSnapshotFolder();
+    const args = ['snapshot', 'lone.js', '--scenarios', 'flow.scenarios.js', '--out', 'lone.md'];
+    await writeFile(join(folder, 'lone.js'), "export const meta = { name: 'lone', description: 'd' };\nawait agent('Work \\uD83D and \\u0000.', { label: 'work' });\nreturn { status: 'done' };\n");
+
+    assert.deepEqual(runCommand(args, folder), { status: 0, stdout: 'Wrote lone.md.\n  work: 13 characters\n', stderr: '' });
+    const bytes = await readFile(join(folder, 'lone.md'));
+    assert.equal(bytes.includes(0x00), false);
+    assert.equal(bytes.includes(Buffer.from([0xef, 0xbf, 0xbd])), false);
+    assert.match(bytes.toString('utf8'), /\nWork \\u\{D83D\} and \\u\{0000\}\.\n/);
+    assert.deepEqual(runCommand([...args, '--check'], folder), { status: 0, stdout: 'Fresh lone.md.\n  work: 13 characters\n', stderr: '' });
+  });
+
   it('refuses a config snapshot path that names a folder before it writes any prompt snapshot', async () => {
     const folder = await writeSnapshotFolder();
     await mkdir(join(folder, 'prompts', 'flow.prompts.md'), { recursive: true });
@@ -2205,7 +2241,7 @@ describe('dwfb snapshot', () => {
 
     assert.equal(status, 0);
     assert.match(stdout, /^Usage: dwfb snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[--check\] \[--config <path>\] \[--json\] \[--help\]\n[^]*\n {2}--out <file> {9}Write the prompt snapshot to this file\.\n/);
-    assert.match(stdout, /the item of the call's label is written as <item>\nwhere no letter or digit touches it, unless the later masks turn the item into one N, each UUID and each\nlowercase hex word of 8 or more characters is written as N, and each run of digits is written as N\./);
+    assert.match(stdout, /the item of the call's label is written as <item>\nwhere no letter or decimal digit of any script touches it, unless the later masks turn the item into one N,\neach UUID and each lowercase hex word of 8 or more characters is written as N, and each run of decimal digits\nof any script is written as N\./);
     assert.match(runCommand(['--help']).stdout, /\n {2}snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
   });
 });

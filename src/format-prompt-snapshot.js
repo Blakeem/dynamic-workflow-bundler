@@ -1,5 +1,5 @@
 import { escapeCell } from './escape-cell.js';
-import { formatHiddenCharacters } from './format-hidden-characters.js';
+import { formatHiddenCharacters, formatUnwritableCharacters } from './format-hidden-characters.js';
 
 /** @typedef {import('./build-prompt-snapshot.js').PromptVariant} PromptVariant */
 
@@ -34,7 +34,8 @@ function formatVariant({ role, number, schemaNumber, scenario, label, prompt, sc
   const scenarioText = `the scenario "${formatName(scenario)}"`;
   const callLine = formatCallLine(label, scenarioText);
 
-  return [`## ${formatName(role)}, variant ${number}, schema ${schemaNumber}`, callLine, formatFence('text', prompt), formatFence('json', JSON.stringify(schema, null, 2))].join('\n\n');
+  // `JSON.stringify` already escapes each lone surrogate and each U+0000 of the schema text.
+  return [`## ${formatName(role)}, variant ${number}, schema ${schemaNumber}`, callLine, formatFence('text', formatUnwritableCharacters(prompt)), formatFence('json', JSON.stringify(schema, null, 2))].join('\n\n');
 }
 
 /**

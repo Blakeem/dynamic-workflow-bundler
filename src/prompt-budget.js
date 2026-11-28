@@ -1,3 +1,4 @@
+import { isPlainObject } from './find-non-json-value.js';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { isObject } from './is-object.js';
 import { UsageError } from './usage-error.js';
@@ -18,7 +19,8 @@ export function isPromptBudget(value) {
  * @returns {asserts value is Record<string, number>}
  */
 export function checkPromptBudgets(value, label) {
-  if (!isObject(value)) throw new UsageError(`${label} takes promptBudgets as an object that gives a role ${PROMPT_BUDGET_SHAPE}`);
+  // Each caller copies promptBudgets by its own keys, which a Map leaves empty and a class instance may not hold.
+  if (!isObject(value) || !isPlainObject(value)) throw new UsageError(`${label} takes promptBudgets as an object that gives a role ${PROMPT_BUDGET_SHAPE}`);
   const refusedRole = Object.keys(value).find((role) => !isPromptBudget(value[role]));
   if (refusedRole !== undefined) throw new UsageError(`${label} takes the prompt budget of the role "${formatHiddenCharacters(refusedRole)}" as ${PROMPT_BUDGET_SHAPE}`);
 }

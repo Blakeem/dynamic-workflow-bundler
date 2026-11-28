@@ -151,6 +151,30 @@ describe('buildPromptSnapshot', () => {
     assert.equal(result.variants?.length, 1);
   });
 
+  it('masks each run of decimal digits of any script, and keeps a number character that is no decimal digit', () => {
+    const arabicIndic = build([createSimulation('a', [{ label: 'verify r1', prompt: 'Check round ١٢.' }, { label: 'verify r2', prompt: 'Check round ٣.' }])]);
+    const fullwidth = build([createSimulation('a', [{ label: 'verify r1', prompt: 'Check round １２.' }, { label: 'verify r2', prompt: 'Check round ３.' }])]);
+    const superscript = build([createSimulation('a', [{ label: 'verify r1', prompt: 'Check x².' }, { label: 'verify r2', prompt: 'Check x³.' }])]);
+
+    assert.equal(arabicIndic.variants?.length, 1);
+    assert.equal(fullwidth.variants?.length, 1);
+    assert.equal(superscript.variants?.length, 2);
+  });
+
+  it('leaves an item that a decimal digit of any script touches unmasked, and masks one that a superscript two touches', () => {
+    const touched = [
+      { label: 'review:core', prompt: 'Review core١.' },
+      { label: 'review:tools', prompt: 'Review tools١.' },
+    ];
+    const superscript = [
+      { label: 'review:core', prompt: 'Review core².' },
+      { label: 'review:tools', prompt: 'Review tools².' },
+    ];
+
+    assert.deepEqual(listVariantNames(build([createSimulation('a', touched)])), ['review 1 1 review:core', 'review 2 1 review:tools']);
+    assert.deepEqual(listVariantNames(build([createSimulation('a', superscript)])), ['review 1 1 review:core']);
+  });
+
   it('masks the item of a call only when its role is a role of the script', () => {
     const calls = [
       { label: 'review:core', prompt: 'Review the unit core.' },

@@ -34,6 +34,16 @@ describe('checkPromptBudgets', () => {
     for (const value of [null, undefined, 5, 'review', [4000]]) assertUsageError(value, 'Workflow 1 takes promptBudgets as an object that gives a role a whole number of 1 or more');
   });
 
+  it('names the shape of promptBudgets for a Map and a class instance, and passes an object with no prototype', () => {
+    class PromptBudgets {
+      review = 4000;
+    }
+    const noPrototype = Object.assign(Object.create(null), { review: 4000 });
+
+    for (const value of [new Map([['review', 4000]]), new PromptBudgets()]) assertUsageError(value, 'Workflow 1 takes promptBudgets as an object that gives a role a whole number of 1 or more');
+    assert.doesNotThrow(() => checkPromptBudgets(noPrototype, 'Workflow 1'));
+  });
+
   it('names the first role whose value is not a prompt budget, with its hidden characters shown', () => {
     assertUsageError({ check: 9, 'review\n': 0, verify: -1 }, 'Workflow 1 takes the prompt budget of the role "review\\u{000A}" as a whole number of 1 or more');
   });

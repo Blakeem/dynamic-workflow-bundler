@@ -11,13 +11,14 @@ import { readItem } from './read-item.js';
 const NO_LABEL_ROLE = '(no label)';
 const ITEM_MASK = '<item>';
 const NUMBER_MASK = 'N';
-// A match ends at a character that is no letter or digit, since `\b` also counts `_` as part of a word.
-const NOT_AFTER_WORD = '(?<![\\p{L}\\p{N}])';
-const NOT_BEFORE_WORD = '(?![\\p{L}\\p{N}])';
+// A match ends at a character that is no letter or digit, since `\b` also counts `_` as part of a word. A digit
+// is a decimal digit of any script (Nd), as DIGIT_RUN masks it, so `²` and `½` are no digit.
+const NOT_AFTER_WORD = '(?<![\\p{L}\\p{Nd}])';
+const NOT_BEFORE_WORD = '(?![\\p{L}\\p{Nd}])';
 // A UUID comes first, since its 4-character segments are too short for a hex word. A UUID takes either case,
 // since its shape tells it from a word, and a hex word stays lowercase so a word such as `DEFACED1` keeps its letters.
 const HEX_ID = new RegExp(`${NOT_AFTER_WORD}(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|[0-9a-f]{8,})${NOT_BEFORE_WORD}`, 'gu');
-const DIGIT_RUN = /\d+/g;
+const DIGIT_RUN = /\p{Nd}+/gu;
 const REGEXP_SYNTAX_CHARACTER = /[\\^$.*+?()[\]{}|]/g;
 
 /**
@@ -120,9 +121,10 @@ function readSnapshotCall({ label, prompt, opts }, scenario, scriptRoles) {
  * @param {string} prompt
  * @param {string} item The call's item, or '' for none.
  * @returns {string} The prompt with the item masked, and then with the masks of maskNumbers. The item is
- *   masked only as a whole word, so the item `1` leaves the `1` of `12` to the number mask. An item that
- *   maskNumbers turns into one `N` is left to it, since the item `1` would also take the `1` of `round 1`. A
- *   word item that the prompt's fixed text also holds, such as `a`, still splits a variant.
+ *   masked only where no letter or decimal digit of any script touches it, so the item `1` leaves the `1` of
+ *   `12` to the number mask. An item that maskNumbers turns into one `N` is left to it, since the item `1`
+ *   would also take the `1` of `round 1`. A word item that the prompt's fixed text also holds, such as `a`,
+ *   still splits a variant.
  */
 function maskPrompt(prompt, item) {
   const isItemMasked = item !== '' && maskNumbers(item) !== NUMBER_MASK;
@@ -134,7 +136,7 @@ function maskPrompt(prompt, item) {
 /**
  * @param {string} text
  * @returns {string} The text with each UUID of either case and each lowercase hex word of 8 or more characters,
- *   and then each run of digits, written as `N`.
+ *   and then each run of decimal digits of any script, such as `12` or `١٢`, written as `N`.
  */
 function maskNumbers(text) {
   return text.replace(HEX_ID, NUMBER_MASK).replace(DIGIT_RUN, NUMBER_MASK);
@@ -142,7 +144,7 @@ function maskNumbers(text) {
 
 /**
  * @param {string} text
- * @returns {RegExp} A global pattern of each occurrence of the text that no letter or digit touches.
+ * @returns {RegExp} A global pattern of each occurrence of the text that no letter or decimal digit touches.
  */
 function createWordPattern(text) {
   return new RegExp(`${NOT_AFTER_WORD}${text.replace(REGEXP_SYNTAX_CHARACTER, '\\$&')}${NOT_BEFORE_WORD}`, 'gu');

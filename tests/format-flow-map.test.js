@@ -149,6 +149,34 @@ describe('formatFlowMap', () => {
     ]);
   });
 
+  it('writes each $ as #36; in the diagram and as <span>$</span> in a table cell, so neither Mermaid nor GitHub reads $$n$$ as math', () => {
+    const graph = {
+      nodes: [agentNode({ role: 'pay $$n$$', label: 'pay $$n$$', phase: 'P $1' }), endNode({ label: 'paid $$n$$', whens: ['it costs $n$'] })],
+      edges: [edge({}), edge({ from: 'a1', to: 't1' })],
+      phases: [{ id: 'p1', title: 'P $1', detail: 'D', nodes: ['a1'] }],
+      loops: [],
+    };
+    const document = formatFlowMap('t', graph);
+
+    assert.deepEqual(readDiagramBody(document).slice(0, 2), ['  a1["pay #36;#36;n#36;#36;<br/>P #36;1"]', '  t1(["paid #36;#36;n#36;#36;"])']);
+    assert.deepEqual(readTableRows(sliceMarkdownSection(document, '\n## End states\n')), ['| paid <span>$</span><span>$</span>n<span>$</span><span>$</span> | it costs <span>$</span>n<span>$</span> | returned |']);
+  });
+
+  it('writes each lone surrogate and each U+0000 of the title, a role, a phase and an end state as its escape, and keeps a surrogate pair and a U+200D', () => {
+    const graph = {
+      nodes: [agentNode({ role: 'w\uD83Dk', label: 'w\uD83Dk', phase: 'P\u0000' }), endNode({ label: 'done\uDE00', whens: ['it\u0000 ends 😀‍'] })],
+      edges: [edge({}), edge({ from: 'a1', to: 't1' })],
+      phases: [{ id: 'p1', title: 'P\u0000', detail: 'D\uD83D', nodes: ['a1'] }],
+      loops: [],
+    };
+    const document = formatFlowMap('t\uD83D', graph);
+
+    assert.ok(document.startsWith('# t\\\\u{D83D} flow map\n'));
+    assert.deepEqual(readDiagramBody(document).slice(0, 2), ['  a1["w\\u{D83D}k<br/>P\\u{0000}"]', '  t1(["done\\u{DE00}"])']);
+    assert.deepEqual(readTableRows(sliceMarkdownSection(document, '\n## Phases\n')), ['| P\\\\u{0000} | D\\\\u{D83D} |']);
+    assert.deepEqual(readTableRows(sliceMarkdownSection(document, '\n## End states\n')), ['| done\\\\u{DE00} | it\\\\u{0000} ends 😀‍ | returned |']);
+  });
+
   it('draws a phase of two or more nodes as a box, and the node of a one-node phase outside any box', () => {
     const graph = {
       nodes: [

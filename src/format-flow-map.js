@@ -1,4 +1,5 @@
 import { escapeCell } from './escape-cell.js';
+import { formatUnwritableCharacters } from './format-hidden-characters.js';
 
 /** @typedef {import('./build-flow-graph.js').FlowGraph} FlowGraph */
 /** @typedef {import('./build-flow-graph.js').FlowEdge} FlowEdge */
@@ -212,10 +213,12 @@ function formatPairKey({ from, to }) {
 /**
  * Mermaid ends a quoted text at `"` and an edge caption at `|`, reads a backtick right after the opening `"` as
  * the start of a markdown string, drops the text between `<` and `>` as an HTML tag, and decodes each `#<code>;`
- * as an entity code and each `&<name>;` as an HTML entity, as mermaid 11.4.1 renders it.
+ * as an entity code and each `&<name>;` as an HTML entity, and renders the text between `$$` and `$$` as KaTeX
+ * math, as mermaid 11.4.1 renders it. Mermaid swaps each `#<code>;` for a placeholder before it looks for `$$`.
+ * A lone surrogate and a U+0000 are written as their escape, such as \u{D83D}.
  * @param {string} text
  * @returns {string}
  */
 function escapeMermaid(text) {
-  return text.replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('#', '#35;').replaceAll('`', '#96;').replaceAll('&', '#38;').replaceAll('"', '#quot;').replaceAll('|', '#124;').replaceAll('<', '#lt;').replaceAll('>', '#gt;');
+  return formatUnwritableCharacters(text).replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('#', '#35;').replaceAll('$', '#36;').replaceAll('`', '#96;').replaceAll('&', '#38;').replaceAll('"', '#quot;').replaceAll('|', '#124;').replaceAll('<', '#lt;').replaceAll('>', '#gt;');
 }

@@ -111,6 +111,19 @@ describe('formatPromptSnapshot', () => {
     assert.equal(lines[11], '`work\\u{000A}next` in the scenario "one \\*two\\*\\\\u{000A}"');
   });
 
+  it('writes each $ of a role in its table row and its heading inside a span tag', () => {
+    const lines = formatLines(createVariant({ role: 'costs $n$' }));
+
+    assert.equal(lines[7], '| costs <span>$</span>n<span>$</span> | 1 | 1 | 4 | s |');
+    assert.equal(lines[9], '## costs <span>$</span>n<span>$</span>, variant 1, schema 1');
+  });
+
+  it('writes each lone surrogate and each U+0000 of a prompt as its escape, and keeps a surrogate pair', () => {
+    const lines = formatLines(createVariant({ prompt: 'a\uD83Db\uDE00c\u0000d😀' }));
+
+    assert.deepEqual(lines.slice(13, 16), ['~~~~text', 'a\\u{D83D}b\\u{DE00}c\\u{0000}d😀', '~~~~']);
+  });
+
   it('writes the prompt and the schema text as they are', () => {
     const lines = formatLines(createVariant({ prompt: 'a | <b> *c*', schema: { type: 'string' } }));
 
