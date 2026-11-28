@@ -24,6 +24,7 @@ const RULE_ORDER = [
   'unreached-misplaced',
   'unreached-no-reason',
   'role-unreached',
+  'role-reached',
   'throw-site-unreached',
   'throw-site-reached',
   'end-state-unreached',
@@ -45,6 +46,8 @@ const PHASES_KEY = 'phases';
  * @property {number} line The line of the value of the first `label` property that gives the role.
  * @property {number} column
  * @property {boolean} reached
+ * @property {string | null} unreachedReason The reason of the first `// @unreached` comment that marks a `label`
+ *   property of the role, '' for a mark with no reason, and null for a role with no mark.
  */
 
 /**
@@ -75,7 +78,7 @@ const PHASES_KEY = 'phases';
 
 /**
  * @typedef {object} Coverage
- * @property {RoleCoverage[] | null} roles In source order. Null when a scenario is unread.
+ * @property {RoleCoverage[] | null} roles In the order readRoles gives. Null when a scenario is unread.
  * @property {ThrowSiteCoverage[] | null} throwSites In source order. Null when a scenario is unread.
  * @property {EndStateCoverage[] | null} endStates In source order. Null when a scenario is unread, or for a
  *   script with no `// @end-states` comment that declares end states.
@@ -117,7 +120,7 @@ function readReach(file, text, runs) {
   const rolePlaces = readRolePlaces(program);
   const roles = rolePlaces.map(({ role }) => role);
   const scriptThrowSites = readThrowSites(program, text);
-  const { endStates: declaredEndStates, unreachedReasons, problems } = readCoverageDirectives(program, comments, text, scriptThrowSites);
+  const { endStates: declaredEndStates, unreachedReasons, roleMarks, problems } = readCoverageDirectives(program, comments, text, scriptThrowSites, rolePlaces);
   const { checkedPhases, listedTitles } = readMetaPhases(program);
   const reach = readScenarioReach(runs, roles, scriptThrowSites);
   const placedFindings = [];
@@ -126,10 +129,13 @@ function readReach(file, text, runs) {
 
   for (const { rule, message, offset } of problems) addFinding(rule, message, offset);
 
-  const roleCoverage = rolePlaces.map(({ role, offset }) => {
-    const reached = reach.roles.has(role);
-    if (!reached) addFinding('role-unreached', `No scenario reaches the role ${role}`, offset);
-    return { role, ...placeOffset(offset), reached };
+  const roleCoverage = rolePlaces.map(({ role, labels }) => {
+    const reacher = reach.roles.get(role);
+    const mark = roleMarks.get(role);
+    const unreachedReason = mark?.reason ?? null;
+    if (reacher === undefined && mark === undefined) addFinding('role-unreached', `No scenario reaches the role "${role}"`, labels[0].valueOffset);
+    if (reacher !== undefined && mark !== undefined) addFinding('role-reached', `The scenario "${reacher}" reaches the role "${role}", which a // @unreached comment marks`, mark.offset);
+    return { role, ...placeOffset(labels[0].valueOffset), reached: reacher !== undefined, unreachedReason };
   });
 
   const throwSiteCoverage = scriptThrowSites.map((site, index) => {
@@ -171,20 +177,21 @@ function readReach(file, text, runs) {
  * @param {CoverageSimulation[]} runs
  * @param {string[]} roles
  * @param {import('./read-throw-sites.js').ThrowSite[]} throwSites
- * @returns {{ roles: Set<string>, throwSites: Map<number, string>, endStates: Set<string>, callPhases: Set<string>, usedPhases: Map<string, string> }}
- *   `throwSites` maps the index of each reached site to the first scenario that reaches it. `endStates` holds each
+ * @returns {{ roles: Map<string, string>, throwSites: Map<number, string>, endStates: Set<string>, callPhases: Set<string>, usedPhases: Map<string, string> }}
+ *   `roles` maps each reached role to the first scenario that reaches it, and `throwSites` maps the index of each
+ *   reached site to the first scenario that reaches it. `endStates` holds each
  *   reached end state with digit runs written as `N`. `usedPhases` maps each title a call or a `phase()`
  *   invocation names to the first scenario that names it, in the order the scenarios first name them.
  */
 function readScenarioReach(runs, roles, throwSites) {
-  const reach = { roles: new Set(), throwSites: new Map(), endStates: new Set(), callPhases: new Set(), usedPhases: new Map() };
+  const reach = { roles: new Map(), throwSites: new Map(), endStates: new Set(), callPhases: new Set(), usedPhases: new Map() };
 
   for (const { name, endState, trace } of runs) {
     const { end, calls, phases, events } = trace;
 
     for (const call of calls) {
       const role = findRole(call.label, roles);
-      if (role !== null) reach.roles.add(role);
+      if (role !== null && !reach.roles.has(role)) reach.roles.set(role, name);
       if (call.phase !== null) reach.callPhases.add(call.phase);
     }
     for (const event of events) {

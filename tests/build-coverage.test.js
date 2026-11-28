@@ -82,28 +82,79 @@ describe('buildCoverage rules', () => {
     const passing = `${PLAIN_META}// @unreached reason\nthrow new Error('x');\n`;
 
     assert.deepEqual(coverText(broken, [createRun('a')]).findings, [
-      createExpectedFinding('unreached-misplaced', 'The // @unreached comment is not alone on the line above a throw site', { line: 2, column: 1 }),
+      createExpectedFinding('unreached-misplaced', 'The // @unreached comment is not alone on the line above a throw site or a label', { line: 2, column: 1 }),
     ]);
     assert.deepEqual(coverText(passing, [createRun('a')]).findings, []);
   });
 
-  it('unreached-no-reason, and a comment with no reason still marks its throw site', () => {
+  it('unreached-misplaced above a label property whose value gives no role', () => {
+    const text = `${PLAIN_META}// @unreached reason\nawait agent('p', { label: name });\n`;
+
+    assert.deepEqual(coverText(text, [createRun('a')]).findings.map(({ rule }) => rule), ['unreached-misplaced']);
+  });
+
+  it('unreached-no-reason, and a comment with no reason still marks its throw site or role', () => {
     const broken = `${PLAIN_META}  // @unreached\nthrow new Error('x');\n`;
     const passing = `${PLAIN_META}  // @unreached reason\nthrow new Error('x');\n`;
+    const brokenRole = `${PLAIN_META}// @unreached\nconst R = { label: 'r' };\n`;
     const brokenCoverage = coverText(broken, [createRun('a')]);
+    const brokenRoleCoverage = coverText(brokenRole, [createRun('a')]);
 
     assert.deepEqual(brokenCoverage.findings, [createExpectedFinding('unreached-no-reason', 'The // @unreached comment gives no reason', { line: 2, column: 3 })]);
     assert.equal(brokenCoverage.throwSites?.[0].unreachedReason, '');
     assert.deepEqual(coverText(passing, [createRun('a')]).findings, []);
+    assert.deepEqual(brokenRoleCoverage.findings, [createExpectedFinding('unreached-no-reason', 'The // @unreached comment gives no reason', { line: 2, column: 1 })]);
+    assert.equal(brokenRoleCoverage.roles?.[0].unreachedReason, '');
   });
 
   it('role-unreached, at the value of the first label property that gives the role', () => {
     const text = `${PLAIN_META}await agent('p', { label: 'dev' });\nawait agent('p', { label: \`check \${n}\` });\nawait agent('p', { label: 'check' });\n`;
 
     assert.deepEqual(coverText(text, [createRun('a', { calls: [{ label: 'dev 1' }] })]).findings, [
-      createExpectedFinding('role-unreached', 'No scenario reaches the role check', placeOf(text, '`check')),
+      createExpectedFinding('role-unreached', 'No scenario reaches the role "check"', placeOf(text, '`check')),
     ]);
     assert.deepEqual(coverText(text, [createRun('a', { calls: [{ label: 'dev' }] }), createRun('b', { calls: [{ label: 'check 2' }] })]).findings, []);
+  });
+
+  it('role-unreached for a role of a data label that no call carries, and no finding once a comment marks it', () => {
+    const lenses = "const LENSES = [{ label: 'Security' }];\nfor (const lens of LENSES) await agent('p', { label: `review:${lens.label}` });\n";
+    const marked = "const LENSES = [\n  // @unreached a lens label is data, not a call label\n  { label: 'Security' },\n];\nfor (const lens of LENSES) await agent('p', { label: `review:${lens.label}` });\n";
+    const run = createRun('a', { calls: [{ label: 'review:Security' }] });
+    const markedCoverage = coverText(`${PLAIN_META}${marked}`, [run]);
+
+    assert.deepEqual(coverText(`${PLAIN_META}${lenses}`, [run]).findings, [
+      createExpectedFinding('role-unreached', 'No scenario reaches the role "Security"', placeOf(`${PLAIN_META}${lenses}`, "'Security'")),
+    ]);
+    assert.deepEqual(markedCoverage.findings, []);
+    assert.deepEqual(markedCoverage.roles?.map(({ role, reached, unreachedReason }) => [role, reached, unreachedReason]), [
+      ['Security', false, 'a lens label is data, not a call label'],
+      ['review', true, null],
+    ]);
+  });
+
+  it('role-reached, at the value of the first marked label property, naming the first scenario in file order that reaches the role', () => {
+    const text = `${PLAIN_META}await agent('p', { label: 'dev' });\n// @unreached first reason\nawait agent('p', { label: 'dev' });\n// @unreached second reason\nawait agent('p', { label: 'dev' });\n`;
+    const runs = [createRun('first'), createRun('second', { calls: [{ label: 'dev' }] }), createRun('third', { calls: [{ label: 'dev' }] })];
+    const coverage = coverText(text, runs);
+
+    assert.deepEqual(coverage.findings, [
+      createExpectedFinding('role-reached', 'The scenario "second" reaches the role "dev", which a // @unreached comment marks', { line: 4, column: 27 }),
+    ]);
+    assert.deepEqual(coverage.roles, [{ role: 'dev', ...placeOf(text, "'dev'"), reached: true, unreachedReason: 'first reason' }]);
+    assert.deepEqual(coverText(text, [createRun('first')]).findings, []);
+  });
+
+  it('an // @unreached comment above a throw site marks no role of a label property on its line', () => {
+    const shared = `${PLAIN_META}// @unreached never\nif (a) throw new Error('bad', { cause: { label: 'dev' } });\n`;
+    const reachedElsewhere = `${PLAIN_META}await agent('p', { label: 'dev' });\n// @unreached never\nif (a) throw new Error('bad', { cause: { label: 'dev' } });\n`;
+    const coverage = coverText(reachedElsewhere, [createRun('a', { calls: [{ label: 'dev' }] })]);
+
+    assert.deepEqual(coverText(shared, [createRun('a')]).findings, [
+      createExpectedFinding('role-unreached', 'No scenario reaches the role "dev"', placeOf(shared, "'dev'")),
+    ]);
+    assert.deepEqual(coverage.findings, []);
+    assert.deepEqual(coverage.roles?.map(({ unreachedReason }) => unreachedReason), [null]);
+    assert.deepEqual(coverage.throwSites?.map(({ unreachedReason }) => unreachedReason), ['never']);
   });
 
   it('throw-site-unreached, at the place of the new keyword', () => {
@@ -169,7 +220,7 @@ describe('buildCoverage reach', () => {
     ].join('\n');
     const coverage = coverText(text, [createRun('a', { calls: [{ label: 'dev', phase: 'Plan' }], end: { kind: 'returned', value: { status: 'done' } } })]);
 
-    assert.deepEqual(coverage.roles, [{ role: 'dev', ...placeOf(text, "'dev'"), reached: true }]);
+    assert.deepEqual(coverage.roles, [{ role: 'dev', ...placeOf(text, "'dev'"), reached: true, unreachedReason: null }]);
     assert.deepEqual(coverage.throwSites, [
       { line: 5, column: 14, template: 'first', reached: false, unreachedReason: null },
       { line: 7, column: 14, template: 'second ...', reached: false, unreachedReason: 'a reason' },
@@ -306,7 +357,7 @@ describe('buildCoverage reach', () => {
     assert.deepEqual(coverage.findings.map(({ message }) => message), [
       'No scenario makes a call under the phase "P\\u{200D}" of meta.phases',
       'No scenario reaches the end state "e\\u{200D}"',
-      'No scenario reaches the role r\\u{200D}',
+      'No scenario reaches the role "r\\u{200D}"',
       'The scenario "n\\u{200D}" reaches this throw site, which a // @unreached comment marks',
     ]);
     assert.equal(coverage.roles?.[0].role, 'r‍');

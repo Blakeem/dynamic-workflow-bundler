@@ -3,6 +3,7 @@ import { formatFinding } from './format-finding.js';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
 
 /** @typedef {import('./cover.js').CoverageResult} CoverageResult */
+/** @typedef {{ reached: boolean, unreachedReason: string | null }} MarkedCoverage A role or a throw site. */
 
 const NO_END_STATES_LINE = '  end states: none declared with // @end-states';
 
@@ -28,8 +29,8 @@ function formatScriptLines(result) {
   if (unread.length > 0) return lines;
   lines.push(
     `${script}: ${formatCount(scenarioCount, 'scenario')}`,
-    formatReachLine('roles', /** @type {{ reached: boolean }[]} */ (roles)),
-    formatThrowSiteLine(/** @type {import('./build-coverage.js').ThrowSiteCoverage[]} */ (throwSites)),
+    formatMarkedReachLine('roles', /** @type {MarkedCoverage[]} */ (roles)),
+    formatMarkedReachLine('throw sites', /** @type {MarkedCoverage[]} */ (throwSites)),
     endStates === null ? NO_END_STATES_LINE : formatReachLine('end states', endStates),
     formatReachLine('phases', /** @type {{ reached: boolean }[]} */ (phases)),
   );
@@ -47,14 +48,15 @@ function formatReachLine(kind, parts) {
 }
 
 /**
- * @param {import('./build-coverage.js').ThrowSiteCoverage[]} throwSites
- * @returns {string} The reach of the throw sites with no `// @unreached` mark, then the count of marked ones when
- *   there is one, since a marked site counts as neither reached nor missed.
+ * @param {string} kind The plural of the kind, such as `throw sites`.
+ * @param {MarkedCoverage[]} coverages
+ * @returns {string} The reach of the roles or throw sites with no `// @unreached` mark, then the count of marked
+ *   ones when there is one, since a marked role or throw site counts as neither reached nor missed.
  */
-function formatThrowSiteLine(throwSites) {
-  const unmarkedSites = throwSites.filter(({ unreachedReason }) => unreachedReason === null);
-  const markedCount = throwSites.length - unmarkedSites.length;
+function formatMarkedReachLine(kind, coverages) {
+  const unmarkedCoverages = coverages.filter(({ unreachedReason }) => unreachedReason === null);
+  const markedCount = coverages.length - unmarkedCoverages.length;
   const markedText = markedCount === 0 ? '' : `, ${markedCount} marked unreached`;
 
-  return `${formatReachLine('throw sites', unmarkedSites)}${markedText}`;
+  return `${formatReachLine(kind, unmarkedCoverages)}${markedText}`;
 }

@@ -1140,6 +1140,8 @@ describe('dwfb simulate', () => {
       [folder, ['simulate', 'answer.js', '--scenarios', ''], /^dwfb simulate: Name the scenarios file with --scenarios <file>\.\n/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--verbose'], /^dwfb simulate: Unknown option '--verbose'[^]*\n\nUsage: dwfb simulate/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--scenario', ''], /^dwfb simulate: Name the scenario with --scenario <name>\.\n/],
+      [folder, ['simulate', 'answer.js', '--scenario', '', '--config', ''], /^dwfb simulate: Name the scenario with --scenario <name>\.\n/],
+      [folder, ['simulate', '--scenarios', 'answer.scenarios.js', '--scenario', ''], /^dwfb simulate: Name the scenario with --scenario <name>\.\n/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'answer.scenarios.js', '--scenario', 'other'], /^dwfb simulate: The scenarios file answer\.scenarios\.js holds no scenario named "other"\.\n$/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'missing.js'], /^dwfb simulate: The scenarios file missing\.js does not exist\.\n$/],
       [folder, ['simulate', 'answer.js', '--scenarios', 'syntax.scenarios.js'], /^dwfb simulate: The scenarios file syntax\.scenarios\.js does not load\. syntax\.scenarios\.js:1:30 Unexpected token\.\n$/],
@@ -1471,6 +1473,8 @@ describe('dwfb inspect', () => {
       [folder, ['inspect', 'events.js', '--scenarios', ''], /^dwfb inspect: Name the scenarios file with --scenarios <file>\.\n\nUsage: dwfb inspect/],
       [folder, [...scenariosArgs, '--scenario', ''], /^dwfb inspect: Name the scenario with --scenario <name>\.\n\nUsage: dwfb inspect/],
       [folder, [...scenariosArgs, '--call', ''], /^dwfb inspect: Name the call with --call <index>\.\n\nUsage: dwfb inspect/],
+      [folder, ['inspect', 'events.js', '--call', '', '--config', ''], /^dwfb inspect: Name the call with --call <index>\.\n\nUsage: dwfb inspect/],
+      [folder, [...scenariosArgs, '--scenario', '', '--config', 'dwfb.config.js'], /^dwfb inspect: Name the scenario with --scenario <name>\.\n\nUsage: dwfb inspect/],
       [folder, ['inspect', 'events.js', '--config', ''], /^dwfb inspect: Name the config file with --config <path>\.\n\nUsage: dwfb inspect/],
       [folder, [...scenariosArgs, '--scenario', 'judged', '--call', '1.5'], /^dwfb inspect: The call "1\.5" is not a whole number written in digits\.\n\nUsage: dwfb inspect/],
       [folder, [...scenariosArgs, '--scenario', 'judged', '--call=-1'], /^dwfb inspect: The call "-1" is not a whole number written in digits\.\n\nUsage: dwfb inspect/],
@@ -1786,6 +1790,10 @@ describe('dwfb map', () => {
       [folder, ['map', 'flow.js', '--config', ''], /^dwfb map: Name the config file with --config <path>\.\n/],
       [folder, ['map', 'flow.js', '--out', 'maps/'], /^dwfb map: The out path maps\/ names a folder, so name a file with --out <file>\.\n/],
       [folder, ['map', 'flow.js', '--out', 'maps/', '--json'], /^dwfb map: The out path maps\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['map', 'flow.js', '--out', '', '--config', ''], /^dwfb map: Name the flow map file with --out <file>\.\n/],
+      [folder, ['map', 'flow.js', '--out', 'maps/', '--config', ''], /^dwfb map: Name the config file with --config <path>\.\n/],
+      [folder, ['map', ...FLOW_SCENARIOS_ARGS, '--out', 'maps/'], /^dwfb map: The out path maps\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['map', ...FLOW_SCENARIOS_ARGS, '--out', 'x.md'], /^dwfb map: Name the script that --scenarios maps\.\n/],
       [folder, ['map', ...FLOW_SCENARIOS_ARGS], /^dwfb map: Name the script that --scenarios maps\.\n/],
       [folder, ['map', '--out', 'x.md'], /^dwfb map: Name the script whose flow map --out writes\.\n/],
       [folder, ['map', 'flow.js', ...FLOW_SCENARIOS_ARGS, '--config', 'dwfb.config.js'], /^dwfb map: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n/],
@@ -2213,6 +2221,7 @@ describe('dwfb snapshot', () => {
       [folder, ['snapshot', 'review.js', '--config', ''], /^dwfb snapshot: Name the config file with --config <path>\.\n/],
       [folder, ['snapshot', 'review.js', '--out', 'prompts/'], /^dwfb snapshot: The out path prompts\/ names a folder, so name a file with --out <file>\.\n/],
       [folder, ['snapshot', 'review.js', '--out', 'prompts/', '--json'], /^dwfb snapshot: The out path prompts\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['snapshot', 'review.js', '--out', '', '--config', ''], /^dwfb snapshot: Name the prompt snapshot file with --out <file>\.\n/],
       [folder, ['snapshot', ...REVIEW_SCENARIOS_ARGS], /^dwfb snapshot: Name the script that --scenarios snapshots\.\n/],
       [folder, ['snapshot', '--out', 'x.md'], /^dwfb snapshot: Name the script whose prompt snapshot --out writes\.\n/],
       [folder, ['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--config', 'dwfb.config.js'], /^dwfb snapshot: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n/],
@@ -2394,7 +2403,7 @@ describe('dwfb cover', () => {
     'gaps.js:4:31 phase-unreached No scenario makes a call under the phase "Audit" of meta.phases. Add a scenario with a call under it, or remove it from meta.phases.',
     'gaps.js:8:54 end-state-unreached No scenario reaches the end state "halted". Add a scenario whose simulation ends in it, or remove it from the constant.',
     'gaps.js:14:9 throw-site-unreached No scenario reaches this throw site. Add a scenario whose simulation ends with its error, or put // @unreached <reason> on the line above it.',
-    'gaps.js:18:43 role-unreached No scenario reaches the role audit. Add a scenario whose simulation makes a call of the role.',
+    'gaps.js:18:43 role-unreached No scenario reaches the role "audit". Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label.',
     'gaps.js: 2 scenarios',
     '  roles: 2 of 3 reached',
     '  throw sites: 1 of 2 reached, 1 marked unreached',
@@ -2403,7 +2412,7 @@ describe('dwfb cover', () => {
     '',
   ].join('\n');
   const CLEAN_OUTPUT = 'clean.js: 1 scenario\n  roles: 1 of 1 reached\n  throw sites: 0 of 0 reached\n  end states: none declared with // @end-states\n  phases: 0 of 0 reached\n';
-  const CLEAN_COVERAGE = { ok: true, script: 'clean.js', scenarios: 'clean.scenarios.js', scenarioCount: 1, roles: [{ role: 'plan', line: 2, column: 40, reached: true }], throwSites: [], endStates: null, phases: [], findings: [], unread: [] };
+  const CLEAN_COVERAGE = { ok: true, script: 'clean.js', scenarios: 'clean.scenarios.js', scenarioCount: 1, roles: [{ role: 'plan', line: 2, column: 40, reached: true, unreachedReason: null }], throwSites: [], endStates: null, phases: [], findings: [], unread: [] };
 
   /**
    * @returns {Promise<string>} A new folder of an ES module package that holds the fixture script with gaps, a

@@ -10,38 +10,49 @@ const ROUND_MARKER_START = new RegExp(`${LABEL_SEPARATOR}r$`);
 const TRAILING_SEPARATORS = new RegExp(`${LABEL_SEPARATOR}+$`);
 
 /**
+ * @typedef {object} RoleLabel One `label` property that gives a role.
+ * @property {number} keyOffset The offset of its key.
+ * @property {number} valueOffset The offset of its value.
+ */
+
+/**
  * @typedef {object} RolePlace
  * @property {string} role
- * @property {number} offset The offset of the value of the first `label` property that gives the role.
+ * @property {RoleLabel[]} labels Each `label` property that gives the role, in source order. The first one places
+ *   the role.
  */
 
 /**
  * Lists the roles that the call labels of a workflow script start with, from each `label` property of an
  * object literal anywhere in the script, since a script may build the options of a call away from the call.
  * @param {SyntaxNode} program The tree that parseSource gives for the script.
- * @returns {string[]} Each role once, in source order.
+ * @returns {string[]} Each role once, ordered by the start of the first object literal whose `label` property
+ *   gives it, so a role of an outer object comes before a role of an object nested in it.
  */
 export function readRoles(program) {
   return readRolePlaces(program).map(({ role }) => role);
 }
 
 /**
- * Lists the roles as readRoles does, each with the place of the first label that gives it.
+ * Lists the roles as readRoles does, each with the place of every label that gives it.
  * @param {SyntaxNode} program The tree that parseSource gives for the script.
- * @returns {RolePlace[]} Each role once, in source order.
+ * @returns {RolePlace[]} Each role once, in the order readRoles gives.
  */
 export function readRolePlaces(program) {
-  const offsets = new Map();
-  const labelValues = listTreeNodes(program)
+  const roleLabels = new Map();
+  const labelProperties = listTreeNodes(program)
     .filter((node) => node.type === 'ObjectExpression')
-    .flatMap((object) => object.properties.filter(isLabelProperty))
-    .map((property) => property.value);
+    .flatMap((object) => object.properties.filter(isLabelProperty));
 
-  for (const value of labelValues) {
+  for (const { key, value } of labelProperties) {
     const role = readRole(value);
-    if (role !== '' && !offsets.has(role)) offsets.set(role, value.start);
+    if (role === '') continue;
+    if (!roleLabels.has(role)) roleLabels.set(role, []);
+    roleLabels.get(role).push({ keyOffset: key.start, valueOffset: value.start });
   }
-  return [...offsets].map(([role, offset]) => ({ role, offset }));
+  // The walk gives an object's labels before those of an object nested in it, which can sit earlier.
+  // Every reader of readRoles depends on the role order, so only the labels are sorted.
+  return [...roleLabels].map(([role, labels]) => ({ role, labels: labels.sort((first, second) => first.keyOffset - second.keyOffset) }));
 }
 
 /**

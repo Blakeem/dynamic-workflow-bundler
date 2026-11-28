@@ -5,7 +5,8 @@ import { formatCoverJson } from '../src/format-cover-json.js';
 import { formatCoverText } from '../src/format-cover-text.js';
 import { CONFIG_FILES_TEXT } from '../src/load-config.js';
 import { findConfigTargets } from './find-config-targets.js';
-import { findScriptTarget, SCENARIOS_CONFIG_CONFLICT } from './find-script-target.js';
+import { findScriptTarget } from './find-script-target.js';
+import { findScriptUsageProblem } from './find-script-usage-problem.js';
 import { loadTargetScenarios } from './load-target-scenarios.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, printCommandFailure, printResult, printUsageError } from './print-result.js';
 
@@ -27,8 +28,9 @@ simulation runs under that phase.
 
 // @end-states alone on the line above a const declaration declares the end states it lists: each string of
 its object literal or array literal, which may sit inside Object.freeze(...). A script with no such comment
-declares no end state. // @unreached <reason> alone on the line above a throw site marks a throw site that no
-scenario can reach, so it gets no finding while no scenario reaches it.
+declares no end state. // @unreached <reason> alone on the line above a throw site or a label marks the throw
+site or the role of the label as one that no scenario can reach, so it gets no finding while no scenario
+reaches it.
 
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
@@ -50,6 +52,7 @@ const COVER_OPTIONS = Object.freeze({
  */
 export async function runCover(args) {
   let parsed = null;
+  let problem = null;
   let targets = null;
   const coverTargets = [];
 
@@ -63,11 +66,8 @@ export async function runCover(args) {
   const { values, positionals } = parsed;
   const [script] = positionals;
   if (values.help) return printResult(COVER_USAGE);
-  if (positionals.length > 1 || script === '') return printUsageError('dwfb cover', `Name one workflow script.\n\n${COVER_USAGE}`);
-  if (values.scenarios === '') return printUsageError('dwfb cover', `Name the scenarios file with --scenarios <file>.\n\n${COVER_USAGE}`);
-  if (values.config === '') return printUsageError('dwfb cover', `Name the config file with --config <path>.\n\n${COVER_USAGE}`);
-  if (script === undefined && values.scenarios !== undefined) return printUsageError('dwfb cover', `Name the script that --scenarios covers.\n\n${COVER_USAGE}`);
-  if (values.scenarios !== undefined && values.config !== undefined) return printUsageError('dwfb cover', `${SCENARIOS_CONFIG_CONFLICT}.\n\n${COVER_USAGE}`);
+  problem = findScriptUsageProblem(values, positionals, 'covers');
+  if (problem !== null) return printUsageError('dwfb cover', `${problem}.\n\n${COVER_USAGE}`);
 
   // Every script is covered before any result prints, so a usage error of a later script prints no result.
   try {

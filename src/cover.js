@@ -28,15 +28,16 @@ const COVER_OPTION_KEYS = new Set(['script', 'scenarios']);
  * @property {string} script The script, as `validate()` names it.
  * @property {string} runtime The Claude Code version the simulations stand in for.
  * @property {number} scenarioCount The count of scenarios of the scenarios file.
- * @property {RoleCoverage[] | null} roles In source order. Null when a scenario is unread.
+ * @property {RoleCoverage[] | null} roles Ordered by the start of the first object literal whose `label` property
+ *   gives the role. Null when a scenario is unread.
  * @property {ThrowSiteCoverage[] | null} throwSites In source order. Null when a scenario is unread.
  * @property {EndStateCoverage[] | null} endStates In source order. Null when a scenario is unread, or for a
  *   script with no `// @end-states` comment that declares end states.
  * @property {PhaseCoverage[] | null} phases Each element of `meta.phases` whose title is a string of 1 or more
  *   characters, in its order. Null when a scenario is unread.
  * @property {Finding[]} findings Each gap, each misplaced `// @end-states` or `// @unreached` comment, each
- *   `// @unreached` comment with no reason and each marked throw site that a scenario reaches, sorted by line,
- *   then column. Each finding's `file` is `script`. For a refused script, its contract findings alone.
+ *   `// @unreached` comment with no reason and each marked role and throw site that a scenario reaches, sorted by
+ *   line, then column. Each finding's `file` is `script`. For a refused script, its contract findings alone.
  * @property {UnreadScenario[]} unread Each scenario whose simulation stopped or whose script was refused, in file order.
  */
 

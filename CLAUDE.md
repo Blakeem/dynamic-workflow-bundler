@@ -24,7 +24,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | build | To write a workflow script from its source. The result is the built script. |
 | scope | The function scope that holds one module's code in the built script. |
 | banner | The comment line after `meta` that names the entry a built script comes from. A build replaces an existing file at `out` only when it is a built script, which a banner marks, or for a build with no banner a first statement that is the `meta` statement. |
-| directive | A line comment that starts with @ and a word the tool reads. `// @include <path>` in an entry names a part. `// @end-states` on the line above a const declares the end states it lists. `// @unreached <reason>` on the line above a throw site marks a throw site that no scenario can reach. |
+| directive | A line comment that starts with @ and a word the tool reads. `// @include <path>` in an entry names a part. `// @end-states` on the line above a const declares the end states it lists. `// @unreached <reason>` on the line above a throw site or a label marks a throw site or a role that no scenario can reach. |
 | config file | The `dwfb.config.js` or `dwfb.config.mjs` file, which lists the workflows a project builds. |
 | line origin | The source file and line that a line of the built script comes from. |
 | contract | The rules the Workflow runtime enforces on a script. |

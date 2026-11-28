@@ -5,7 +5,8 @@ import { formatSimulateText } from '../src/format-simulate-text.js';
 import { CONFIG_FILES_TEXT } from '../src/load-config.js';
 import { selectScenarios } from '../src/select-scenarios.js';
 import { findConfigTargets } from './find-config-targets.js';
-import { findScriptTarget, SCENARIOS_CONFIG_CONFLICT } from './find-script-target.js';
+import { findScriptTarget } from './find-script-target.js';
+import { findScriptUsageProblem } from './find-script-usage-problem.js';
 import { loadTargetScenarios } from './load-target-scenarios.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, printCommandFailure, printResult, printUsageError } from './print-result.js';
 import { simulateScenario } from './simulate-scenario.js';
@@ -40,6 +41,7 @@ const SIMULATE_OPTIONS = Object.freeze({
  */
 export async function runSimulate(args) {
   let parsed = null;
+  let problem = null;
   let targets = null;
   const simulations = [];
 
@@ -53,13 +55,11 @@ export async function runSimulate(args) {
   const { values, positionals } = parsed;
   const [script] = positionals;
   if (values.help) return printResult(SIMULATE_USAGE);
-  if (positionals.length > 1 || script === '') return printUsageError('dwfb simulate', `Name one workflow script.\n\n${SIMULATE_USAGE}`);
-  if (values.scenarios === '') return printUsageError('dwfb simulate', `Name the scenarios file with --scenarios <file>.\n\n${SIMULATE_USAGE}`);
-  if (values.scenario === '') return printUsageError('dwfb simulate', `Name the scenario with --scenario <name>.\n\n${SIMULATE_USAGE}`);
-  if (values.config === '') return printUsageError('dwfb simulate', `Name the config file with --config <path>.\n\n${SIMULATE_USAGE}`);
-  if (script === undefined && values.scenarios !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenarios simulates.\n\n${SIMULATE_USAGE}`);
-  if (script === undefined && values.scenario !== undefined) return printUsageError('dwfb simulate', `Name the script that --scenario simulates.\n\n${SIMULATE_USAGE}`);
-  if (values.scenarios !== undefined && values.config !== undefined) return printUsageError('dwfb simulate', `${SCENARIOS_CONFIG_CONFLICT}.\n\n${SIMULATE_USAGE}`);
+  problem = findScriptUsageProblem(values, positionals, 'simulates', {
+    findEmptyValueProblem: () => (values.scenario === '' ? 'Name the scenario with --scenario <name>' : null),
+    findMissingScriptProblem: () => (script === undefined && values.scenario !== undefined ? 'Name the script that --scenario simulates' : null),
+  });
+  if (problem !== null) return printUsageError('dwfb simulate', `${problem}.\n\n${SIMULATE_USAGE}`);
 
   // Every simulation runs before any result prints, so a usage error in a later simulation prints no result.
   try {

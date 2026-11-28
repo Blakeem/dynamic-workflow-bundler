@@ -581,14 +581,15 @@ An error that the script catches reaches no throw site, since a trace records on
 
 `// @end-states` alone on the line above a `const` declaration declares the end states that the declaration lists. The declaration has one name, and its value is an object literal or an array literal, or one of those inside `Object.freeze(...)`. Each property value or element is a string of 1 or more characters, written as a string literal or as a template literal with no `${...}`. The keys are not read. The end states of several such comments are joined, and an end state that two of them hold counts once. A script with no such comment declares no end state, and the command checks none.
 
-`// @unreached <reason>` alone on the line above a throw site marks a throw site that no scenario can reach, such as a check of a state that no input gives. It marks each throw site whose `new` keyword is on the next line. A marked throw site gets no `throw-site-unreached` finding. The throw site line counts the throw sites with no mark, then gives the count of marked throw sites when there is one.
+`// @unreached <reason>` alone on the line above a throw site or a label marks a throw site or a role that no scenario can reach, such as a check of a state that no input gives. It marks each throw site whose `new` keyword is on the next line. When the next line holds no throw site, it marks each `label` property whose key starts on that line and whose value gives a role. A comment above a throw site marks no role. A `label` property on the line of a throw site needs a line of its own to be marked. A role is marked when one of its `label` properties is marked, and its reason is the reason of the first such comment. A marked throw site gets no `throw-site-unreached` finding, and a marked role gets no `role-unreached` finding. A role read from a `label` property that no call carries is one that no scenario can reach, such as `Security` in `const LENSES = [{ label: 'Security' }]`. The role line and the throw site line count the roles or throw sites with no mark, then give the count of marked ones when there is one.
 
 | Rule | What it reports |
 |---|---|
 | `end-states-misplaced` | A `// @end-states` comment that is not alone on the line above a `const` declaration that lists end states. |
-| `unreached-misplaced` | A `// @unreached` comment that is not alone on the line above a throw site. |
-| `unreached-no-reason` | A `// @unreached` comment with no reason. It still marks its throw site. |
-| `role-unreached` | A role that no scenario reaches. |
+| `unreached-misplaced` | A `// @unreached` comment that is not alone on the line above a throw site or a `label` property that gives a role. |
+| `unreached-no-reason` | A `// @unreached` comment with no reason. It still marks its throw site or role. |
+| `role-unreached` | A role with no mark that no scenario reaches. |
+| `role-reached` | A marked role that a scenario reaches. |
 | `throw-site-unreached` | A throw site with no mark that no scenario reaches. |
 | `throw-site-reached` | A marked throw site that a scenario reaches. |
 | `end-state-unreached` | A declared end state that no scenario reaches. |

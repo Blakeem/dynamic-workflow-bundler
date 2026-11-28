@@ -73,13 +73,32 @@ describe('readRoles', () => {
 });
 
 describe('readRolePlaces', () => {
-  it('gives each role once, in source order, at the value of the first label property that gives it', () => {
-    const text = "await agent('p', { label: `dev ${id}` });\nawait agent('p', { label: 'check' });\nawait agent('p', { label: 'dev' });";
+  it('gives each role once, in source order, with the key and the value of each label property that gives it', () => {
+    const text = "await agent('p', { label: `dev ${id}` });\nawait agent('p', { 'label': 'check' });\nawait agent('p', { label: 'dev' });";
 
     assert.deepEqual(readRolePlaces(parseSource(text, PARSE_OPTIONS)), [
-      { role: 'dev', offset: text.indexOf('`dev') },
-      { role: 'check', offset: text.indexOf("'check'") },
+      {
+        role: 'dev',
+        labels: [
+          { keyOffset: text.indexOf('label: `dev'), valueOffset: text.indexOf('`dev') },
+          { keyOffset: text.indexOf("label: 'dev'"), valueOffset: text.indexOf("'dev'") },
+        ],
+      },
+      { role: 'check', labels: [{ keyOffset: text.indexOf("'label'"), valueOffset: text.indexOf("'check'") }] },
     ]);
+  });
+
+  it('gives the role of an outer object before the role of an object nested in it, which sits earlier', () => {
+    const text = "const a = {\n  options: { label: 'a' },\n  label: 'b',\n};";
+
+    assert.deepEqual(readRolePlaces(parseSource(text, PARSE_OPTIONS)).map(({ role }) => role), ['b', 'a']);
+  });
+
+  it('lists the labels of a role in source order when a nested object holds the earlier one', () => {
+    const text = "const a = { options: { label: 'dev' }, label: 'dev' };";
+    const [{ labels }] = readRolePlaces(parseSource(text, PARSE_OPTIONS));
+
+    assert.deepEqual(labels.map(({ valueOffset }) => valueOffset), [text.indexOf("'dev'"), text.lastIndexOf("'dev'")]);
   });
 
   it('gives the roles that readRoles gives, for the three oracle scripts', async () => {

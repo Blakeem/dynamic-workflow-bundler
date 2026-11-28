@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { isFolderPath } from '../src/display-path.js';
-import { SCENARIOS_CONFIG_CONFLICT } from './find-script-target.js';
+import { findScriptUsageProblem } from './find-script-usage-problem.js';
 import { printResult, printUsageError } from './print-result.js';
 
 /** @typedef {import('./document-kinds.js').DocumentKind} DocumentKind */
@@ -59,13 +59,9 @@ export function parseDocumentArgs(kind, args, usage) {
 function findUsageProblem(kind, values, positionals) {
   const [script] = positionals;
 
-  if (positionals.length > 1 || script === '') return 'Name one workflow script';
-  if (values.scenarios === '') return 'Name the scenarios file with --scenarios <file>';
-  if (values.out === '') return `Name the ${kind.name} file with --out <file>`;
-  if (values.config === '') return 'Name the config file with --config <path>';
-  if (values.out !== undefined && isFolderPath(values.out)) return `The out path ${values.out} names a folder, so name a file with --out <file>`;
-  if (script === undefined && values.scenarios !== undefined) return `Name the script that --scenarios ${kind.verb}`;
-  if (script === undefined && values.out !== undefined) return `Name the script whose ${kind.name} --out writes`;
-  if (values.scenarios !== undefined && values.config !== undefined) return SCENARIOS_CONFIG_CONFLICT;
-  return null;
+  return findScriptUsageProblem(values, positionals, kind.verb, {
+    findEmptyValueProblem: () => (values.out === '' ? `Name the ${kind.name} file with --out <file>` : null),
+    findValueProblem: () => (values.out !== undefined && isFolderPath(values.out) ? `The out path ${values.out} names a folder, so name a file with --out <file>` : null),
+    findMissingScriptProblem: () => (script === undefined && values.out !== undefined ? `Name the script whose ${kind.name} --out writes` : null),
+  });
 }

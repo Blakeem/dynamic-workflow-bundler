@@ -55,9 +55,9 @@ describe('cover', () => {
       runtime: CONTRACT_RUNTIME_VERSION,
       scenarioCount: 2,
       roles: [
-        { role: 'plan', line: 16, column: 40, reached: true },
-        { role: 'audit', line: 18, column: 43, reached: false },
-        { role: 'ship', line: 22, column: 40, reached: true },
+        { role: 'plan', line: 16, column: 40, reached: true, unreachedReason: null },
+        { role: 'audit', line: 18, column: 43, reached: false, unreachedReason: null },
+        { role: 'ship', line: 22, column: 40, reached: true, unreachedReason: null },
       ],
       throwSites: [
         { line: 11, column: 9, template: 'bad mode', reached: true, unreachedReason: null },
@@ -77,7 +77,7 @@ describe('cover', () => {
         finding('phase-unreached', 'No scenario makes a call under the phase "Audit" of meta.phases', 4, 31),
         finding('end-state-unreached', 'No scenario reaches the end state "halted"', 8, 54),
         finding('throw-site-unreached', 'No scenario reaches this throw site', 14, 9),
-        finding('role-unreached', 'No scenario reaches the role audit', 18, 43),
+        finding('role-unreached', 'No scenario reaches the role "audit"', 18, 43),
       ],
       unread: [],
     });

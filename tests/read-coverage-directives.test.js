@@ -3,10 +3,11 @@ import { describe, it } from 'node:test';
 import { BYTE_ORDER_MARK } from '../src/normalize-source-text.js';
 import { parseSource, PARSE_OPTIONS } from '../src/parse-source.js';
 import { readCoverageDirectives } from '../src/read-coverage-directives.js';
+import { readRolePlaces } from '../src/read-roles.js';
 import { readThrowSites } from '../src/read-throw-sites.js';
 
 const END_STATES_MISPLACED = 'The // @end-states comment is not alone on the line above a const that lists end states';
-const UNREACHED_MISPLACED = 'The // @unreached comment is not alone on the line above a throw site';
+const UNREACHED_MISPLACED = 'The // @unreached comment is not alone on the line above a throw site or a label';
 
 /**
  * @param {string} text
@@ -16,7 +17,7 @@ function readTextDirectives(text) {
   const comments = [];
   const program = parseSource(text, { ...PARSE_OPTIONS, onComment: comments });
 
-  return readCoverageDirectives(program, comments, text, readThrowSites(program, text));
+  return readCoverageDirectives(program, comments, text, readThrowSites(program, text), readRolePlaces(program));
 }
 
 /**
@@ -90,7 +91,7 @@ describe('readCoverageDirectives', () => {
   it('reads no comment that only starts with the word, no block comment and no comment text inside a string', () => {
     const text = "// @end-statesx\nconst A = ['a'];\n/* @end-states */\nconst B = ['b'];\nconst C = `\n// @end-states\n`;\n// @unreachedx\nthrow new Error('x');";
 
-    assert.deepEqual(readTextDirectives(text), { endStates: [], unreachedReasons: new Map(), problems: [] });
+    assert.deepEqual(readTextDirectives(text), { endStates: [], unreachedReasons: new Map(), roleMarks: new Map(), problems: [] });
   });
 
   it('marks each throw site whose new keyword is on the line below an // @unreached comment, with its reason', () => {
@@ -101,19 +102,43 @@ describe('readCoverageDirectives', () => {
     assert.deepEqual(problems, [{ rule: 'unreached-no-reason', message: 'The // @unreached comment gives no reason', offset: text.indexOf('// @unreached\n') }]);
   });
 
-  it('gives unreached-misplaced for a comment that shares its line with code or that is above a line with no throw site', () => {
+  it('marks the role of each label property whose key is on the line below an // @unreached comment, with its first comment', () => {
+    const text = "const LENSES = [\n  // @unreached a lens label is data\n  { label: 'Security' },\n  {\n    // @unreached keyed by a string\n    'label': `review:${x}`,\n  },\n  // @unreached a later reason\n  { label: 'Security' },\n];";
+    const { unreachedReasons, roleMarks, problems } = readTextDirectives(text);
+
+    assert.deepEqual(roleMarks, new Map([
+      ['Security', { reason: 'a lens label is data', offset: text.indexOf("'Security'") }],
+      ['review', { reason: 'keyed by a string', offset: text.indexOf('`review') }],
+    ]));
+    assert.deepEqual(unreachedReasons, new Map());
+    assert.deepEqual(problems, []);
+  });
+
+  it('marks the throw site alone on a line that holds both a throw site and a label property', () => {
+    const { unreachedReasons, roleMarks, problems } = readTextDirectives("// @unreached both\nif (a) throw new Error(agent('p', { label: 'x' }));");
+
+    assert.deepEqual(unreachedReasons, new Map([[2, 'both']]));
+    assert.deepEqual(roleMarks, new Map());
+    assert.deepEqual(problems, []);
+  });
+
+  it('gives unreached-misplaced for a comment that shares its line with code or that is above a line with no throw site or role label', () => {
     const cases = {
       'shares its line with code': "foo(); // @unreached reason\nthrow new Error('x');",
       'above a line with no throw site': "// @unreached reason\nfoo();\nthrow new Error('x');",
       'above a throw of no new expression': "// @unreached reason\nthrow error;",
       'above a throw whose constructor is no plain name': "// @unreached reason\nthrow new errors.Fail('x');",
       'on the last line': "throw new Error('x');\n// @unreached reason",
+      'above a label property whose value gives no role': "// @unreached reason\nconst a = { label: name };",
+      'above a label property whose key starts on the line above': "const a = {\n  label:\n  // @unreached reason\n  'x',\n};",
+      'above a computed label key': "// @unreached reason\nconst a = { ['label']: 'x' };",
     };
 
     for (const [name, text] of Object.entries(cases)) {
-      const { unreachedReasons, problems } = readTextDirectives(text);
+      const { unreachedReasons, roleMarks, problems } = readTextDirectives(text);
 
       assert.deepEqual(unreachedReasons, new Map(), name);
+      assert.deepEqual(roleMarks, new Map(), name);
       assert.deepEqual(problems, [{ rule: 'unreached-misplaced', message: UNREACHED_MISPLACED, offset: text.indexOf('// @unreached') }], name);
     }
   });
@@ -123,10 +148,11 @@ describe('readCoverageDirectives', () => {
   });
 
   it('places a comment as a throw site is placed, after a byte order mark and at CRLF and lone CR', () => {
-    const text = `${BYTE_ORDER_MARK}a();\r\n// @unreached crlf\r\nthrow new Error('x');\rb();\r// @unreached cr\rthrow new Error('y');\r\n// @end-states\r\nconst A = ['done'];`;
-    const { endStates, unreachedReasons, problems } = readTextDirectives(text);
+    const text = `${BYTE_ORDER_MARK}a();\r\n// @unreached crlf\r\nthrow new Error('x');\rb();\r// @unreached cr\rthrow new Error('y');\r\n// @end-states\r\nconst A = ['done'];\r\n// @unreached role\r\nconst R = { label: 'r' };`;
+    const { endStates, unreachedReasons, roleMarks, problems } = readTextDirectives(text);
 
     assert.deepEqual(unreachedReasons, new Map([[3, 'crlf'], [6, 'cr']]));
+    assert.deepEqual(roleMarks, new Map([['r', { reason: 'role', offset: text.indexOf("'r'") }]]));
     assert.deepEqual(endStates.map(({ endState }) => endState), ['done']);
     assert.deepEqual(problems, []);
   });

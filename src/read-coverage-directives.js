@@ -9,7 +9,7 @@ const UNREACHED_COMMENT = /^\s*@unreached(?=\s|$)/;
 // Acorn ends a line comment before the CR of a CRLF, and also at U+2028 or U+2029, where code can follow.
 const LINE_END_REST = /^\r?$/;
 const END_STATES_MISPLACED_MESSAGE = 'The // @end-states comment is not alone on the line above a const that lists end states';
-const UNREACHED_MISPLACED_MESSAGE = 'The // @unreached comment is not alone on the line above a throw site';
+const UNREACHED_MISPLACED_MESSAGE = 'The // @unreached comment is not alone on the line above a throw site or a label';
 const UNREACHED_NO_REASON_MESSAGE = 'The // @unreached comment gives no reason';
 
 /**
@@ -31,7 +31,15 @@ const UNREACHED_NO_REASON_MESSAGE = 'The // @unreached comment gives no reason';
  *   each once when compared with each run of digits written as `N`.
  * @property {Map<number, string>} unreachedReasons By the line of the `new` keyword of each throw site that a
  *   `// @unreached` comment marks, the comment's reason, or '' for a comment that gives none.
+ * @property {Map<string, RoleMark>} roleMarks By each role that a `// @unreached` comment marks, its first such
+ *   comment in source order. A comment above a line with a throw site marks the throw site alone.
  * @property {CoverageDirectiveProblem[]} problems
+ */
+
+/**
+ * @typedef {object} RoleMark
+ * @property {string} reason The comment's reason, or '' for a comment that gives none.
+ * @property {number} offset The offset of the value of the first `label` property of the role that it marks.
  */
 
 /**
@@ -41,18 +49,21 @@ const UNREACHED_NO_REASON_MESSAGE = 'The // @unreached comment gives no reason';
  * @param {import('acorn').Comment[]} comments The comments acorn reported for the same parse, in source order.
  * @param {string} text The text the program was parsed from.
  * @param {import('./read-throw-sites.js').ThrowSite[]} throwSites As readThrowSites gives them.
+ * @param {import('./read-roles.js').RolePlace[]} rolePlaces As readRolePlaces gives them.
  * @returns {CoverageDirectives}
  */
-export function readCoverageDirectives(program, comments, text, throwSites) {
+export function readCoverageDirectives(program, comments, text, throwSites, rolePlaces) {
   const endStates = [];
   const endStateKeys = new Set();
   const unreachedReasons = new Map();
+  const roleMarks = new Map();
   const problems = [];
   const lineComments = comments.filter((comment) => comment.type === 'Line');
   const endStatesComments = lineComments.filter((comment) => END_STATES_COMMENT.test(comment.value));
   const unreachedComments = lineComments.filter((comment) => UNREACHED_COMMENT.test(comment.value));
   const { positionText, markLength } = readPositionText(text);
   const throwSiteLines = new Set(throwSites.map(({ line }) => line));
+  const roleLabelsByLine = readRoleLabelsByLine(rolePlaces, positionText, markLength);
   // A script with no `// @end-states` comment needs no walk of its tree.
   const constDeclarations = endStatesComments.length === 0 ? [] : listTreeNodes(program).filter(isConstDeclaration);
 
@@ -79,13 +90,42 @@ export function readCoverageDirectives(program, comments, text, throwSites) {
     const commentLine = readCommentLine(positionText, comment, markLength);
     const reason = comment.value.replace(UNREACHED_COMMENT, '').trim();
     const markedLine = commentLine.line + 1;
+    const marksThrowSite = throwSiteLines.has(markedLine);
+    // Marking a label on a throw site's line gives role-reached when another call reaches the role, and removing the comment unmarks the site.
+    const markedLabels = marksThrowSite ? [] : (roleLabelsByLine.get(markedLine) ?? []);
 
     if (reason === '') problems.push({ rule: 'unreached-no-reason', message: UNREACHED_NO_REASON_MESSAGE, offset: comment.start });
-    if (commentLine.isAlone && throwSiteLines.has(markedLine)) unreachedReasons.set(markedLine, reason);
-    else problems.push({ rule: 'unreached-misplaced', message: UNREACHED_MISPLACED_MESSAGE, offset: comment.start });
+    if (!commentLine.isAlone || (!marksThrowSite && markedLabels.length === 0)) {
+      problems.push({ rule: 'unreached-misplaced', message: UNREACHED_MISPLACED_MESSAGE, offset: comment.start });
+      continue;
+    }
+    if (marksThrowSite) unreachedReasons.set(markedLine, reason);
+    for (const { role, valueOffset } of markedLabels) {
+      if (!roleMarks.has(role)) roleMarks.set(role, { reason, offset: valueOffset });
+    }
   }
 
-  return { endStates, unreachedReasons, problems };
+  return { endStates, unreachedReasons, roleMarks, problems };
+}
+
+/**
+ * @param {import('./read-roles.js').RolePlace[]} rolePlaces As readRolePlaces gives them.
+ * @param {string} positionText As readPositionText gives it.
+ * @param {number} markLength As readPositionText gives it.
+ * @returns {Map<number, { role: string, valueOffset: number }[]>} By line, each `label` property whose key starts
+ *   on it, with the labels of one role in source order.
+ */
+function readRoleLabelsByLine(rolePlaces, positionText, markLength) {
+  const labelsByLine = new Map();
+
+  for (const { role, labels } of rolePlaces) {
+    for (const { keyOffset, valueOffset } of labels) {
+      const { line } = findPosition(positionText, Math.max(0, keyOffset - markLength));
+      if (!labelsByLine.has(line)) labelsByLine.set(line, []);
+      labelsByLine.get(line).push({ role, valueOffset });
+    }
+  }
+  return labelsByLine;
 }
 
 /**

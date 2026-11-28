@@ -4,7 +4,6 @@ import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
 import { UsageError } from '../src/usage-error.js';
 import { checkBuiltOut } from './check-built-out.js';
 
-export const SCENARIOS_CONFIG_CONFLICT = 'Name --scenarios or --config, not both, since a named scenarios file needs no config file';
 const SCENARIOS_FILE_RECOVERY = 'so name the scenarios file with --scenarios <file>';
 
 /**

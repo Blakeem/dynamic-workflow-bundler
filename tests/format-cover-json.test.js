@@ -5,12 +5,12 @@ import { formatCoverJson } from '../src/format-cover-json.js';
 
 const COVERAGE = Object.freeze({
   scenarioCount: 1,
-  roles: [{ role: 'plan', line: 2, column: 30, reached: false }],
+  roles: [{ role: 'plan', line: 2, column: 30, reached: false, unreachedReason: null }],
   throwSites: [{ line: 3, column: 9, template: 'bad', reached: false, unreachedReason: 'no input gives it' }],
   endStates: null,
   phases: [],
 });
-const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role plan', fix: 'Add a scenario whose simulation makes a call of the role', file: 'gaps.js', line: 2, column: 30 };
+const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role "plan"', fix: 'Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label', file: 'gaps.js', line: 2, column: 30 };
 const CONTRACT_FINDING = { rule: 'meta-not-first', message: 'The script does not open with meta', fix: 'Move meta first', file: 'refused.js', line: 1, column: 1 };
 
 describe('formatCoverJson', () => {
