@@ -448,7 +448,9 @@ describe(`schema-probe.measured.json, as Claude Code ${schemaProbe.measuredOn} r
     it(`gives the measured outcome for the schema case ${probe.key}`, async () => {
       const schemaSource = probe.schemaKind === 'function' ? "() => ({ type: 'object' })" : JSON.stringify(probe.schema);
       const script = await writeScript('workflow.js', `return await agent('p', { schema: ${schemaSource} });\n`);
-      const scriptedReturn = probe.outcome.started === 'with the schema' ? { checked: true } : 'checked';
+      // Each required key gets a string, which passes every schema of these cases.
+      const requiredKeys = probe.schema?.required ?? [];
+      const scriptedReturn = probe.outcome.started === 'with the schema' ? { checked: true, ...Object.fromEntries(requiredKeys.map((key) => [key, 'x'])) } : 'checked';
       const trace = await simulateScript(script, { respond: { '': scriptedReturn } });
 
       if (probe.outcome.threw === undefined) {
@@ -462,4 +464,71 @@ describe(`schema-probe.measured.json, as Claude Code ${schemaProbe.measuredOn} r
       assert.deepEqual(trace.calls, []);
     });
   }
+
+  const ANSWER_START = 'Output does not match required schema: ';
+
+  for (const probe of schemaProbe.returns) {
+    it(`gives the measured outcome for the return case ${probe.key}`, async () => {
+      const script = await writeScript('workflow.js', `return await agent('p', { schema: ${JSON.stringify(probe.schema)} });\n`);
+      const trace = await simulateScript(script, { respond: { '': probe.value } });
+
+      if (probe.outcome === 'accepted') {
+        assert.deepEqual(trace.end, { kind: 'returned', value: probe.returned });
+        return;
+      }
+      assert.equal(trace.end.kind, 'stopped');
+      assert.equal(trace.end.reason, 'breaks-schema');
+      assert.equal(trace.end.call, 0);
+      if (probe.answer !== null) assert.ok(trace.end.message.includes(` at ${probe.answer.slice(ANSWER_START.length)}. `), trace.end.message);
+    });
+  }
+});
+
+describe('a scripted return against the schema of its call', () => {
+  it('stops at a call whose object breaks the schema, which the script cannot catch', async () => {
+    const script = await writeScript('workflow.js', "try { return await agent('p', { label: 'review', schema: { type: 'object', properties: { pass: { type: 'boolean' } }, required: ['pass'] } }) } catch { return 'caught' }\n");
+    const trace = await simulateScript(script, { respond: { review: { pass: 'yes' } } });
+
+    assert.deepEqual(trace.end, {
+      kind: 'stopped',
+      reason: 'breaks-schema',
+      message: 'Key "review" of respond gives call 0 (label "review") an object that breaks the schema of the call at /pass: must be boolean. Give it an object that passes the schema',
+      call: 0,
+    });
+    assert.ok(!Object.hasOwn(trace.calls[0], 'returned'));
+  });
+
+  it('checks the return against the schema that agent() read once, for a getter that gives a fresh schema per read or throws after its first read', async () => {
+    const freshBody = "const opts = { get schema() { return { type: 'object', required: ['a'] } } }\nreturn await agent('p', opts)\n";
+    const onceBody = "let reads = 0\nconst opts = { get schema() { reads += 1; if (reads > 1) throw new Error('read twice'); return { type: 'object', required: ['a'] } } }\nreturn await agent('p', opts)\n";
+    const stop = {
+      kind: 'stopped',
+      reason: 'breaks-schema',
+      message: "Key \"\" of respond gives call 0 (no label) an object that breaks the schema of the call at root: must have required property 'a'. Give it an object that passes the schema",
+      call: 0,
+    };
+
+    for (const body of [freshBody, onceBody]) {
+      const trace = await simulateScript(await writeScript('workflow.js', body), { respond: { '': { b: 1 } } });
+
+      assert.deepEqual(trace.end, stop);
+      assert.equal(trace.calls.length, 1);
+    }
+  });
+
+  it('checks no return of a schema with no JSON copy, which agent() checks only for its root type', async () => {
+    const body = "const schema = { type: 'object', required: ['a'] }\nschema.self = schema\nreturn await agent('p', { schema })\n";
+    const trace = await simulateScript(await writeScript('workflow.js', body), { respond: { '': { b: 1 } } });
+
+    assert.deepEqual(trace.end, { kind: 'returned', value: { b: 1 } });
+  });
+
+  it('checks no return of a schema with $async true and runs the scenarios after it', async () => {
+    const script = await writeScript('workflow.js', "const r = await agent('p', { label: 'check', schema: { type: 'object', $async: true, required: ['a'] } })\nreturn r\n");
+    const first = await simulateScript(script, { respond: { check: { b: 1 } } });
+    const second = await simulateScript(script, { respond: { check: { a: 1 } } });
+
+    assert.deepEqual(first.end, { kind: 'returned', value: { b: 1 } });
+    assert.deepEqual(second.end, { kind: 'returned', value: { a: 1 } });
+  });
 });

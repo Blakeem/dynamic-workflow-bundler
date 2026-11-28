@@ -3,7 +3,9 @@
  *   and reaches nothing else of the simulation, apart from the values and errors that `agent` settles with.
  * @property {(line: string) => void} log
  * @property {(title: string) => void} phase
- * @property {(prompt: unknown, opts: unknown, resolve: (value: unknown) => void, reject: (reason: unknown) => void) => void} agent
+ * @property {(prompt: unknown, opts: unknown, schema: object | null, resolve: (value: unknown) => void, reject: (reason: unknown) => void) => void} agent
+ *   `schema` is the schema object that agent() read from `opts` and checked with `findSchemaRefusal`, or null
+ *   for a call with no schema.
  * @property {(callback: unknown, delay: number) => number} setTimeout
  * @property {(id: unknown) => void} clearTimeout
  * @property {(kind: 'parallel' | 'pipeline', items: number, stages: number) => number} openGroup Gives the
@@ -197,7 +199,7 @@ export function installRuntimeGlobals(host, settings) {
   const checkSchema = (opts) => {
     const schema = opts !== null && typeof opts === 'object' ? opts.schema : undefined;
     let refusal = null;
-    if (!schema || typeof schema === 'function') return;
+    if (!schema || typeof schema === 'function') return null;
     // Measured for true, 1 and a string. Not measured: a BigInt or a symbol gets the same error, though the
     // message says that a WeakMap takes a symbol that is not registered.
     if (typeof schema !== 'object') throwRuntimeError('TypeError', SCHEMA_KIND_MESSAGE);
@@ -205,12 +207,14 @@ export function installRuntimeGlobals(host, settings) {
     refusal = host.findSchemaRefusal(schema);
     if (refusal !== null) throwRuntimeError('TelemetrySafeError', `${SCHEMA_INVALID_START}${refusal}`);
     if (schema.type !== 'object') throwRuntimeError('TelemetrySafeError', SCHEMA_UNUSABLE_MESSAGE);
+    return schema;
   };
   let answeredCallCount = 0;
   // The script gets a copy of each answer, made of its own realm's objects. Not measured: an answer that holds a
   // cycle rejects as a list leaving parallel() that holds one does.
   const runAgent = (prompt, opts) => new ScriptPromise((resolve, reject) => {
-    checkSchema(opts);
+    // The one read of `opts.schema`, so a getter cannot give the call a schema that agent() did not check.
+    const schema = checkSchema(opts);
     const settleAnswer = (value) => {
       let copy;
       try {
@@ -222,7 +226,7 @@ export function installRuntimeGlobals(host, settings) {
       answeredCallCount += 1;
       resolve(copy);
     };
-    host.agent(prompt, opts, settleAnswer, reject);
+    host.agent(prompt, opts, schema, settleAnswer, reject);
   });
 
   const runWorkflow = async (target) => {

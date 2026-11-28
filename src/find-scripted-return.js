@@ -6,12 +6,13 @@ import { formatHiddenCharacters } from './format-hidden-characters.js';
 /** @typedef {import('./simulate.js').ScriptedReturn} ScriptedReturn */
 /** @typedef {import('./simulate.js').TraceCall} TraceCall */
 /** @typedef {Omit<TraceCall, 'returned'>} PendingCall A call that has no scripted return yet. */
+/** @typedef {import('./compile-schema.js').CompiledSchema} CompiledSchema */
 
 const ignoreRejection = () => {};
 
 /**
  * @typedef {{ kind: 'answered', returned: ScriptedReturn }
- *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json', message: string }} ScriptedReturnResult
+ *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema', message: string }} ScriptedReturnResult
  */
 
 /**
@@ -32,17 +33,18 @@ const ignoreRejection = () => {};
  * @param {PendingCall} call
  * @param {TraceCall[]} earlierCalls In call order, as the trace records them, so a call made after the
  *   script settled may have no `returned` key.
- * @param {boolean} hasSchema True when the call passes a schema object.
+ * @param {CompiledSchema | null} schema The compiled schema of a call with a schema, one the runtime takes, or
+ *   null for a call with no schema.
  * @returns {ScriptedReturnResult} `returned` is a JSON copy of the scripted return.
  */
-export function findScriptedReturn(respond, call, earlierCalls, hasSchema) {
+export function findScriptedReturn(respond, call, earlierCalls, schema) {
   const callName = formatCallName(call);
-  const expected = hasSchema ? 'a plain object or null' : 'a string or null';
+  const expected = schema !== null ? 'a plain object or null' : 'a string or null';
   const { value, source, unansweredMessage } = pickValue(respond, call, earlierCalls, callName);
 
   if (unansweredMessage !== null) return { kind: 'stopped', reason: 'unanswered', message: unansweredMessage };
   if (value === undefined) return { kind: 'stopped', reason: 'unanswered', message: `${capitalize(source)} gives undefined to ${callName}. Give it ${expected}` };
-  return checkScriptedReturn(value, hasSchema, `${capitalize(source)} gives ${callName}`, expected);
+  return checkScriptedReturn(value, schema, `${capitalize(source)} gives ${callName}`, expected);
 }
 
 /**
@@ -120,18 +122,20 @@ export function findDecidingKey(keys, label) {
 
 /**
  * @param {unknown} value Not undefined.
- * @param {boolean} hasSchema
+ * @param {CompiledSchema | null} schema Null for a call with no schema, else one the runtime takes.
  * @param {string} givesText The start of a message, such as `Key "review" of respond gives call 2 (no label)`.
  * @param {string} expected The values the call takes, as a message names them.
  * @returns {ScriptedReturnResult}
  */
-function checkScriptedReturn(value, hasSchema, givesText, expected) {
+function checkScriptedReturn(value, schema, givesText, expected) {
   const isRecord = value !== null && typeof value === 'object' && isPlainObject(value);
+  let returned = null;
+  let problem = null;
 
   if (value === null) return { kind: 'answered', returned: null };
-  if (!hasSchema && typeof value === 'string') return { kind: 'answered', returned: value };
-  if (!hasSchema || !isRecord) {
-    const message = `${givesText} ${describeKind(value)}, and a call with ${hasSchema ? 'a schema' : 'no schema'} takes ${expected}. Give it ${expected}`;
+  if (schema === null && typeof value === 'string') return { kind: 'answered', returned: value };
+  if (schema === null || !isRecord) {
+    const message = `${givesText} ${describeKind(value)}, and a call with ${schema !== null ? 'a schema' : 'no schema'} takes ${expected}. Give it ${expected}`;
     return { kind: 'stopped', reason: 'wrong-type', message };
   }
 
@@ -141,7 +145,13 @@ function checkScriptedReturn(value, hasSchema, givesText, expected) {
     const message = `${givesText} an object that holds ${nonJson.kind} at ${nonJson.path}, which JSON cannot carry. Give it JSON values only`;
     return { kind: 'stopped', reason: 'not-json', message };
   }
-  return { kind: 'answered', returned: JSON.parse(JSON.stringify(value)) };
+  returned = JSON.parse(JSON.stringify(value));
+  problem = schema.findProblem(returned);
+  if (problem !== null) {
+    const message = `${givesText} an object that breaks the schema of the call at ${problem.path}: ${problem.message}. Give it an object that passes the schema`;
+    return { kind: 'stopped', reason: 'breaks-schema', message };
+  }
+  return { kind: 'answered', returned };
 }
 
 /**

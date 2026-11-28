@@ -1,17 +1,31 @@
 import Ajv from 'ajv';
 
-// With these options the validator gives the outcome that Claude Code 2.1.332 gave for each schema of
-// tests/fixtures/runtime/schema-probe.measured.json. `logger: false` keeps its strict mode warnings off stderr.
+// With these options the validator gives the outcome that Claude Code 2.1.332 gave for each schema and each
+// return of tests/fixtures/runtime/schema-probe.measured.json. `logger: false` keeps its strict mode warnings off stderr.
 const VALIDATOR_OPTIONS = Object.freeze({ validateFormats: false, logger: false });
 // The runtime's text leaves out the validator's own start of a schema that breaks the JSON Schema meta-schema.
 const INVALID_SCHEMA_START = 'schema is invalid: ';
+
+// The path that Claude Code 2.1.332 names in its answer to an output whose error lies in the value itself.
+const ROOT_PATH = 'root';
+
+/**
+ * @typedef {object} SchemaProblem The first rule of a schema that a value breaks, as the runtime of Claude
+ *   Code 2.1.332 answers a rejected output with `Output does not match required schema: <path>: <message>`.
+ * @property {string} path `root` for the value itself, or a JSON pointer below it, such as `/o/k`.
+ * @property {string} message Such as `must be string`.
+ */
 
 /**
  * @typedef {object} CompiledSchema
  * @property {string | null} refusal Why the runtime refuses the schema, as the text after
  *   `agent({schema}) received an invalid JSON Schema: `, or null for a schema it takes.
- * @property {((value: unknown) => null) | null} findProblem Null for a refused schema. Gives null for every value.
+ * @property {((value: unknown) => SchemaProblem | null) | null} findProblem Null for a refused schema. Gives
+ *   null for a JSON value that passes the schema, and for every value under a schema with a truthy `$async`.
  */
+
+/** The compile of a schema the runtime takes whose returns the simulator does not check. */
+export const UNCHECKED_SCHEMA = Object.freeze({ refusal: null, findProblem: () => null });
 
 /**
  * Compiles a schema as the runtime of Claude Code 2.1.332 compiles the schema of an agent() call, and prints
@@ -24,15 +38,31 @@ const INVALID_SCHEMA_START = 'schema is invalid: ';
  */
 export function compileSchema(schema) {
   const validator = new Ajv(VALIDATOR_OPTIONS);
+  let validate = null;
 
   try {
-    validator.compile(schema);
+    validate = validator.compile(schema);
   } catch (error) {
     // The validator's errors for a schema are Error, MissingRefError and, for a bad pattern, SyntaxError.
     if (error instanceof RangeError) throw error;
     return { refusal: readRefusal(error.message), findProblem: null };
   }
-  return { refusal: null, findProblem: () => null };
+  // The validator of a schema with a truthy `$async` gives a promise, and Ajv sets its `$async` to true.
+  // Not measured: how the runtime checks an output against it.
+  if (validate.$async === true) return UNCHECKED_SCHEMA;
+  return { refusal: null, findProblem: (value) => (validate(value) ? null : convertError(validate.errors[0])) };
+}
+
+/**
+ * Claude Code 2.1.332 adds the forbidden key to the validator's message for `additionalProperties`.
+ * @param {import('ajv').ErrorObject} error The first error the validator reports.
+ * @returns {SchemaProblem}
+ */
+function convertError(error) {
+  const path = error.instancePath === '' ? ROOT_PATH : error.instancePath;
+
+  if (error.keyword === 'additionalProperties') return { path, message: `${error.message} ('${error.params.additionalProperty}' is not allowed)` };
+  return { path, message: error.message };
 }
 
 /**

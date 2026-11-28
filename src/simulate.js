@@ -61,7 +61,7 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
 
 /**
  * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' } | { kind: 'never-settles' }>
- *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'call-limit', message: string, call: number }
+ *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema' | 'call-limit', message: string, call: number }
  *   | { kind: 'stopped', reason: 'node-lacks-name' | 'never-settles', message: string }
  *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A `threw` end's `frames`
  *   are as runSimulation gives them. A stop's message has no closing period. `call` is the index of the call
@@ -106,8 +106,14 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * JavaScript engine words it. A schema that is `false`, `0`, `''` or a function gives a call with no schema.
  * agent() checks a JSON copy of the schema, and a schema with no JSON copy gets only the check of its root
  * `type`. So does a call whose compile runs out of stack, such as for a schema nested a few hundred levels deep.
- * Not simulated: the check of `agentType` and `model` against the session, the check of a scripted return
- * against the schema of its call, and a budget that grows by a different count at each call.
+ * A scripted return object for a call with a schema is checked against that schema as the runtime checks an
+ * agent's output, and one that breaks it stops the simulation, since the runtime never gives the script such
+ * an object. A key the schema does not list passes unless a keyword of the schema rules it out, such as
+ * `additionalProperties` set to `false` or to a schema the key's value breaks, and a `default` is not filled
+ * in. A schema with no JSON copy, a schema with a truthy `$async`, or a schema whose compile ran out of stack
+ * checks no return.
+ * Not simulated: the check of `agentType` and `model` against the session, the cap of 5 rejected outputs of
+ * one agent after which agent() throws on the runtime, and a budget that grows by a different count at each call.
  * The `stack` text of an error may name files and lines of the simulator on this machine, so a script that
  * logs a stack or puts one in a prompt gets output that differs between machines.
  * A call of `workflow()` that names a workflow throws an Error with the message
@@ -331,7 +337,7 @@ function createCallRecorder(respond) {
         throw error;
       }
       try {
-        outcome = findCallOutcome(respond, call, recorder.calls, agentCall.opts);
+        outcome = findCallOutcome(respond, call, recorder.calls, agentCall.schema);
       } catch (error) {
         recorder.respondFailure ??= { call, error };
         recorder.calls.push(call);
@@ -354,13 +360,13 @@ function createCallRecorder(respond) {
  * @param {Respond | undefined} respond
  * @param {Omit<TraceCall, 'returned'>} call
  * @param {TraceCall[]} earlierCalls The earlier calls of the trace.
- * @param {unknown} opts The call's options, of the script's realm.
+ * @param {AgentCall['schema']} schema
  * @returns {import('./find-scripted-return.js').ScriptedReturnResult | { kind: 'stopped', reason: 'call-limit', message: string }}
  *   A stop for a call past the cap, which reads no respond, or the scripted return of the call.
  */
-function findCallOutcome(respond, call, earlierCalls, opts) {
+function findCallOutcome(respond, call, earlierCalls, schema) {
   if (isPastCallLimit(call.index)) return { kind: 'stopped', reason: 'call-limit', message: formatCallLimitMessage(call) };
-  return findScriptedReturn(respond, call, earlierCalls, hasSchemaObject(opts));
+  return findScriptedReturn(respond, call, earlierCalls, schema);
 }
 
 /**
@@ -401,15 +407,6 @@ function copyOptions(opts) {
   } catch {
     return null;
   }
-}
-
-/**
- * agent() threw, or gave a call with no schema, for every other schema before it called answerCall.
- * @param {unknown} opts
- * @returns {boolean} True when the options pass a schema object.
- */
-function hasSchemaObject(opts) {
-  return isScriptObject(opts) && isScriptObject(opts.schema);
 }
 
 /**

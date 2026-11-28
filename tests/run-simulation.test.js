@@ -667,6 +667,31 @@ describe('the schema of a call', () => {
     assert.equal(compile.mock.callCount(), 2);
   });
 
+  it('gives answerCall the compile that agent() checked the schema with, one that finds no problem when there was none, or null for no schema', async (t) => {
+    const compile = t.mock.method(Ajv.prototype, 'compile');
+    const problems = [];
+    const answerCall = (call) => {
+      problems.push(call.schema === null ? 'no schema' : call.schema.findProblem({}));
+      return call.schema === null ? 'text' : {};
+    };
+    const body = [
+      "const required = { type: 'object', required: ['a'] }",
+      "const cyclic = { type: 'object', required: ['a'] }",
+      'cyclic.self = cyclic',
+      "await agent('p', { schema: { type: 'object', required: ['b'] } })",
+      "await agent('p', { schema: required })",
+      "await agent('p', { schema: cyclic })",
+      "await agent('p', { schema: false })",
+      "await agent('p')",
+    ].join('\n');
+
+    compile.mock.mockImplementationOnce(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    await simulateBody(body, { answerCall });
+    assert.deepEqual(problems, [null, { path: 'root', message: "must have required property 'a'" }, null, 'no schema', 'no schema']);
+  });
+
   it('checks only the root type of a schema nested deep enough to run the validator out of stack', async () => {
     const body = [
       "let schema = { type: 'object' }",

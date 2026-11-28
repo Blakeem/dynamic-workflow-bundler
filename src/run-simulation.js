@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { promiseHooks } from 'node:v8';
 import { createContext, runInContext, Script } from 'node:vm';
 import { RESERVED_PREFIX } from './analyze-source.js';
-import { compileSchema } from './compile-schema.js';
+import { compileSchema, UNCHECKED_SCHEMA } from './compile-schema.js';
 import { SCRIPT_BODY_PREFIX, wrapScriptBody } from './compile-script.js';
 import { RUNTIME_GLOBAL_NAMES } from './contract.js';
 import { readMetaObject } from './meta-statement.js';
@@ -81,6 +81,10 @@ import { findPosition, readPositionText } from './source-position.js';
  * @property {unknown} opts
  * @property {Readonly<GroupStamp> | null} group
  * @property {string | null} phase The title the runtime groups the call under, or null for none.
+ * @property {import('./compile-schema.js').CompiledSchema | null} schema The compiled schema of the call, one
+ *   the runtime takes, since agent() throws for every other schema before it calls `answerCall`. Null for a
+ *   call with no schema. A schema with no JSON copy, with a truthy `$async`, or whose compile ran past a limit
+ *   of the running Node, gets one that finds no problem in any value.
  */
 
 /**
@@ -383,6 +387,11 @@ function createSimulation(answerCall) {
     runtimeErrors: new WeakSet(),
     /** @type {Map<string, import('./compile-schema.js').CompiledSchema>} Keyed by the JSON text of each schema. */
     compiledSchemas: new Map(),
+    /**
+     * @type {WeakMap<object, import('./compile-schema.js').CompiledSchema>} The compile that the latest check
+     *   of each schema object gave, so a call's return is checked against the schema its agent() took.
+     */
+    takenSchemas: new WeakMap(),
     groupStore,
     /** @type {string[]} */
     logs: [],
@@ -403,7 +412,11 @@ function createSimulation(answerCall) {
       if (!simulation.isActive) return;
       simulation.events.push({ kind: 'phase', index: simulation.phases.push({ title, beforeCall: simulation.callCount }) - 1 });
     },
-    agent: (prompt, opts, resolve, reject) => answerAgentCall(simulation, answerCall, { prompt, opts, group: groupStore.getStore() ?? null }, resolve, reject),
+    agent: (prompt, opts, schema, resolve, reject) => {
+      const callArguments = { prompt, opts, group: groupStore.getStore() ?? null, schema: schema === null ? null : simulation.takenSchemas.get(schema) };
+
+      answerAgentCall(simulation, answerCall, callArguments, resolve, reject);
+    },
     setTimeout: (callback, delay) => addTimer(simulation, callback, delay),
     clearTimeout: (id) => {
       simulation.timers.delete(id);
@@ -419,7 +432,13 @@ function createSimulation(answerCall) {
       simulation.runtimeErrors.add(error);
       return error;
     },
-    findSchemaRefusal: (schema) => findCompiledSchema(simulation.compiledSchemas, schema)?.refusal ?? null,
+    findSchemaRefusal: (schema) => {
+      // agent() checks only the root `type` of a schema that findCompiledSchema gives no compile for.
+      const compiled = findCompiledSchema(simulation.compiledSchemas, schema) ?? UNCHECKED_SCHEMA;
+
+      simulation.takenSchemas.set(schema, compiled);
+      return compiled.refusal;
+    },
   };
 
   return { simulation, host };
