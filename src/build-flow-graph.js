@@ -9,8 +9,11 @@ import { EXPRESSION_MARK } from './read-throw-sites.js';
 /** @typedef {import('./simulate.js').TraceCall} TraceCall */
 /** @typedef {import('./read-throw-sites.js').ThrowSite} ThrowSite */
 /** @typedef {import('./run-simulation.js').Frame} Frame */
+/** @typedef {import('./run-simulation.js').Group} Group */
+/** @typedef {import('./run-simulation.js').GroupStamp} GroupStamp */
 
 const START_ID = 'S0';
+const TOP_CONTEXT_KEY = 'top';
 const DIGIT_RUN = /\d+/g;
 const ROUND_MARKER_END = new RegExp(`${LABEL_SEPARATOR}+r\\d+$`);
 const LEADING_SEPARATORS = new RegExp(`^${LABEL_SEPARATOR}+`);
@@ -47,8 +50,8 @@ const ENGINE_ERROR_NAMES = new Set(['EvalError', 'RangeError', 'ReferenceError',
  * @property {string} role
  * @property {string} phase The phase of the first call of the role, or ''.
  * @property {string} model The `opts.model` of the first call of the role, or ''.
- * @property {number} concurrency The most lanes of one grouped segment that held a call of the role, over every
- *   segment and scenario, 1 or more.
+ * @property {number} concurrency The most lanes that held a call of the role at once, over every scenario, 1 or more.
+ *   A segment of calls gives 1, however many of its calls ran at once, and a segment of groups gives the sum over its lanes.
  */
 
 /**
@@ -101,9 +104,30 @@ const ENGINE_ERROR_NAMES = new Set(['EvalError', 'RangeError', 'ReferenceError',
  */
 
 /**
+ * @typedef {object} PathContext The top level of a trace, or one lane of a group, cut into segments.
+ * @property {boolean} isLane
+ * @property {PathSegment[]} segments In the order of their first members.
+ */
+
+/**
+ * @typedef {{ kind: 'calls', steps: PathStep[] } | { kind: 'groups', lanes: PathContext[] }} PathSegment A run of
+ *   a context's own calls, or the lanes of the groups it started that ran at the same time, by group and then by item.
+ */
+
+/**
+ * @typedef {object} ContextIndex The members of each context of a trace, keyed as readContextKey gives.
+ * @property {Map<string, { steps: PathStep[], groups: number[] }>} members The context's own calls, and its own
+ *   groups that hold a call, each in index order.
+ * @property {Map<number, number>} lastCalls By group, the index of the last call made in it or in a group nested in it.
+ * @property {Map<number, Set<number>>} filledItems By group, each item whose lane holds a call, its own or nested.
+ * @property {Group[]} groups
+ */
+
+/**
  * @typedef {object} SimulationPath
  * @property {FlowSimulation} simulation
  * @property {PathStep[]} steps
+ * @property {PathContext} top
  * @property {PathEnd} end
  */
 
@@ -129,9 +153,8 @@ const ENGINE_ERROR_NAMES = new Set(['EvalError', 'RangeError', 'ReferenceError',
  * A scenario whose simulation stopped or whose script was refused, a call whose label starts with no role,
  * a return with no end state, a returned status that differs from the scenario's endState, and a thrown error
  * whose newest frame is no throw site, that has no frame, or whose engine error name its site does not call as a
- * global with no spread each make the scenario unmapped.
- * A trace records only the innermost group of a call, so two groups that run at the same time, or one
- * started inside another's lane, fold as segments one after the other.
+ * global with no spread, and a call that a context made after it started a group and before the last call made in that
+ * group, each make the scenario unmapped.
  * @param {object} input
  * @param {string[]} input.roles As readRoles gives them.
  * @param {ThrowSite[]} input.throwSites As readThrowSites gives them.
@@ -178,7 +201,10 @@ function readSimulationPath(simulation, roles, throwSites) {
   const end = trace.end.kind === 'returned' ? readReturnedEnd(trace.end.value, simulation.endState) : readThrowEnd(trace.end, throwSites, `the script ${formatSimulationEnd(trace)}`);
 
   if ('reason' in end) return end;
-  return { simulation, steps, end };
+  const contexts = indexContexts(steps, trace.groups);
+  const overlap = findOverlap(steps, contexts);
+  if (overlap !== null) return { reason: overlap };
+  return { simulation, steps, top: cutContext(contexts, TOP_CONTEXT_KEY, false), end };
 }
 
 /**
@@ -320,17 +346,155 @@ function readFirstClause(message, blankLabel) {
 }
 
 /**
+ * @param {PathStep[]} steps
+ * @param {Group[]} groups The groups of the trace.
+ * @returns {ContextIndex}
+ */
+function indexContexts(steps, groups) {
+  const members = new Map();
+  const lastCalls = new Map();
+  const filledItems = new Map();
+
+  for (const step of steps) {
+    readMembers(members, readContextKey(step.call.group)).steps.push(step);
+    for (let stamp = step.call.group; stamp !== null; stamp = groups[stamp.group].parent) {
+      if (!filledItems.has(stamp.group)) filledItems.set(stamp.group, new Set());
+      filledItems.get(stamp.group).add(stamp.item);
+      lastCalls.set(stamp.group, step.call.index);
+    }
+  }
+  groups.forEach((group, groupIndex) => {
+    if (lastCalls.has(groupIndex)) readMembers(members, readContextKey(group.parent)).groups.push(groupIndex);
+  });
+
+  return { members, lastCalls, filledItems, groups };
+}
+
+/**
+ * @param {ContextIndex['members']} members
+ * @param {string} contextKey
+ * @returns {{ steps: PathStep[], groups: number[] }} The members of the context, added empty when missing.
+ */
+function readMembers(members, contextKey) {
+  if (!members.has(contextKey)) members.set(contextKey, { steps: [], groups: [] });
+  return members.get(contextKey);
+}
+
+/**
+ * The stage of a stamp is left out, so each item of a pipeline() is one lane across its stages.
+ * @param {Readonly<Pick<GroupStamp, 'group' | 'item'>> | null} stamp A call's group, or a group's parent.
+ * @returns {string}
+ */
+function readContextKey(stamp) {
+  return stamp === null ? TOP_CONTEXT_KEY : JSON.stringify([stamp.group, stamp.item]);
+}
+
+/**
+ * @param {PathStep[]} steps
+ * @param {ContextIndex} contexts
+ * @returns {string | null} The reason for the first call that a context made after it started a group and before
+ *   the last call made in that group or in a group nested in it, or null for none. The reason names the group of the
+ *   next call made in that group, so a group nested in it that the context's own group left running is named too.
+ */
+function findOverlap(steps, { members, lastCalls, groups }) {
+  for (const { call } of steps) {
+    const ownGroups = members.get(readContextKey(call.group)).groups;
+    const runningGroup = ownGroups.find((groupIndex) => groups[groupIndex].beforeCall <= call.index && call.index < lastCalls.get(groupIndex));
+    let runningStep = null;
+    let innerGroup = -1;
+    let groupName = '';
+
+    if (runningGroup === undefined) continue;
+    runningStep = /** @type {PathStep} */ (steps.find((step) => step.call.index > call.index && isStampInGroup(step.call.group, runningGroup, groups)));
+    innerGroup = /** @type {GroupStamp} */ (runningStep.call.group).group;
+    groupName = innerGroup === runningGroup ? `group ${runningGroup}` : `group ${innerGroup}, started inside group ${runningGroup}`;
+
+    return `${formatContextName(call.group)} made ${formatCallName(call)} before the last call made in ${groupName}, which it started, so the flow map cannot place it`;
+  }
+  return null;
+}
+
+/**
+ * @param {Readonly<GroupStamp> | null} stamp A call's group.
+ * @param {number} groupIndex
+ * @param {Group[]} groups
+ * @returns {boolean} True when the stamp's group is that group or is nested in it.
+ */
+function isStampInGroup(stamp, groupIndex, groups) {
+  for (let lane = stamp; lane !== null; lane = groups[lane.group].parent) {
+    if (lane.group === groupIndex) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {Readonly<GroupStamp> | null} stamp
+ * @returns {string}
+ */
+function formatContextName(stamp) {
+  return stamp === null ? 'the top level' : `the lane of item ${stamp.item} of group ${stamp.group}`;
+}
+
+/**
+ * Orders the members of one context by where they start, where a group sits before the call of the number of its
+ * beforeCall and two groups of one beforeCall go by index, and cuts them into segments. findOverlap leaves no
+ * scenario in which a call and a group tie, since that call falls before the group's last call. A group joins the group
+ * segment before it when its beforeCall is at most the index of the last call made in a group of that segment.
+ * @param {ContextIndex} contexts
+ * @param {string} contextKey
+ * @param {boolean} isLane
+ * @returns {PathContext}
+ */
+function cutContext(contexts, contextKey, isLane) {
+  const { steps, groups: groupIndexes } = contexts.members.get(contextKey) ?? { steps: [], groups: [] };
+  const callMembers = steps.map((step) => ({ start: step.call.index, isGroup: false, order: step.call.index, step }));
+  const groupMembers = groupIndexes.map((groupIndex) => ({ start: contexts.groups[groupIndex].beforeCall, isGroup: true, order: groupIndex, step: null }));
+  const members = [...callMembers, ...groupMembers].sort((left, right) => left.start - right.start || Number(right.isGroup) - Number(left.isGroup) || left.order - right.order);
+  /** @type {({ kind: 'calls', steps: PathStep[] } | { kind: 'groups', groupIndexes: number[], lastCall: number })[]} */
+  const cuts = [];
+
+  for (const member of members) {
+    const last = cuts.at(-1);
+
+    if (member.step !== null) {
+      if (last?.kind === 'calls') last.steps.push(member.step);
+      else cuts.push({ kind: 'calls', steps: [member.step] });
+      continue;
+    }
+    const lastCall = /** @type {number} */ (contexts.lastCalls.get(member.order));
+    if (last?.kind === 'groups' && member.start <= last.lastCall) {
+      last.groupIndexes.push(member.order);
+      last.lastCall = Math.max(last.lastCall, lastCall);
+    } else {
+      cuts.push({ kind: 'groups', groupIndexes: [member.order], lastCall });
+    }
+  }
+
+  return { isLane, segments: cuts.map((cut) => (cut.kind === 'calls' ? cut : { kind: 'groups', lanes: cutLanes(contexts, cut.groupIndexes) })) };
+}
+
+/**
+ * @param {ContextIndex} contexts
+ * @param {number[]} groupIndexes The groups of one segment, in index order.
+ * @returns {PathContext[]} One per item that holds a call, by group and then by item.
+ */
+function cutLanes(contexts, groupIndexes) {
+  return groupIndexes.flatMap((group) => {
+    const items = [.../** @type {Set<number>} */ (contexts.filledItems.get(group))].sort((left, right) => left - right);
+
+    return items.map((item) => cutContext(contexts, readContextKey({ group, item }), true));
+  });
+}
+
+/**
  * Adds the nodes and edges of one path to the fold.
  * @param {Fold} fold
  * @param {SimulationPath} path
  */
-function foldPath(fold, { simulation, steps, end }) {
+function foldPath(fold, { simulation, steps, top, end }) {
   const firstSeen = new Map();
-  const walkCounts = new Map();
-  const segments = cutSegments(steps);
-  let reached = new Set();
-  /** @type {PathStep[] | null} */
-  let exits = null;
+  /** @type {ContextFold | null} */
+  let topFold = null;
 
   steps.forEach((step, position) => {
     if (!firstSeen.has(step.role)) firstSeen.set(step.role, position);
@@ -338,53 +502,14 @@ function foldPath(fold, { simulation, steps, end }) {
   });
   addEnd(fold, end, simulation);
 
-  for (const segment of segments) {
-    const reachedBefore = reached;
-
-    reached = new Set(reachedBefore);
-    for (const lane of segment.lanes) foldLane(fold, { simulation, lane, isGrouped: segment.isGrouped, reachedBefore, reached, firstSeen, walkCounts });
-    foldJoins(fold, { simulation, exits, entries: segment.lanes.map((lane) => lane[0]), reachedBefore, firstSeen, walkCounts });
-    if (segment.isGrouped) countConcurrency(fold, segment.lanes);
-    exits = segment.lanes.map((lane) => lane[lane.length - 1]);
+  topFold = foldContext(fold, top, { simulation, reachedBefore: new Set(), firstSeen, walkCounts: new Map() });
+  for (const [role, count] of topFold.concurrency) {
+    const agent = fold.agents.get(role);
+    agent.concurrency = Math.max(agent.concurrency, count);
   }
 
-  if (exits === null) addEdge(fold, { from: START_ID, to: end.key, when: simulation.when, back: false, nextItem: false, repeat: 0 });
-  else for (const exit of exits) addEdge(fold, { from: agentKey(exit.role), to: end.key, when: simulation.when, back: false, nextItem: false, repeat: 0 });
-}
-
-/**
- * @param {PathStep[]} steps
- * @returns {{ isGrouped: boolean, lanes: PathStep[][] }[]} One segment per longest run of steps that are all
- *   ungrouped or all in one group. An ungrouped segment is one lane, and a grouped one has one lane per item, by item.
- */
-function cutSegments(steps) {
-  const segments = [];
-
-  for (const step of steps) {
-    const group = step.call.group === null ? null : step.call.group.group;
-    const last = segments.at(-1);
-
-    if (last === undefined || last.group !== group) segments.push({ group, steps: [step] });
-    else last.steps.push(step);
-  }
-
-  return segments.map(({ group, steps: segmentSteps }) => ({ isGrouped: group !== null, lanes: group === null ? [segmentSteps] : cutLanes(segmentSteps) }));
-}
-
-/**
- * @param {PathStep[]} steps Steps of one group.
- * @returns {PathStep[][]}
- */
-function cutLanes(steps) {
-  const lanes = new Map();
-
-  for (const step of steps) {
-    const item = /** @type {NonNullable<TraceCall['group']>} */ (step.call.group).item;
-    if (!lanes.has(item)) lanes.set(item, []);
-    lanes.get(item).push(step);
-  }
-
-  return [...lanes.keys()].sort((left, right) => left - right).map((item) => lanes.get(item));
+  if (topFold.exits.length === 0) addEdge(fold, { from: START_ID, to: end.key, when: simulation.when, back: false, nextItem: false, repeat: 0 });
+  else for (const exit of topFold.exits) addEdge(fold, { from: agentKey(exit.role), to: end.key, when: simulation.when, back: false, nextItem: false, repeat: 0 });
 }
 
 /**
@@ -412,36 +537,103 @@ function addEnd(fold, end, simulation) {
 }
 
 /**
- * @typedef {object} LaneInput
+ * @typedef {object} FoldInput
  * @property {FlowSimulation} simulation
- * @property {PathStep[]} lane
- * @property {boolean} isGrouped
- * @property {Set<string>} reachedBefore The roles the segments before this one reached.
- * @property {Set<string>} reached The roles reached so far, which this lane adds to.
+ * @property {Set<string>} reachedBefore The roles that the segments before this unit reached, in its own context and
+ *   in every enclosing one.
  * @property {Map<string, number>} firstSeen The position of each role's first call in the trace.
  * @property {Map<string, number>} walkCounts
  */
 
 /**
- * Adds an edge from each step of a lane to the next.
- * @param {Fold} fold
- * @param {LaneInput} input
+ * @typedef {object} ContextFold What folding a context or one of its segments gives the unit around it.
+ * @property {PathStep[]} entries
+ * @property {PathStep[]} exits Empty for a context with no segment.
+ * @property {Set<string>} reached The roles reached before the unit and in it.
+ * @property {Map<string, number>} concurrency By role, the most lanes that held a call of the role at once in the unit.
  */
-function foldLane(fold, { simulation, lane, isGrouped, reachedBefore, reached, firstSeen, walkCounts }) {
-  const laneReached = new Set(reachedBefore);
 
-  lane.forEach((step, position) => {
+/**
+ * Folds the segments of one context in order and joins each to the one before it. The first segment of the top
+ * level joins the start, and the first segment of a lane joins nothing, since the segment that holds the lane joins it.
+ * @param {Fold} fold
+ * @param {PathContext} context
+ * @param {FoldInput} input
+ * @returns {ContextFold}
+ */
+function foldContext(fold, { isLane, segments }, input) {
+  const concurrency = new Map();
+  let reached = input.reachedBefore;
+  /** @type {PathStep[]} */
+  let entries = [];
+  /** @type {PathStep[]} */
+  let exits = [];
+
+  segments.forEach((segment, position) => {
+    const segmentInput = { ...input, reachedBefore: reached };
+    const segmentFold = segment.kind === 'calls' ? foldCallSegment(fold, segment.steps, isLane, segmentInput) : foldGroupSegment(fold, segment.lanes, segmentInput);
+
+    if (position > 0 || !isLane) foldJoins(fold, { ...segmentInput, exits: position === 0 ? null : exits, entries: segmentFold.entries });
+    if (position === 0) entries = segmentFold.entries;
+    exits = segmentFold.exits;
+    reached = segmentFold.reached;
+    for (const [role, count] of segmentFold.concurrency) concurrency.set(role, Math.max(concurrency.get(role) ?? 0, count));
+  });
+
+  return { entries, exits, reached, concurrency };
+}
+
+/**
+ * Adds an edge from each call of a segment to the next.
+ * @param {Fold} fold
+ * @param {PathStep[]} steps The calls of one segment, one or more.
+ * @param {boolean} isLane True when the segment's context is a lane, whose calls make no next-item edge.
+ * @param {FoldInput} input
+ * @returns {ContextFold}
+ */
+function foldCallSegment(fold, steps, isLane, { simulation, reachedBefore, firstSeen, walkCounts }) {
+  const reached = new Set(reachedBefore);
+  const concurrency = new Map();
+
+  steps.forEach((step, position) => {
     if (position > 0) {
-      const previous = lane[position - 1];
-      const nextItem = !isGrouped && isItemChange(previous.item, step.item);
-      const back = !nextItem && isBackStep(previous.role, step.role, laneReached, firstSeen);
+      const previous = steps[position - 1];
+      const nextItem = !isLane && isItemChange(previous.item, step.item);
+      const back = !nextItem && isBackStep(previous.role, step.role, reached, firstSeen);
       const repeat = back ? countWalk(walkCounts, previous, step) + 1 : 0;
 
       addEdge(fold, { from: agentKey(previous.role), to: agentKey(step.role), when: simulation.when, back, nextItem, repeat });
     }
-    laneReached.add(step.role);
     reached.add(step.role);
+    concurrency.set(step.role, 1);
   });
+
+  return { entries: [steps[0]], exits: [/** @type {PathStep} */ (steps.at(-1))], reached, concurrency };
+}
+
+/**
+ * Folds each lane of a segment of groups as a context. No lane reaches the roles of another.
+ * @param {Fold} fold
+ * @param {PathContext[]} lanes
+ * @param {FoldInput} input
+ * @returns {ContextFold}
+ */
+function foldGroupSegment(fold, lanes, input) {
+  const reached = new Set(input.reachedBefore);
+  const concurrency = new Map();
+  const entries = [];
+  const exits = [];
+
+  for (const lane of lanes) {
+    const laneFold = foldContext(fold, lane, input);
+
+    entries.push(...laneFold.entries);
+    exits.push(...laneFold.exits);
+    for (const role of laneFold.reached) reached.add(role);
+    for (const [role, count] of laneFold.concurrency) concurrency.set(role, (concurrency.get(role) ?? 0) + count);
+  }
+
+  return { entries, exits, reached, concurrency };
 }
 
 /**
@@ -468,22 +660,6 @@ function foldJoins(fold, { simulation, exits, entries, reachedBefore, firstSeen,
       if (back && !walkedKeys.has(walkKey)) walkedKeys.set(walkKey, countWalk(walkCounts, exit, entry) + 1);
       addEdge(fold, { from: agentKey(exit.role), to: agentKey(entry.role), when: simulation.when, back, nextItem, repeat: back ? walkedKeys.get(walkKey) : 0 });
     }
-  }
-}
-
-/**
- * @param {Fold} fold
- * @param {PathStep[][]} lanes The lanes of one group.
- */
-function countConcurrency(fold, lanes) {
-  const laneCounts = new Map();
-
-  for (const lane of lanes) {
-    for (const role of new Set(lane.map((step) => step.role))) laneCounts.set(role, (laneCounts.get(role) ?? 0) + 1);
-  }
-  for (const [role, count] of laneCounts) {
-    const agent = fold.agents.get(role);
-    agent.concurrency = Math.max(agent.concurrency, count);
   }
 }
 

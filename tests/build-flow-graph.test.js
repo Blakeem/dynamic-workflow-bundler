@@ -20,7 +20,10 @@ const SEQ_ROUND_2_LABELS = ['dev a r1', 'check a r1', 'dev a r2', 'check a r2', 
  * @param {string} name
  * @param {CallSpec[]} callSpecs
  * @param {unknown} [end]
- * @param {{ when?: string, endState?: string }} [scenario]
+ * @param {{ when?: string, endState?: string, beforeCalls?: number[], parents?: ([number, number] | null)[] }} [scenario]
+ *   `beforeCalls` gives the beforeCall of each group, by index. Each group missing from it starts at its first call,
+ *   or after the last call. `parents` gives the lane that started each group as [group, item]. Each group missing
+ *   from it has the parent null.
  * @returns {import('../src/build-flow-graph.js').FlowSimulation}
  */
 function createSimulation(name, callSpecs, end = DONE, scenario = {}) {
@@ -36,7 +39,17 @@ function createSimulation(name, callSpecs, end = DONE, scenario = {}) {
       phase,
     };
   });
-  const trace = { script: 's.js', scenario: name, runtime: '2.1.332', end, calls, groups: [], phases: [], logs: [], events: [] };
+  const groupCount = Math.max(scenario.beforeCalls?.length ?? 0, ...calls.map((call) => (call.group === null ? 0 : call.group.group + 1)));
+  const groups = Array.from({ length: groupCount }, (_, groupIndex) => {
+    const groupCalls = calls.filter((call) => call.group?.group === groupIndex);
+    const firstCall = groupCalls.length === 0 ? calls.length : groupCalls[0].index;
+    const items = Math.max(0, ...groupCalls.map((call) => call.group.item + 1));
+    const parentLane = scenario.parents?.[groupIndex] ?? null;
+    const parent = parentLane === null ? null : { group: parentLane[0], item: parentLane[1], stage: 0 };
+
+    return { kind: 'parallel', items, stages: 1, parent, beforeCall: scenario.beforeCalls?.[groupIndex] ?? firstCall };
+  });
+  const trace = { script: 's.js', scenario: name, runtime: '2.1.332', end, calls, groups, phases: [], logs: [], events: [] };
 
   return { name, when: scenario.when ?? name, endState: scenario.endState ?? null, trace };
 }
@@ -291,7 +304,7 @@ describe('buildFlowGraph', () => {
     assert.deepEqual(noRole, [{ scenario: 'a', reason: 'call 0 (label "dev") names no role of the script, which has no role' }]);
   });
 
-  it('gives an agent node the phase and model of its first call, and the most lanes of one grouped segment that held its calls', () => {
+  it('gives an agent node the phase and model of its first call, and the most lanes that held a call of its role at once', () => {
     const fanCalls = [
       { label: 'review:u1/x', group: [0, 0], phase: 'Review', model: 'sonnet' },
       { label: 'review:u2/x', group: [0, 1], phase: 'Review', model: 'sonnet' },
@@ -335,13 +348,53 @@ describe('buildFlowGraph', () => {
     );
     // Item 1 calls first, and its lane still comes second, so the plain back edge of item 0 is made first.
     const laneOrder = buildGraph([createSimulation('a', [{ label: 'work:b', group: [0, 1] }, { label: 'work', group: [0, 0] }, 'work:c'])], { roles: ['work'] });
-    // The two calls of group 0 are not next to each other, so they are two segments.
-    const split = buildGraph([createSimulation('a', [{ label: 'work:a', group: [0, 0] }, 'check', { label: 'work:b', group: [0, 1] }])], { roles: ['work', 'check'] });
 
     assert.deepEqual(listEdges(rounds), ['S0 -> a1 0', 'a1 -> a2 0', 'a2 -back-> a1 2', 'a2 -> t1 0']);
     assert.deepEqual(listEdges(laneOrder), ['S0 -> a1 0', 'a1 -back-> a1 2', 'a1 =next=> a1 0', 'a1 -> t1 0']);
-    assert.equal(split.nodes[0].concurrency, 1);
-    assert.deepEqual(listEdges(split), ['S0 -> a1 0', 'a1 -> a2 0', 'a1 -> t1 0', 'a2 -back-> a1 2']);
+  });
+
+  it('leaves unmapped a call that a context made after it started a group and before the last call of that group', () => {
+    const reason = (context, call, group) => `${context} made ${call} before the last call made in group ${group}, which it started, so the flow map cannot place it`;
+    const unmapped = findUnmapped(
+      [
+        createSimulation('split', [{ label: 'work:a', group: [0, 0] }, 'check', { label: 'work:b', group: [0, 1] }]),
+        // Group 1 starts before call 0 and makes its one call at call 1, after the call of the top level.
+        createSimulation('first call', ['check', { label: 'work:a', group: [1, 0] }], DONE, { beforeCalls: [2, 0] }),
+      ],
+      { roles: ['work', 'check'] },
+    );
+    // A call at the index of the group's last call cannot be the context's own, and a call after it is outside the group.
+    const after = buildGraph([createSimulation('a', [{ label: 'work:a', group: [0, 0] }, 'check'], DONE, { beforeCalls: [0] })], { roles: ['work', 'check'] });
+
+    assert.deepEqual(unmapped, [
+      { scenario: 'split', reason: reason('the top level', 'call 1 (label "check")', 0) },
+      { scenario: 'first call', reason: reason('the top level', 'call 0 (label "check")', 1) },
+    ]);
+    assert.deepEqual(listEdges(after), ['S0 -> a1 0', 'a1 -> a2 0', 'a2 -> t1 0']);
+  });
+
+  it('adds a group to a segment of groups when it ran at the same time as any group of the segment', () => {
+    // Group 2 starts after the last call of group 1 and before the last call of group 0.
+    const calls = [{ label: 'work:a', group: [0, 0] }, { label: 'scan', group: [1, 0] }, { label: 'probe', group: [2, 0] }, { label: 'work:b', group: [0, 1] }, 'report'];
+    const graph = buildGraph([createSimulation('a', calls, DONE, { beforeCalls: [0, 1, 2] })], { roles: ['work', 'scan', 'probe', 'report'] });
+
+    assert.deepEqual(listEdges(graph), ['S0 -> a1 0', 'S0 -> a2 0', 'S0 -> a3 0', 'a1 -> a4 0', 'a2 -> a4 0', 'a3 -> a4 0', 'a4 -> t1 0']);
+    assert.deepEqual(graph.nodes.slice(0, 4).map((node) => node.concurrency), [2, 1, 1, 1]);
+  });
+
+  it('counts the calls of a group nested in a group when it adds a later group to their segment', () => {
+    // Group 0 makes its own last call at call 0, and group 1, started in its lane, runs on past the start of group 2.
+    const calls = [{ label: 'work', group: [0, 0] }, { label: 'scan', group: [1, 0] }, { label: 'probe', group: [2, 0] }, { label: 'merge', group: [1, 0] }, 'report'];
+    const graph = buildGraph([createSimulation('a', calls, DONE, { beforeCalls: [0, 1, 2], parents: [null, [0, 0], null] })], { roles: ['work', 'scan', 'probe', 'merge', 'report'] });
+
+    assert.deepEqual(listEdges(graph), ['S0 -> a1 0', 'S0 -> a3 0', 'a1 -> a2 0', 'a2 -> a4 0', 'a3 -> a5 0', 'a4 -> a5 0', 'a5 -> t1 0']);
+  });
+
+  it('leaves out a group in which no call was made', () => {
+    // Group 0 starts between the two calls and makes no call, so plan joins check.
+    const graph = buildGraph([createSimulation('a', ['plan', 'check'], DONE, { beforeCalls: [1] })], { roles: ['plan', 'check'] });
+
+    assert.deepEqual(listEdges(graph), ['S0 -> a1 0', 'a1 -> a2 0', 'a2 -> t1 0']);
   });
 
   it('makes a next-item edge inside an ungrouped lane from one non-empty item to another, and none inside a group', () => {

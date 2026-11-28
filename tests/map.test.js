@@ -32,6 +32,9 @@ const GAPS_SCENARIOS = `export default [
 ];
 `;
 
+const ANSWER_ALL_SCENARIOS = "export default [{ name: 'a', respond: { '': 'ok' } }];\n";
+const DONE_NODE = { id: 't1', kind: 'end', label: 'done', source: 'returned', line: null, scenarios: ['a'], whens: ['a'] };
+
 const folder = await mkdtemp(join(tmpdir(), 'dwfb-map-'));
 await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
 after(async () => {
@@ -74,6 +77,25 @@ async function listThrowNodes(files) {
 
   assert.notEqual(graph, null);
   return graph.nodes.filter((node) => node.kind === 'throw').map(({ id, line, scenarios }) => ({ id, line, scenarios }));
+}
+
+/**
+ * @param {string} id
+ * @param {string} role
+ * @param {number} concurrency
+ * @returns {import('../src/build-flow-graph.js').AgentNode} The node of a role whose calls give no phase and no model.
+ */
+function createAgentNode(id, role, concurrency) {
+  return { id, kind: 'agent', label: role, role, phase: '', model: '', concurrency };
+}
+
+/**
+ * @param {string} from
+ * @param {string} to
+ * @returns {import('../src/build-flow-graph.js').FlowEdge} A forward edge that the scenario `a` took.
+ */
+function createStep(from, to) {
+  return { from, to, whens: ['a'], back: false, nextItem: false, repeat: 0 };
 }
 
 /**
@@ -201,6 +223,105 @@ describe('map', () => {
     assert.deepEqual((await map(otherGlobal)).unmapped, [{ scenario: 'a', reason: engineReason('Cannot convert a Symbol value to a string', 'Error') }]);
     assert.deepEqual((await map(noStack)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: boom, and the simulation recorded no place it was created at' }]);
     assert.deepEqual(await listThrowNodes(typeSite), [{ id: 'x1', line: 2, scenarios: ['a'] }]);
+  });
+
+  it('folds a group started inside a lane inside that lane, and counts the lanes that held a call of each role at once', async () => {
+    const inStage = await writeFiles(
+      'in-stage',
+      "await pipeline(['u1', 'u2'], (unit) => parallel(['x', 'y'].map((lens) => () => agent('r', { label: `review:${unit}/${lens}` }))), (unit) => agent('v', { label: `verify:${unit}` }));\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+    const inThunk = await writeFiles(
+      'in-thunk',
+      "await parallel(['a', 'b'].map((part) => async () => {\n  await parallel(['1', '2'].map((n) => () => agent('d', { label: `draft:${part}/${n}` })));\n  return agent('m', { label: `merge:${part}` });\n}));\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+    const roundsInLane = await writeFiles(
+      'rounds-in-lane',
+      "await parallel(['a', 'b'].map((part) => () => parallel([async () => {\n  await agent('r', { label: `review:${part} r1` });\n  return agent('r', { label: `review:${part} r2` });\n}])));\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+
+    assert.deepEqual((await map(inStage)).graph, {
+      nodes: [createAgentNode('a1', 'review', 4), createAgentNode('a2', 'verify', 2), DONE_NODE],
+      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a2', 't1')],
+      phases: [],
+      loops: [],
+    });
+    assert.deepEqual((await map(inThunk)).graph, {
+      nodes: [createAgentNode('a1', 'draft', 4), createAgentNode('a2', 'merge', 2), DONE_NODE],
+      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a2', 't1')],
+      phases: [],
+      loops: [],
+    });
+    // Each lane of the inner groups walks review to review once, though the four calls alternate between the lanes.
+    assert.deepEqual((await map(roundsInLane)).graph, {
+      nodes: [createAgentNode('a1', 'review', 2), DONE_NODE],
+      edges: [createStep('S0', 'a1'), { ...createStep('a1', 'a1'), back: true, repeat: 2 }, createStep('a1', 't1')],
+      phases: [],
+      loops: [{ from: 'a1', to: 'a1', whens: ['a'], repeat: 2 }],
+    });
+  });
+
+  it('reaches, inside a lane, the roles of the segments before it in every context around it', async () => {
+    const backIntoTop = await writeFiles(
+      'back-into-top',
+      "await agent('c', { label: 'check' });\nawait parallel([async () => {\n  await parallel([() => agent('w', { label: 'work' })]);\n  return agent('c', { label: 'check' });\n}]);\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+
+    // The top level reached check before the outer group, so the lane's step from work to check goes back.
+    assert.deepEqual((await map(backIntoTop)).graph, {
+      nodes: [createAgentNode('a1', 'check', 1), createAgentNode('a2', 'work', 1), DONE_NODE],
+      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a1', 't1'), { ...createStep('a2', 'a1'), back: true, repeat: 2 }],
+      phases: [],
+      loops: [{ from: 'a2', to: 'a1', whens: ['a'], repeat: 2 }],
+    });
+  });
+
+  it('folds two groups that ran at the same time as lanes of one segment', async () => {
+    const together = await writeFiles(
+      'together',
+      "await Promise.all([\n  parallel(['1', '2'].map((n) => () => agent('s', { label: `scan:${n}` }))),\n  parallel(['1', '2', '3'].map((n) => () => agent('p', { label: `probe:${n}` }))),\n]);\nawait agent('w', { label: 'report' });\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+
+    assert.deepEqual((await map(together)).graph, {
+      nodes: [createAgentNode('a1', 'scan', 2), createAgentNode('a2', 'probe', 3), createAgentNode('a3', 'report', 1), DONE_NODE],
+      edges: [createStep('S0', 'a1'), createStep('S0', 'a2'), createStep('a1', 'a3'), createStep('a2', 'a3'), createStep('a3', 't1')],
+      phases: [],
+      loops: [],
+    });
+  });
+
+  it('leaves unmapped a context that makes a call of its own before the last call made in a group it started or in a group nested in it', async () => {
+    const unawaited = await writeFiles(
+      'unawaited',
+      "await parallel([async () => {\n  const scans = parallel(['1', '2'].map((n) => async () => {\n    await agent('x', { label: `scan:${n}` });\n    return agent('x', { label: `scan:${n} again` });\n  }));\n  await agent('y', { label: 'note' });\n  return scans;\n}]);\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+    // The top level awaits group 0, whose lane leaves group 1 running without await.
+    const unawaitedInLane = await writeFiles(
+      'unawaited-in-lane',
+      "await parallel([() => {\n  parallel(['1', '2'].map((n) => async () => {\n    await agent('x', { label: `scan:${n}` });\n    return agent('x', { label: `scan:${n} again` });\n  }));\n  return 1;\n}]);\nawait agent('y', { label: 'note' });\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+    // The runtime settles group 0 before `note`, while the lane's promise chain still makes `scan b` after it.
+    const settledChain = await writeFiles(
+      'settled-chain',
+      "await parallel([() => {\n  agent('x', { label: 'scan a' }).then(() => agent('x', { label: 'scan b' }));\n  return 1;\n}]);\nawait agent('y', { label: 'note' });\nreturn { status: 'done' };\n",
+      ANSWER_ALL_SCENARIOS,
+    );
+
+    assert.deepEqual((await map(unawaited)).unmapped, [
+      { scenario: 'a', reason: 'the lane of item 0 of group 0 made call 0 (label "note") before the last call made in group 1, which it started, so the flow map cannot place it' },
+    ]);
+    assert.deepEqual((await map(unawaitedInLane)).unmapped, [
+      { scenario: 'a', reason: 'the top level made call 2 (label "note") before the last call made in group 1, started inside group 0, which it started, so the flow map cannot place it' },
+    ]);
+    assert.deepEqual((await map(settledChain)).unmapped, [
+      { scenario: 'a', reason: 'the top level made call 1 (label "note") before the last call made in group 0, which it started, so the flow map cannot place it' },
+    ]);
   });
 
   it('leaves unmapped each scenario of a refused script', async () => {
