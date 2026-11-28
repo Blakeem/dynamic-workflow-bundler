@@ -21,8 +21,8 @@ const SCENARIOS_FILE_RECOVERY = 'so name the scenarios file with --scenarios <fi
  */
 
 /**
- * Finds the scenarios file of a script that `dwfb simulate`, `dwfb inspect`, `dwfb map` or `dwfb snapshot`
- * names: the file `--scenarios` names, else the scenarios of the first workflow of the config file whose out is
+ * Finds the scenarios file of a script that `dwfb simulate`, `dwfb inspect`, `dwfb map`, `dwfb snapshot` or
+ * `dwfb cover` names: the file `--scenarios` names, else the scenarios of the first workflow of the config file whose out is
  * the script, as locate() takes the first.
  * @param {string} script
  * @param {string | undefined} scenariosFile The path `--scenarios` names.

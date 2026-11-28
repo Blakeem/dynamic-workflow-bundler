@@ -2384,6 +2384,159 @@ describe('dwfb snapshot', () => {
   });
 });
 
+describe('dwfb cover', () => {
+  const META = "export const meta = { name: 'p', description: 'd' };\n";
+  const COVER_FIXTURES = join(FIXTURES, 'cover');
+  const README_SECTION_HEADING = '\n## dwfb cover\n';
+  const README_RUN_PATTERN = /^\$ dwfb (?<args>cover [^\n]*)\n(?<output>[^]*?)```$/m;
+  const GAPS_OUTPUT = [
+    'gaps.js:1:1 phase-unlisted The scenario "ships" uses the phase "Ship", which meta.phases does not list. Add the phase to meta.phases, or correct the title that the script gives.',
+    'gaps.js:4:31 phase-unreached No scenario makes a call under the phase "Audit" of meta.phases. Add a scenario with a call under it, or remove it from meta.phases.',
+    'gaps.js:8:54 end-state-unreached No scenario reaches the end state "halted". Add a scenario whose simulation ends in it, or remove it from the constant.',
+    'gaps.js:14:9 throw-site-unreached No scenario reaches this throw site. Add a scenario whose simulation ends with its error, or put // @unreached <reason> on the line above it.',
+    'gaps.js:18:43 role-unreached No scenario reaches the role audit. Add a scenario whose simulation makes a call of the role.',
+    'gaps.js: 2 scenarios',
+    '  roles: 2 of 3 reached',
+    '  throw sites: 1 of 2 reached, 1 marked unreached',
+    '  end states: 1 of 2 reached',
+    '  phases: 1 of 2 reached',
+    '',
+  ].join('\n');
+  const CLEAN_OUTPUT = 'clean.js: 1 scenario\n  roles: 1 of 1 reached\n  throw sites: 0 of 0 reached\n  end states: none declared with // @end-states\n  phases: 0 of 0 reached\n';
+  const CLEAN_COVERAGE = { ok: true, script: 'clean.js', scenarios: 'clean.scenarios.js', scenarioCount: 1, roles: [{ role: 'plan', line: 2, column: 40, reached: true }], throwSites: [], endStates: null, phases: [], findings: [], unread: [] };
+
+  /**
+   * @returns {Promise<string>} A new folder of an ES module package that holds the fixture script with gaps, a
+   *   script with no gap, a refused script and their scenarios files.
+   */
+  async function writeCoverFolder() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const name of ['gaps.js', 'gaps.scenarios.js']) await cp(join(COVER_FIXTURES, name), join(folder, name));
+    await writeFile(join(folder, 'clean.js'), `${META}await agent('Plan the work.', { label: 'plan' });\nreturn { status: 'done' };\n`);
+    await writeFile(join(folder, 'clean.scenarios.js'), "export default [{ name: 'plans', respond: { '': 'ok' } }];\n");
+    await writeFile(join(folder, 'clock.js'), `${META}return Date.now();\n`);
+    await writeFile(join(folder, 'any.scenarios.js'), "export default [{ name: 'first' }, { name: 'second' }];\n");
+    return folder;
+  }
+
+  it('prints each finding of the fixture script and its count lines, and exits 1', () => {
+    assert.deepEqual(runCommand(['cover', 'gaps.js', '--scenarios', 'gaps.scenarios.js'], COVER_FIXTURES), { status: 1, stdout: GAPS_OUTPUT, stderr: '' });
+  });
+
+  it('prints the count lines of a script with no gap, and exits 0', async () => {
+    const folder = await writeCoverFolder();
+
+    assert.deepEqual(runCommand(['cover', 'clean.js', '--scenarios', 'clean.scenarios.js'], folder), { status: 0, stdout: CLEAN_OUTPUT, stderr: '' });
+  });
+
+  it('prints the findings of a refused script and a line per unread scenario, and exits 1', async () => {
+    const folder = await writeCoverFolder();
+    const clockFinding = 'clock.js:2:8 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.';
+
+    assert.deepEqual(runCommand(['cover', 'clock.js', '--scenarios', 'any.scenarios.js'], folder), {
+      status: 1,
+      stdout: `${clockFinding}\nclock.js first: not read, since refused.\nclock.js second: not read, since refused.\n`,
+      stderr: '',
+    });
+  });
+
+  it('prints one JSON object with --json, with the same exit codes', async () => {
+    const folder = await writeCoverFolder();
+    const gaps = runCommand(['cover', 'gaps.js', '--scenarios', 'gaps.scenarios.js', '--json'], folder);
+    const clean = runCommand(['cover', 'clean.js', '--scenarios', 'clean.scenarios.js', '--json'], folder);
+    const gapsResult = JSON.parse(gaps.stdout);
+
+    assert.deepEqual({ status: gaps.status, stderr: gaps.stderr }, { status: 1, stderr: '' });
+    assert.deepEqual(Object.keys(gapsResult), ['ok', 'runtime', 'scripts']);
+    assert.deepEqual({ ok: gapsResult.ok, runtime: gapsResult.runtime }, { ok: false, runtime: CONTRACT_RUNTIME_VERSION });
+    assert.deepEqual(Object.keys(gapsResult.scripts[0]), ['ok', 'script', 'scenarios', 'scenarioCount', 'roles', 'throwSites', 'endStates', 'phases', 'findings', 'unread']);
+    assert.deepEqual(gapsResult.scripts[0].findings.map(({ rule }) => rule), ['phase-unlisted', 'phase-unreached', 'end-state-unreached', 'throw-site-unreached', 'role-unreached']);
+    assert.deepEqual({ status: clean.status, stderr: clean.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(clean.stdout), { ok: true, runtime: CONTRACT_RUNTIME_VERSION, scripts: [CLEAN_COVERAGE] });
+  });
+
+  it('covers the out of each workflow of the config file that has scenarios, skips the others with no line, and reads the config workflow of a named script', async () => {
+    const folder = await writeCoverFolder();
+    const config = "export default { workflows: [{ entry: 'clock.js', out: 'clock.js', validate: false }, { entry: 'clean.js', out: 'clean.js', scenarios: 'clean.scenarios.js' }, { entry: 'gaps.js', out: 'gaps.js', scenarios: 'gaps.scenarios.js' }] };\n";
+    await writeFile(join(folder, 'dwfb.config.js'), config);
+    await writeFile(join(folder, 'other.config.js'), config);
+
+    assert.deepEqual(runCommand(['cover'], folder), { status: 1, stdout: `${CLEAN_OUTPUT}${GAPS_OUTPUT}`, stderr: '' });
+    assert.deepEqual(runCommand(['cover', 'clean.js'], folder), { status: 0, stdout: CLEAN_OUTPUT, stderr: '' });
+    await rm(join(folder, 'dwfb.config.js'));
+    assert.deepEqual(runCommand(['cover', '--config', 'other.config.js'], folder), { status: 1, stdout: `${CLEAN_OUTPUT}${GAPS_OUTPUT}`, stderr: '' });
+  });
+
+  it('names the workflow of a scenarios file that does not load, exits 2 and prints no result of an earlier workflow', async () => {
+    const folder = await writeCoverFolder();
+    await writeFile(join(folder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'clean.js', out: 'clean.js', scenarios: 'clean.scenarios.js' }, { entry: 'gaps.js', out: 'gaps.js', scenarios: 'missing.scenarios.js' }] };\n");
+    const expected = { status: 2, stdout: '', stderr: 'dwfb cover: The scenarios of the workflow whose entry is gaps.js cannot load. The scenarios file missing.scenarios.js does not exist.\n' };
+
+    assert.deepEqual(runCommand(['cover'], folder), expected);
+    assert.deepEqual(runCommand(['cover', 'gaps.js'], folder), expected);
+  });
+
+  it('exits 2 and prints no result for each usage error', async () => {
+    const folder = await writeCoverFolder();
+    const noScenarioFolder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'throws.scenarios.js'), "export default [{ name: 'a', respond: () => { throw new Error('No answer written'); } }];\n");
+    await writeFile(join(noScenarioFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(noScenarioFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.js' }] };\n");
+    await writeFile(join(noScenarioFolder, 'a.js'), `${META}return 1;\n`);
+    const cases = [
+      [folder, ['cover', ''], /^dwfb cover: Name one workflow script\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', 'clean.js', 'gaps.js', '--scenarios', 'clean.scenarios.js'], /^dwfb cover: Name one workflow script\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', 'clean.js', '--scenarios', ''], /^dwfb cover: Name the scenarios file with --scenarios <file>\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', '--config', ''], /^dwfb cover: Name the config file with --config <path>\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', '--scenarios', 'clean.scenarios.js'], /^dwfb cover: Name the script that --scenarios covers\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', 'clean.js', '--scenarios', 'clean.scenarios.js', '--config', 'dwfb.config.js'], /^dwfb cover: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n\nUsage: dwfb cover/],
+      [folder, ['cover', 'clean.js', '--scenarios', 'clean.scenarios.js', '--scenario', 'plans'], /^dwfb cover: Unknown option '--scenario'[^]*\n\nUsage: dwfb cover/],
+      [folder, ['cover', 'clean.js'], /^dwfb cover: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name the scenarios file with --scenarios <file>\.\n$/],
+      [folder, ['cover'], /^dwfb cover: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script and --scenarios <file>, or name a config file with --config <path>\.\n$/],
+      [noScenarioFolder, ['cover'], /^dwfb cover: The config file dwfb\.config\.js has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>\.\n$/],
+      [noScenarioFolder, ['cover', 'a.js'], /^dwfb cover: The workflow whose entry is a\.js has no scenarios, so name the scenarios file with --scenarios <file>\.\n$/],
+      [folder, ['cover', 'clean.js', '--scenarios', 'missing.js'], /^dwfb cover: The scenarios file missing\.js does not exist\.\n$/],
+      [
+        folder,
+        ['cover', 'clean.js', '--scenarios', 'throws.scenarios.js'],
+        /^dwfb cover: The simulation of clean\.js with the scenario "a" of throws\.scenarios\.js cannot run\. The scenario's respond threw at call 0 \(label "plan"\)\. No answer written\.\n$/,
+      ],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+  });
+
+  it('prints what the README section on dwfb cover shows, for its example script and scenarios file', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    const section = sliceMarkdownSection(readme, README_SECTION_HEADING);
+    const exampleFiles = [...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const run = README_RUN_PATTERN.exec(section)?.groups;
+    const folder = await makeTemporaryFolder();
+
+    assert.deepEqual(exampleFiles.map(({ path }) => path), ['.claude/workflows/fix.js', 'workflows/fix/scenarios.js']);
+    assert.ok(run !== undefined, 'The README section on dwfb cover shows no $ dwfb cover command');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const { path, code } of exampleFiles) {
+      await mkdir(join(folder, dirname(path)), { recursive: true });
+      await writeFile(join(folder, path), code);
+    }
+    assert.deepEqual(runCommand(run.args.split(' '), folder), { status: 1, stdout: run.output, stderr: '' });
+  });
+
+  it('prints its usage for cover --help, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['cover', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb cover \[<script>\] \[--scenarios <file>\] \[--config <path>\] \[--json\] \[--help\]\n[^]*\n {2}--scenarios <file> {3}Read the scenarios of the script from this file\.\n/);
+    assert.match(runCommand(['--help']).stdout, /\n {2}build [^\n]*\n[^]*\n {2}cover \[<script>\] \[--scenarios <file>\]\n {35}Run a workflow script[^]*\n {2}inspect /);
+  });
+});
+
 describe('dwfb validate', () => {
   const META = "export const meta = { name: 'p', description: 'd' };\n";
   const CLOCK_SCRIPT = `${META}\nconst started = Date.now();\nreturn started;\n`;

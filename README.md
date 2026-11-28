@@ -18,6 +18,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | available |
 | `dwfb map` | Draw a Mermaid graph of every path that the scenarios of a script reach, with its loops and end states. | available |
 | `dwfb snapshot` | Write one copy of each distinct prompt that a script sends per role, so a diff shows which prompts an edit reached, and hold the largest prompt of each role to a prompt budget. | available |
+| `dwfb cover` | Report each role, throw site, end state and phase of a script that no scenario reaches. | available |
 
 ## dwfb build
 
@@ -119,7 +120,7 @@ export default {
 
 `dwfb build` with no entry builds every workflow in order, and `dwfb build <entry>` builds each workflow whose entry is that file. A workflow with a finding does not stop the workflows after it. `banner: false` leaves out the banner line of one workflow, and `--no-banner` leaves it out of every workflow. `validate: false` skips the contract check in the build of one workflow, and `--no-validate` skips it for every workflow. `--config <path>` names another config file. `dwfb build <entry> --out <file>` reads no config file. A config file that does not load, has an unknown key, lists no workflow, gives a field of the wrong type or gives two workflows one `out` stops the command before it writes anything. Two `out` paths that differ only in letter case count as one `out`. Two `out` paths that name one file through a link count as one `out` among the workflows the command builds. A missing entry, or an `out` that the build refuses, such as a folder or a source file of a workflow the command builds, stops the command before it writes anything too.
 
-`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate), [`dwfb inspect`](#dwfb-inspect), [`dwfb map`](#dwfb-map) and [`dwfb snapshot`](#dwfb-snapshot) run the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
+`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate), [`dwfb inspect`](#dwfb-inspect), [`dwfb map`](#dwfb-map), [`dwfb snapshot`](#dwfb-snapshot) and [`dwfb cover`](#dwfb-cover) run the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
 
 `map` names the flow map file that [`dwfb map`](#dwfb-map) writes for the workflow's `out`, as in `map: 'docs/review.flow-map.md'`. A workflow with `map` needs `scenarios`.
 
@@ -517,6 +518,88 @@ A prompt snapshot file that names the script, its scenarios file, or the entry o
 The command exits 0 when every prompt snapshot is written, unchanged, printed or fresh and no script has a prompt budget problem. It exits 1 for an unread scenario, a script with no call, a stale or missing file with `--check` and a prompt budget problem, and 2 for a usage error.
 
 `--json` prints `{ ok, runtime, snapshots }` and writes no file. Each element of `snapshots` holds `script`, `file` and `check` as `dwfb map --json` gives them, then `ok`, `runtime`, `variants`, `roles`, `callCount`, `digest`, `promptBudgetProblems`, `unread` and the `findings` of a refused script. `digest` is the SHA-256 of the label, the prompt and the schema of every call, in scenario file order and then in call order. Two builds of one script have one digest only when every call gets the same prompt and schema. This way a CI job can confirm that a refactor of a script changed no prompt.
+
+## dwfb cover
+
+`dwfb cover` runs a workflow script against each scenario of a scenarios file, with no model call, and reports each role, throw site, end state and phase of the script that no scenario reaches. A path of the script that no scenario takes is not tested before launch, so the command lists the parts of the script that need a scenario.
+
+`.claude/workflows/fix.js`:
+
+```js
+export const meta = {
+  name: 'fix',
+  description: 'Fix a bug until its check passes',
+  phases: [{ title: 'Fix' }, { title: 'Check' }],
+};
+
+// @end-states
+const STATUS = Object.freeze({ fixed: 'fixed', gaveUp: 'gave up' });
+const CHECK_SCHEMA = { type: 'object', properties: { pass: { type: 'boolean' } }, required: ['pass'] };
+
+if (typeof args?.bug !== 'string') {
+  // @unreached the launcher always passes the bug as a string
+  throw new TypeError('args.bug is not a string');
+}
+for (let round = 1; round <= 3; round += 1) {
+  await agent(`Fix this bug.\n${args.bug}`, { label: 'fix', phase: 'Fix' });
+  const check = await agent('Run the tests.', { label: 'check', phase: 'Check', schema: CHECK_SCHEMA });
+  if (check === null) throw new Error('The checker died');
+  if (check.pass) return { status: STATUS.fixed };
+}
+return { status: STATUS.gaveUp };
+```
+
+`workflows/fix/scenarios.js`:
+
+```js
+export default [
+  { name: 'fixed', args: { bug: 'The total is off by one' }, respond: { fix: 'done', check: { pass: true } } },
+  { name: 'checker dies', expect: 'threw', args: { bug: 'The total is off by one' }, respond: { fix: 'done', check: null } },
+];
+```
+
+```
+$ dwfb cover .claude/workflows/fix.js --scenarios workflows/fix/scenarios.js
+.claude/workflows/fix.js:8:56 end-state-unreached No scenario reaches the end state "gave up". Add a scenario whose simulation ends in it, or remove it from the constant.
+.claude/workflows/fix.js: 2 scenarios
+  roles: 2 of 2 reached
+  throw sites: 1 of 1 reached, 1 marked unreached
+  end states: 1 of 2 reached
+  phases: 2 of 2 reached
+```
+
+The command prints each finding, then the count of scenarios and one line per kind with how many of its parts a scenario reaches.
+
+| Kind | A scenario reaches it when |
+|---|---|
+| role | its simulation makes a call of the role. The role of a call is the longest [role](#script-rules) of the script that its label starts with. |
+| throw site | its simulation ends with an error that the site's `throw new <Name>(...)` statement created, which is the statement at the newest place on the error's stack. |
+| end state | its simulation returns an object whose `status` is the end state. A scenario whose script returns no `status` that is a string of 1 or more characters uses its `endState` in place of the status. Each run of ASCII digits is compared as `N`, so the status `round 12 of 40` reaches the end state `round 3 of 5`. |
+| phase | a call of its simulation runs under the phase, which `phase()` or the call's `phase` option sets. The phases are the elements of `meta.phases`. |
+
+An error that the script catches reaches no throw site, since a trace records only the error that ends a simulation.
+
+`// @end-states` alone on the line above a `const` declaration declares the end states that the declaration lists. The declaration has one name, and its value is an object literal or an array literal, or one of those inside `Object.freeze(...)`. Each property value or element is a string of 1 or more characters, written as a string literal or as a template literal with no `${...}`. The keys are not read. The end states of several such comments are joined, and an end state that two of them hold counts once. A script with no such comment declares no end state, and the command checks none.
+
+`// @unreached <reason>` alone on the line above a throw site marks a throw site that no scenario can reach, such as a check of a state that no input gives. It marks each throw site whose `new` keyword is on the next line. A marked throw site gets no `throw-site-unreached` finding. The throw site line counts the throw sites with no mark, then gives the count of marked throw sites when there is one.
+
+| Rule | What it reports |
+|---|---|
+| `end-states-misplaced` | A `// @end-states` comment that is not alone on the line above a `const` declaration that lists end states. |
+| `unreached-misplaced` | A `// @unreached` comment that is not alone on the line above a throw site. |
+| `unreached-no-reason` | A `// @unreached` comment with no reason. It still marks its throw site. |
+| `role-unreached` | A role that no scenario reaches. |
+| `throw-site-unreached` | A throw site with no mark that no scenario reaches. |
+| `throw-site-reached` | A marked throw site that a scenario reaches. |
+| `end-state-unreached` | A declared end state that no scenario reaches. |
+| `phase-unreached` | An element of `meta.phases` that no scenario reaches. |
+| `phase-unlisted` | A phase title that a scenario uses and `meta.phases` does not list. A scenario uses a phase when a call of its simulation runs under it or a `phase()` invocation of its simulation gives its title. |
+
+A built script keeps each comment line of its source, so the directives are written in the source, such as above a `const` of a module. [`dwfb locate`](#dwfb-locate) gives the source line of a finding's line.
+
+A scenario whose simulation stops is unread, and so is each scenario of a script that breaks a rule of [`dwfb validate`](#dwfb-validate). For each unread scenario, the command prints `<script> <scenario>: not read, since <reason>.` after the findings of a refused script. A script with an unread scenario gets no count lines, since a count over a part of the scenarios would report a gap that is none.
+
+With a script and no `--scenarios`, the command finds the scenarios file as `dwfb simulate` does. With no script, it covers the `out` of each workflow of the config file that has `scenarios`. `--config <path>` names another config file. The command exits 0 when no script has a finding or an unread scenario, 1 when one does and 2 for a usage error, such as a scenarios file that does not load. `--json` prints `{ ok, runtime, scripts }`. Each element of `scripts` holds `ok`, `script`, `scenarios`, `scenarioCount`, `roles`, `throwSites`, `endStates`, `phases`, `findings` and `unread`, where `scenarios` is the scenarios file. `endStates` is `null` for a script that declares no end state, and each of the four lists is `null` for a script with an unread scenario.
 
 ## License
 

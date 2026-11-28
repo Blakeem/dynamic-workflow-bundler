@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { printResult, printUsageError } from './print-result.js';
 import { runBuild } from './run-build.js';
+import { runCover } from './run-cover.js';
 import { runInspect } from './run-inspect.js';
 import { runLocate } from './run-locate.js';
 import { runMap } from './run-map.js';
@@ -14,6 +15,10 @@ const MAIN_USAGE = `Usage: dwfb <command> [options]
 Commands:
   build [<entry>] [--out <file>]   Build workflow scripts from an entry, its parts, and the modules,
                                    text files and JSON files it imports.
+  cover [<script>] [--scenarios <file>]
+                                   Run a workflow script against each scenario of a scenarios file, with
+                                   no model call, and report each role, throw site, end state and phase
+                                   that no scenario reaches.
   inspect <script> [--scenarios <file>] [--scenario <name>] [--call <index>]
                                    Run a workflow script against one scenario with no model call, and
                                    print the events of the simulation in order, or one call in full.
@@ -50,6 +55,7 @@ async function runCommand(args) {
   const isMainOption = command === '--version' || command === '--help';
 
   if (command === 'build') return runBuild(commandArgs);
+  if (command === 'cover') return runCover(commandArgs);
   if (command === 'inspect') return runInspect(commandArgs);
   if (command === 'locate') return runLocate(commandArgs);
   if (command === 'map') return runMap(commandArgs);

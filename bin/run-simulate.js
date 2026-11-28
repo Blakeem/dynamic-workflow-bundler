@@ -2,11 +2,10 @@ import { parseArgs } from 'node:util';
 import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
 import { formatSimulateJson } from '../src/format-simulate-json.js';
 import { formatSimulateText } from '../src/format-simulate-text.js';
-import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
+import { CONFIG_FILES_TEXT } from '../src/load-config.js';
 import { selectScenarios } from '../src/select-scenarios.js';
-import { UsageError } from '../src/usage-error.js';
-import { checkBuiltOut } from './check-built-out.js';
-import { findScriptTarget, formatConfigTarget, SCENARIOS_CONFIG_CONFLICT } from './find-script-target.js';
+import { findConfigTargets } from './find-config-targets.js';
+import { findScriptTarget, SCENARIOS_CONFIG_CONFLICT } from './find-script-target.js';
 import { loadTargetScenarios } from './load-target-scenarios.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, printCommandFailure, printResult, printUsageError } from './print-result.js';
 import { simulateScenario } from './simulate-scenario.js';
@@ -77,26 +76,4 @@ export async function runSimulate(args) {
   const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
   if (values.json) return printResult(`${JSON.stringify(formatSimulateJson(simulations, isSuccess), null, 2)}\n`, exitCode);
   return printResult(formatSimulateText(simulations), exitCode);
-}
-
-/**
- * Finds the script and scenarios file of each workflow that `dwfb simulate` with no script runs: the out of
- * each workflow of the config file that has scenarios, with its scenarios file, in the order the config file
- * lists them, relative to the working directory.
- * @param {string | undefined} configPath
- * @returns {Promise<import('./find-script-target.js').SimulationTarget[]>}
- */
-async function findConfigTargets(configPath) {
-  const commandConfig = await loadCommandConfig(configPath);
-  const targets = [];
-
-  if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, so name a script and --scenarios <file>, or name a config file with --config <path>`);
-  for (const workflow of commandConfig.config.workflows) {
-    if (workflow.scenarios === null) continue;
-    await checkBuiltOut(workflow, configPath);
-    targets.push(formatConfigTarget(workflow));
-  }
-  if (targets.length === 0) throw new UsageError(`The config file ${commandConfig.file} has no workflow with scenarios, so give a workflow scenarios, or name a script and --scenarios <file>`);
-
-  return targets;
 }

@@ -24,8 +24,8 @@ const DOCUMENT_FIELDS = Object.freeze(['map', 'snapshot']);
  * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
  *   against the contract. Defaults to true.
  * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate`,
- *   `dwfb inspect`, `dwfb map` and `dwfb snapshot` run `out` against, or null for a workflow that
- *   `dwfb simulate` with no script skips.
+ *   `dwfb inspect`, `dwfb map`, `dwfb snapshot` and `dwfb cover` run `out` against, or null for a workflow
+ *   that `dwfb simulate` and `dwfb cover` with no script skip.
  * @property {string | null} map The absolute path of the flow map that `dwfb map` writes for `out`, or null for
  *   a workflow that `dwfb map` with no script skips.
  * @property {string | null} snapshot The absolute path of the prompt snapshot that `dwfb snapshot` writes for

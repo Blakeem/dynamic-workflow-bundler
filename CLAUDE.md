@@ -76,7 +76,7 @@ Add a row before a new concept gets a name in code.
   `dwfb.config.mjs`. A command that needs the config file stops when both exist.
 - **No Anthropic mark in a name.** Never put "Claude", "Claude Code" or "Anthropic" in a package, command,
   file, export or option name. Say "Claude Code" only in plain descriptive text.
-- **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`, `map`, `snapshot`. A new command takes
+- **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`, `map`, `snapshot`, `cover`. A new command takes
   a verb that no existing command could be mistaken for.
 - **The library exports each command's verb** as a function, such as `build()` and `locate()`.
 - **Options are full words in kebab-case:** `--out`, `--check`, `--json`. A one-letter alias exists only for
