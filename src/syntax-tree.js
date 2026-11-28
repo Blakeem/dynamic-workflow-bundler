@@ -4,8 +4,6 @@ const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'Ar
 const EXPORT_DECLARATION_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration']);
 const KEY_TYPES = new Set(['Property', 'PropertyDefinition', 'MethodDefinition']);
 const LABEL_TYPES = new Set(['LabeledStatement', 'BreakStatement', 'ContinueStatement']);
-// Node.js 24.22.1 gives a RangeError of this message when a recursive call overflows the stack.
-const STACK_OVERFLOW_MESSAGE = 'Maximum call stack size exceeded';
 /** The types of a statement that exports. */
 export const EXPORT_TYPES = new Set(['ExportNamedDeclaration', 'ExportDefaultDeclaration', 'ExportAllDeclaration']);
 
@@ -80,14 +78,6 @@ export function findDeepestNode(node) {
   }
 
   return deepest.node;
-}
-
-/**
- * @param {unknown} error
- * @returns {boolean} True for the error of a call stack overflow, which a recursive tree walk gives on a tree too deep.
- */
-export function isStackOverflowError(error) {
-  return error instanceof RangeError && error.message === STACK_OVERFLOW_MESSAGE;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Parser } from 'acorn';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
-import { isStackOverflowError } from './syntax-tree.js';
+import { isStackOverflowError } from './is-stack-overflow-error.js';
 
 // The runtime runs the body inside an async function (Claude Code 2.1.332), so a top-level return and await parse.
 // A probe parsed seven production workflow scripts of 20 KB to 344 KB with these options.

@@ -1,3 +1,4 @@
+import { CHECK_OUT_OF_STACK, CHECK_OUT_OF_STACK_CAUSE, findProblemWithinStack } from './compile-schema.js';
 import { describeObjectKind, findNonJsonValue, isPlainObject } from './find-non-json-value.js';
 import { formatCount } from './format-count.js';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
@@ -12,7 +13,7 @@ const ignoreRejection = () => {};
 
 /**
  * @typedef {{ kind: 'answered', returned: ScriptedReturn }
- *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema', message: string }} ScriptedReturnResult
+ *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema' | 'check-out-of-stack', message: string }} ScriptedReturnResult
  */
 
 /**
@@ -146,7 +147,11 @@ function checkScriptedReturn(value, schema, givesText, expected) {
     return { kind: 'stopped', reason: 'not-json', message };
   }
   returned = JSON.parse(JSON.stringify(value));
-  problem = schema.findProblem(returned);
+  problem = findProblemWithinStack(schema, returned);
+  if (problem === CHECK_OUT_OF_STACK) {
+    const message = `${givesText} an object, and ${CHECK_OUT_OF_STACK_CAUSE}. Change the schema or nest the object less deep`;
+    return { kind: 'stopped', reason: 'check-out-of-stack', message };
+  }
   if (problem !== null) {
     const message = `${givesText} an object that breaks the schema of the call at ${problem.path}: ${problem.message}. Give it an object that passes the schema`;
     return { kind: 'stopped', reason: 'breaks-schema', message };

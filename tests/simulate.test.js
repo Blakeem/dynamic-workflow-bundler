@@ -516,6 +516,19 @@ describe('a scripted return against the schema of its call', () => {
     }
   });
 
+  it('stops at a call whose check against the schema runs out of stack', async () => {
+    const script = await writeScript('workflow.js', "return await agent('p', { schema: { type: 'object', anyOf: [{ $ref: '#' }] } })\n");
+    const trace = await simulateScript(script, { respond: { '': {} } });
+
+    assert.deepEqual(trace.end, {
+      kind: 'stopped',
+      reason: 'check-out-of-stack',
+      message: 'Key "" of respond gives call 0 (no label) an object, and the check of it against the schema runs out of stack, as for a schema whose $ref leads back to itself with no key between or an object nested too deep. Change the schema or nest the object less deep',
+      call: 0,
+    });
+    assert.ok(!Object.hasOwn(trace.calls[0], 'returned'));
+  });
+
   it('checks no return of a schema with no JSON copy, which agent() checks only for its root type', async () => {
     const body = "const schema = { type: 'object', required: ['a'] }\nschema.self = schema\nreturn await agent('p', { schema })\n";
     const trace = await simulateScript(await writeScript('workflow.js', body), { respond: { '': { b: 1 } } });

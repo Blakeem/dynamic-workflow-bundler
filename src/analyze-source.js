@@ -5,9 +5,10 @@ import { createFinding } from './finding.js';
 import { isIncludeComment } from './find-include-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
+import { isStackOverflowError } from './is-stack-overflow-error.js';
 import { readMetaObject } from './meta-statement.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE, parseSource } from './parse-source.js';
-import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
+import { EXPORT_TYPES, findDeepestNode, isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listTopLevelNames } from './syntax-tree.js';
 
 /** @typedef {import('./expand-parts.js').IncludedPart} IncludedPart */
 /** @typedef {import('./finding.js').Finding} Finding */

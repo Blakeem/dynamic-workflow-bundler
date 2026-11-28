@@ -1,4 +1,5 @@
 import Ajv from 'ajv';
+import { isStackOverflowError } from './is-stack-overflow-error.js';
 
 // With these options the validator gives the outcome that Claude Code 2.1.332 gave for each schema and each
 // return of tests/fixtures/runtime/schema-probe.measured.json. `logger: false` keeps its strict mode warnings off stderr.
@@ -8,6 +9,11 @@ const INVALID_SCHEMA_START = 'schema is invalid: ';
 
 // The path that Claude Code 2.1.332 names in its answer to an output whose error lies in the value itself.
 export const ROOT_PATH = 'root';
+
+// A stack overflow of the check does not tell a loop of `$ref` apart from a deep value, so the text names both.
+export const CHECK_OUT_OF_STACK_CAUSE = 'the check of it against the schema runs out of stack, as for a schema whose $ref leads back to itself with no key between or an object nested too deep';
+/** What findProblemWithinStack() gives for a check that runs past the stack of the running Node. */
+export const CHECK_OUT_OF_STACK = Symbol('check out of stack');
 
 /**
  * @typedef {object} SchemaProblem The first rule of a schema that a value breaks, as the runtime of Claude
@@ -22,6 +28,8 @@ export const ROOT_PATH = 'root';
  *   `agent({schema}) received an invalid JSON Schema: `, or null for a schema it takes.
  * @property {((value: unknown) => SchemaProblem | null) | null} findProblem Null for a refused schema. Gives
  *   null for a JSON value that passes the schema, and for every value under a schema with a truthy `$async`.
+ *   Throws a RangeError when the check runs past the stack of the running Node, such as for a schema whose
+ *   `$ref` leads back to itself with no key between or a value nested too deep.
  */
 
 /** The compile of a schema the runtime takes whose returns the simulator does not check. */
@@ -51,6 +59,22 @@ export function compileSchema(schema) {
   // Not measured: how the runtime checks an output against it.
   if (validate.$async === true) return UNCHECKED_SCHEMA;
   return { refusal: null, findProblem: (value) => (validate(value) ? null : convertError(validate.errors[0])) };
+}
+
+/**
+ * A check that runs past the stack cannot tell whether the value passes, so it gives a mark and no problem.
+ * @param {CompiledSchema} compiled The compile of a schema the runtime takes.
+ * @param {unknown} value A JSON value.
+ * @returns {SchemaProblem | null | typeof CHECK_OUT_OF_STACK} As findProblem gives, or CHECK_OUT_OF_STACK for a
+ *   check that runs past the stack of the running Node.
+ */
+export function findProblemWithinStack(compiled, value) {
+  try {
+    return compiled.findProblem(value);
+  } catch (error) {
+    if (!isStackOverflowError(error)) throw error;
+    return CHECK_OUT_OF_STACK;
+  }
 }
 
 /**

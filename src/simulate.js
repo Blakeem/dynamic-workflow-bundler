@@ -61,7 +61,7 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
 
 /**
  * @typedef {Exclude<import('./run-simulation.js').SimulationEnd, { kind: 'stopped' } | { kind: 'never-settles' }>
- *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema' | 'call-limit', message: string, call: number }
+ *   | { kind: 'stopped', reason: 'unanswered' | 'wrong-type' | 'not-json' | 'breaks-schema' | 'check-out-of-stack' | 'call-limit', message: string, call: number }
  *   | { kind: 'stopped', reason: 'node-lacks-name' | 'never-settles', message: string }
  *   | { kind: 'refused', findings: Finding[] }} TraceEnd How the simulation ended. A `threw` end's `frames`
  *   are as runSimulation gives them. A stop's message has no closing period. `call` is the index of the call
@@ -108,7 +108,9 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * `type`. So does a call whose compile runs out of stack, such as for a schema nested a few hundred levels deep.
  * A scripted return object for a call with a schema is checked against that schema as the runtime checks an
  * agent's output, and one that breaks it stops the simulation, since the runtime never gives the script such
- * an object. A key the schema does not list passes unless a keyword of the schema rules it out, such as
+ * an object. An object whose check against the schema runs out of stack also stops it, such as for a schema
+ * whose `$ref` leads back to itself with no key between or an object nested too deep, since the simulator
+ * cannot tell whether it passes. A key the schema does not list passes unless a keyword of the schema rules it out, such as
  * `additionalProperties` set to `false` or to a schema the key's value breaks, and a `default` is not filled
  * in. A schema with no JSON copy, a schema with a truthy `$async`, or a schema whose compile ran out of stack
  * checks no return.

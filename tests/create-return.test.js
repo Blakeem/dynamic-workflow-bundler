@@ -70,8 +70,8 @@ describe('createReturn smallest values', () => {
     assert.equal(makeKeyValue({ oneOf: [{ type: 'boolean' }, { type: 'string' }] }), false);
   });
 
-  it("ends at an anyOf that leads back to its own schema, with the validator's RangeError", () => {
-    assert.throws(() => createReturn({ type: 'object', anyOf: [{ $ref: '#' }] }, { a: 1 }), RangeError);
+  it('follows the first oneOf schema before the own type', () => {
+    assert.equal(makeKeyValue({ type: 'string', oneOf: [{ const: 'approve' }, { const: 'reject' }] }), 'approve');
   });
 
   it('reads the first type of a type list', () => {
@@ -211,6 +211,10 @@ describe('createReturn errors', () => {
     const schema = { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false };
 
     assertUsageError(schema, { b: 1 }, "createReturn() cannot make an object that passes the schema at root: must NOT have additional properties ('b' is not allowed). Change the keys of values");
+  });
+
+  it('throws a UsageError for a check of the object that runs out of stack', () => {
+    assertUsageError({ type: 'object', anyOf: [{ $ref: '#' }] }, {}, 'createReturn() cannot check its object, since the check of it against the schema runs out of stack, as for a schema whose $ref leads back to itself with no key between or an object nested too deep. Change the schema or nest values less deep');
   });
 });
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { compileSchema } from '../src/compile-schema.js';
+import { CHECK_OUT_OF_STACK, compileSchema, findProblemWithinStack } from '../src/compile-schema.js';
 
 const CHILD_TIME_LIMIT_MS = 30000;
 // On Node.js 24.22.1 the validator ran out of stack at 300 levels, and JSON.stringify kept going past 2,000.
@@ -79,5 +79,21 @@ describe('compileSchema', () => {
     const { status, stdout, stderr } = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', timeout: CHILD_TIME_LIMIT_MS });
 
     assert.deepEqual({ status, stdout, stderr }, { status: 0, stdout: '', stderr: '' });
+  });
+});
+
+describe('findProblemWithinStack', () => {
+  it('gives the problem of the check, or null for a value that passes', () => {
+    const compiled = compileSchema({ type: 'object', required: ['a'] });
+
+    assert.equal(findProblemWithinStack(compiled, { a: 1 }), null);
+    assert.deepEqual(findProblemWithinStack(compiled, {}), { path: 'root', message: "must have required property 'a'" });
+  });
+
+  it('gives CHECK_OUT_OF_STACK for a check that runs out of stack, and throws any other error of the check', () => {
+    const failing = { refusal: null, findProblem: () => { throw new RangeError('Invalid array length'); } };
+
+    assert.equal(findProblemWithinStack(compileSchema({ type: 'object', anyOf: [{ $ref: '#' }] }), {}), CHECK_OUT_OF_STACK);
+    assert.throws(() => findProblemWithinStack(failing, {}), { name: 'RangeError', message: 'Invalid array length' });
   });
 });

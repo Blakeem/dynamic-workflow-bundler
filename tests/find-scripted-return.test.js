@@ -196,4 +196,16 @@ describe('a scripted return against the schema of its call', () => {
   it('checks no string for a call with no schema', () => {
     assert.deepEqual(answerLabels({ '': 'any text' }, ['a']), [answered('any text')]);
   });
+
+  it('stops a call whose check against the schema runs out of stack, and throws any other error of the check', () => {
+    const endless = compileSchema({ type: 'object', anyOf: [{ $ref: '#' }] });
+    const failing = { refusal: null, findProblem: () => { throw new RangeError('Invalid array length'); } };
+
+    assert.deepEqual(answerLabels({ '': {} }, ['a'], endless), [{
+      kind: 'stopped',
+      reason: 'check-out-of-stack',
+      message: 'Key "" of respond gives call 0 (label "a") an object, and the check of it against the schema runs out of stack, as for a schema whose $ref leads back to itself with no key between or an object nested too deep. Change the schema or nest the object less deep',
+    }]);
+    assert.throws(() => answerLabels({ '': {} }, ['a'], failing), { name: 'RangeError', message: 'Invalid array length' });
+  });
 });

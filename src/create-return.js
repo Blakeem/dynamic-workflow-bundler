@@ -1,4 +1,4 @@
-import { compileSchema, ROOT_PATH } from './compile-schema.js';
+import { CHECK_OUT_OF_STACK, CHECK_OUT_OF_STACK_CAUSE, compileSchema, findProblemWithinStack, ROOT_PATH } from './compile-schema.js';
 import { findNonJsonValue, isPlainObject } from './find-non-json-value.js';
 import { isObject } from './is-object.js';
 import { UsageError } from './usage-error.js';
@@ -21,10 +21,13 @@ const STRING_LETTER = 'x';
  * @param {unknown} [values] The keys that decide the path of a scenario.
  * @returns {Record<string, unknown>} A new JSON object, which shares no reference with `schema` or `values`.
  * @throws {UsageError} For a schema that is no plain object of JSON values, that agent() refuses or whose
- *   `type` is not `'object'`, for `values` that is no plain object of JSON values, and for a result that
- *   breaks the schema, such as for a `pattern` the rules do not read.
- * @throws {RangeError} When the compile of the schema or the check of the result runs past the stack of the
- *   running Node, such as for a schema nested a few hundred levels deep or an `anyOf` whose `$ref` names itself,
+ *   `type` is not `'object'`, for `values` that is no plain object of JSON values, for a result that
+ *   breaks the schema, such as for a `pattern` the rules do not read, and for a check of the result that runs
+ *   past the stack of the running Node, such as for an `anyOf` whose `$ref` names its own schema or for deep
+ *   `values` under a chain of `$ref` or `anyOf` schemas that leads back to an outer schema. A longer chain of
+ *   `anyOf` schemas runs the check out of stack at a smaller depth.
+ * @throws {RangeError} When the compile of the schema or the JSON check, copy or fill of `values` runs past the
+ *   stack of the running Node, such as for a schema nested a few hundred levels deep or `values` nested a few thousand deep,
  *   and for a `minLength` or a `minItems` above the length of a string or an array that the running Node can make.
  *   A smaller `minLength` or `minItems` whose value the heap cannot hold ends the process and throws nothing.
  */
@@ -42,7 +45,8 @@ export function createReturn(schema, values = {}) {
   givenValues = copyJson(values);
 
   result = fillObject(schema, givenValues, { root: schema, making: new Set() });
-  problem = compiled.findProblem(result);
+  problem = findProblemWithinStack(compiled, result);
+  if (problem === CHECK_OUT_OF_STACK) throw new UsageError(`createReturn() cannot check its object, since ${CHECK_OUT_OF_STACK_CAUSE}. Change the schema or nest values less deep`);
   if (problem !== null) throw new UsageError(`createReturn() cannot make an object that passes the schema at ${problem.path}: ${problem.message}. ${describeRecovery(problem.path, givenValues)}`);
   return result;
 }

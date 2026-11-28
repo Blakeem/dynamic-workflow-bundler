@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parse } from 'acorn';
-import { findDeepestNode, isStackOverflowError, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listPatternTargets, listTopLevelNames, listTreeNodes, listVarNames } from '../src/syntax-tree.js';
+import { findDeepestNode, listChildNodes, listLexicalNames, listNameChildren, listPatternIdentifiers, listPatternTargets, listTopLevelNames, listTreeNodes, listVarNames } from '../src/syntax-tree.js';
 
 /** @param {string} text */
 function parseBody(text) {
@@ -83,21 +83,5 @@ describe('syntax-tree', () => {
     assert.deepEqual(listNames(reexportStatement), ['a', 'c']);
     assert.deepEqual(reexportStatement.specifiers.map(listNames), [['b'], []]);
     assert.deepEqual(listNames(exportStatement), []);
-  });
-});
-
-describe('isStackOverflowError', () => {
-  it('is true for the error of a recursion that overflows the stack, and false for another RangeError', () => {
-    const recurse = () => recurse();
-    let overflowError = null;
-    try {
-      recurse();
-    } catch (error) {
-      overflowError = error;
-    }
-
-    assert.equal(isStackOverflowError(overflowError), true);
-    assert.equal(isStackOverflowError(new RangeError('Invalid array length')), false);
-    assert.equal(isStackOverflowError(new Error('Maximum call stack size exceeded')), false);
   });
 });

@@ -1,10 +1,11 @@
 import { RUNTIME_GLOBAL_NAMES, RUNTIME_INHERITED_GLOBAL_NAMES } from './contract.js';
 import { listFreeReferences } from './find-free-names.js';
 import { createFinding } from './finding.js';
+import { isStackOverflowError } from './is-stack-overflow-error.js';
 import { readKeyName, readMetaObject } from './meta-statement.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, parseSource } from './parse-source.js';
 import { readPositionText } from './source-position.js';
-import { EXPORT_TYPES, findDeepestNode, isFunctionNode, isStackOverflowError, listChildNodes, listDeclaredNames, listNameChildren, listPatternIdentifiers, listPatternTargets } from './syntax-tree.js';
+import { EXPORT_TYPES, findDeepestNode, isFunctionNode, listChildNodes, listDeclaredNames, listNameChildren, listPatternIdentifiers, listPatternTargets } from './syntax-tree.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */
 /** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */

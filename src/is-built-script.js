@@ -1,8 +1,8 @@
 import { tokenizer } from 'acorn';
 import { findBanner, isBannerText } from './banner.js';
+import { isStackOverflowError } from './is-stack-overflow-error.js';
 import { readMetaObject } from './meta-statement.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
-import { isStackOverflowError } from './syntax-tree.js';
 
 // Git writes these lines around the two sides of a merge conflict, at its default conflict-marker-size of 7.
 const FIRST_SIDE_START = /^<{7}(?: |$)/;
