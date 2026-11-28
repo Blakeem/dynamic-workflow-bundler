@@ -1,5 +1,6 @@
 export { build } from './build.js';
 export { cover } from './cover.js';
+export { createReturn } from './create-return.js';
 export { inspect } from './inspect.js';
 export { loadConfig } from './load-config.js';
 export { locate } from './locate.js';

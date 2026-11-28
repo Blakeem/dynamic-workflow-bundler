@@ -7,7 +7,7 @@ const VALIDATOR_OPTIONS = Object.freeze({ validateFormats: false, logger: false 
 const INVALID_SCHEMA_START = 'schema is invalid: ';
 
 // The path that Claude Code 2.1.332 names in its answer to an output whose error lies in the value itself.
-const ROOT_PATH = 'root';
+export const ROOT_PATH = 'root';
 
 /**
  * @typedef {object} SchemaProblem The first rule of a schema that a value breaks, as the runtime of Claude

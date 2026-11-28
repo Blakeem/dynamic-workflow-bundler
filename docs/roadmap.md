@@ -30,7 +30,7 @@ Status is one of `planned`, `building` or `done`.
 
 | Version | Item | Command | Scope | Status |
 |---|---|---|---|---|
-| 0.0.5 | Schema-valid returns | `dwfb simulate` | Reject a scripted return that breaks the call's schema. Build a minimal valid return from a schema. | planned |
+| 0.0.5 | Schema-valid returns | `dwfb simulate` | Refuse a call schema that the runtime refuses. Stop at a scripted return that breaks the schema of its call. Make a return that passes a schema with `createReturn()`. | building |
 | 0.0.6 | Dead-agent sweep | `dwfb sweep` | Repeat each scenario with one agent dead at a time. Report each simulation that still ends as a success. | planned |
 | 0.0.7 | Runtime probe | `dwfb probe` | Write a script with no agent call that reports how the installed runtime behaves. Compare that report with the rules this tool holds. | planned |
 | 0.0.8 | Child workflows | `dwfb simulate` | Simulate a `workflow()` call by running the child script inside the same simulation. | planned |

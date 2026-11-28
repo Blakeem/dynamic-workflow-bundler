@@ -268,6 +268,34 @@ A `format` is taken and not checked. For a `pattern` that is no regular expressi
 
 The simulator leaves out the check of `agentType` and `model` against the session, the cap of 5 rejected outputs of one agent, after which `agent()` throws on the runtime, and a budget that grows by a different count at each call. The `stack` text of an error may name files and lines of the simulator on this machine, so a script that logs a stack or puts one in a prompt gets output that differs between machines. A call of `workflow()` that names a workflow throws an Error with the message `workflow() is not simulated`. Time is virtual, so each `agent()` call answers before any timer runs and a wait of any length ends at once. Code after a script's first `await` has no time limit. So a loop there with no end keeps the simulation from ending, unless it calls `agent()` and waits for an `agent()` answer or a timer between those calls, since the simulation then stops at the cap on `agent()` calls. A wait for a promise that settles at once, such as `await null`, does not count.
 
+### Returns that pass a schema
+
+`createReturn(schema, values)` makes the minimal return of a schema, which is an object that passes the schema, so that a `respond` function gives only the keys that decide the path of its scenario. The call that a `respond` function gets holds the call's options as `opts`, and `call.opts.schema` is the schema of the call.
+
+This scenarios file gives each `review` call of the example above an object with the verdict `pass`:
+
+```js
+import { createReturn } from 'dynamic-workflow-bundler';
+
+export default [
+  { name: 'passes', args: { change: 'Fix the typo' }, respond: { review: (call) => createReturn(call.opts.schema, { verdict: 'pass' }) } },
+];
+```
+
+For a schema that also requires `findings` as a list of strings and `score` as an integer of 1 or more, the call gives `{ verdict: 'pass', findings: [], score: 1 }`.
+
+The object holds each key of `values`. Each key of the schema's `required` that `values` lacks gets the smallest value of its schema, by the first rule that applies:
+
+1. A `const` gives its value, and an `enum` gives its first value.
+2. A `$ref` of the form `#` or `#/<path>` gives the smallest value of the schema it names. A `$ref` to a schema whose smallest value is still being made gives `null`.
+3. An `anyOf` or a `oneOf` gives the smallest value of its first schema.
+4. The `type`, or the first type of a type list, decides the rest. An object holds each key of `required` with the smallest value of its schema, or `null` for a key that `properties` lacks. An array holds `minItems` copies of the smallest value of `items`, or no element. A string is `minLength` times the letter `x`, or `''`. A number or an integer is `0`, raised to a `minimum` above 0, rounded up for an integer, and to the next integer above an `exclusiveMinimum` of 0 or more. A boolean is `false`, and `null` is `null`.
+5. Any other schema gives `null`.
+
+When a key of `values` holds a plain object and rule 4 reads the key's schema as an object, the required keys that object lacks are added too. A list in `values` is kept as given.
+
+`createReturn()` checks the object against the schema, unless the schema sets `$async` to a truthy value, since the simulator checks no return against such a schema. An object that breaks the schema gives a `UsageError` that names the place and the rule it breaks. The message ends with `Give that value in values` for a value that the rules made, such as for a `pattern`. It ends with `Change that value in values` for a value that `values` gave, and with `Change the keys of values` for a problem at the root. A schema that `agent()` refuses or whose root `type` is not `'object'` also gives a `UsageError`, and so do `values` that are no plain object of JSON values.
+
 ## dwfb inspect
 
 `dwfb inspect` runs a workflow script against one scenario, with no model call, and prints each event of the simulation in the order the script made it. An event is an `agent()` call, a `phase()` invocation or a log line. For the example of [`dwfb simulate`](#dwfb-simulate), run this command:
