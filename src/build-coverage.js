@@ -101,7 +101,7 @@ const PHASES_KEY = 'phases';
 export function buildCoverage({ file, text, contractFindings, runs }) {
   const unread = listUnreadScenarios(runs);
 
-  // A count over a part of the scenarios would report a gap that is none.
+  // A count over some of the scenarios would report a gap that is none.
   if (contractFindings.length > 0 || unread.length > 0) return { roles: null, throwSites: null, endStates: null, phases: null, findings: contractFindings, unread };
   return { ...readReach(file, /** @type {string} */ (text), runs), unread };
 }

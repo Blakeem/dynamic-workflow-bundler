@@ -14,6 +14,7 @@ import { CONFIG_FILES_TEXT, loadCommandConfig } from '../src/load-config.js';
 import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
 import { writeScript } from '../src/write-script.js';
+import { EMPTY_CONFIG_PROBLEM } from './find-script-usage-problem.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, formatWrittenNote, printCommandFailure, printResult, printUsageError } from './print-result.js';
 
 const BUILD_USAGE = `Usage: dwfb build [<entry>] [--out <file>] [options]
@@ -65,7 +66,7 @@ export async function runBuild(args) {
   if (values.help) return printResult(BUILD_USAGE);
   if (positionals.length > 1 || entry === '') return printUsageError('dwfb build', `Name one entry file.\n\n${BUILD_USAGE}`);
   if (values.out === '') return printUsageError('dwfb build', `Name the built script with --out <file>.\n\n${BUILD_USAGE}`);
-  if (values.config === '') return printUsageError('dwfb build', `Name the config file with --config <path>.\n\n${BUILD_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb build', `${EMPTY_CONFIG_PROBLEM}.\n\n${BUILD_USAGE}`);
   if (values.out !== undefined && entry === undefined) return printUsageError('dwfb build', `Name the entry file that --out builds.\n\n${BUILD_USAGE}`);
   if (values.out !== undefined && values.config !== undefined) return printUsageError('dwfb build', `Name --out or --config, not both.\n\n${BUILD_USAGE}`);
 

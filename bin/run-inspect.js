@@ -60,7 +60,7 @@ export async function runInspect(args) {
   if (values.help) return printResult(INSPECT_USAGE);
   // inspect needs a script even with no --scenarios, so the shared check of --scenarios with no script never fires here.
   if (script === undefined) return printUsageError('dwfb inspect', `${ONE_SCRIPT_PROBLEM}.\n\n${INSPECT_USAGE}`);
-  problem = findScriptUsageProblem(values, positionals, 'inspects', { findEmptyValueProblem: () => findEmptyInspectValueProblem(values) });
+  problem = findScriptUsageProblem(values, positionals, 'inspects') ?? findEmptyInspectValueProblem(values);
   if (problem !== null) return printUsageError('dwfb inspect', `${problem}.\n\n${INSPECT_USAGE}`);
   if (values.call !== undefined && !CALL_INDEX_PATTERN.test(values.call)) {
     return printUsageError('dwfb inspect', `The call "${formatHiddenCharacters(values.call)}" is not a whole number written in digits.\n\n${INSPECT_USAGE}`);

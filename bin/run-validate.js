@@ -8,6 +8,7 @@ import { formatRealDisplayPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
 import { validate } from '../src/validate.js';
 import { checkBuiltOut } from './check-built-out.js';
+import { EMPTY_CONFIG_PROBLEM } from './find-script-usage-problem.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, printCommandFailure, printResult, printUsageError } from './print-result.js';
 
 const VALIDATE_USAGE = `Usage: dwfb validate [<script>...] [options]
@@ -47,7 +48,7 @@ export async function runValidate(args) {
   const { values, positionals } = parsed;
   if (values.help) return printResult(VALIDATE_USAGE);
   if (positionals.includes('')) return printUsageError('dwfb validate', `Name each script by its path.\n\n${VALIDATE_USAGE}`);
-  if (values.config === '') return printUsageError('dwfb validate', `Name the config file with --config <path>.\n\n${VALIDATE_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb validate', `${EMPTY_CONFIG_PROBLEM}.\n\n${VALIDATE_USAGE}`);
   if (positionals.length > 0 && values.config !== undefined) {
     return printUsageError('dwfb validate', `Name scripts or --config, not both, since a named script needs no config file.\n\n${VALIDATE_USAGE}`);
   }

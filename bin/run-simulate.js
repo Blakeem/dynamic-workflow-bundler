@@ -55,10 +55,7 @@ export async function runSimulate(args) {
   const { values, positionals } = parsed;
   const [script] = positionals;
   if (values.help) return printResult(SIMULATE_USAGE);
-  problem = findScriptUsageProblem(values, positionals, 'simulates', {
-    findEmptyValueProblem: () => (values.scenario === '' ? 'Name the scenario with --scenario <name>' : null),
-    findMissingScriptProblem: () => (script === undefined && values.scenario !== undefined ? 'Name the script that --scenario simulates' : null),
-  });
+  problem = findScriptUsageProblem(values, positionals, 'simulates') ?? findScenarioUsageProblem(values, script);
   if (problem !== null) return printUsageError('dwfb simulate', `${problem}.\n\n${SIMULATE_USAGE}`);
 
   // Every simulation runs before any result prints, so a usage error in a later simulation prints no result.
@@ -76,4 +73,15 @@ export async function runSimulate(args) {
   const exitCode = isSuccess ? EXIT_SUCCESS : EXIT_FINDINGS;
   if (values.json) return printResult(`${JSON.stringify(formatSimulateJson(simulations, isSuccess), null, 2)}\n`, exitCode);
   return printResult(formatSimulateText(simulations), exitCode);
+}
+
+/**
+ * @param {{ scenario?: string }} values
+ * @param {string | undefined} script
+ * @returns {string | null} The usage error of `--scenario`, with no full stop, or null for none.
+ */
+function findScenarioUsageProblem(values, script) {
+  if (values.scenario === '') return 'Name the scenario with --scenario <name>';
+  if (script === undefined && values.scenario !== undefined) return 'Name the script that --scenario simulates';
+  return null;
 }

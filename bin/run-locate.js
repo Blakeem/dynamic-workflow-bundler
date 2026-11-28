@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { formatLocateText } from '../src/format-locate-text.js';
 import { CONFIG_FILES_TEXT } from '../src/load-config.js';
 import { locate } from '../src/locate.js';
+import { EMPTY_CONFIG_PROBLEM } from './find-script-usage-problem.js';
 import { EXIT_FINDINGS, EXIT_SUCCESS, printCommandFailure, printResult, printUsageError } from './print-result.js';
 
 const SCRIPT_POSITION_PATTERN = /^(?<line>\d+)(?::(?<column>\d+))?$/;
@@ -50,7 +51,7 @@ export async function runLocate(args) {
   if (positionals.length !== 2 || script === '' || position === '') return printUsageError('dwfb locate', `Name one built script and one line.\n\n${LOCATE_USAGE}`);
   if (positionMatch === null) return printUsageError('dwfb locate', `The line ${position} is not a whole number, or a line and a column such as 12:5.\n\n${LOCATE_USAGE}`);
   if (values.entry === '') return printUsageError('dwfb locate', `Name the entry file with --entry <file>.\n\n${LOCATE_USAGE}`);
-  if (values.config === '') return printUsageError('dwfb locate', `Name the config file with --config <path>.\n\n${LOCATE_USAGE}`);
+  if (values.config === '') return printUsageError('dwfb locate', `${EMPTY_CONFIG_PROBLEM}.\n\n${LOCATE_USAGE}`);
   const { line, column } = /** @type {{ line: string, column?: string }} */ (positionMatch.groups);
   // Number() rounds a larger digit string, so locate() would name a number the user did not type.
   if (!Number.isSafeInteger(Number(line))) return printUsageError('dwfb locate', `The line ${line} is larger than ${Number.MAX_SAFE_INTEGER}.\n\n${LOCATE_USAGE}`);

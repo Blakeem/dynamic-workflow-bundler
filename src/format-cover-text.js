@@ -12,6 +12,7 @@ const NO_END_STATES_LINE = '  end states: none declared with // @end-states';
  * @param {CoverageResult[]} results In the order covered.
  * @returns {string} Each line with its line end. For each script: its findings, a line per unread scenario, then
  *   for a script with no unread scenario its count of scenarios and a line per kind with how many a scenario reaches.
+ *   The end states line gives no count for a script that declares no end state.
  */
 export function formatCoverText(results) {
   return results.flatMap(formatScriptLines).map((line) => `${line}\n`).join('');
@@ -25,7 +26,7 @@ function formatScriptLines(result) {
   const { script, scenarioCount, roles, throwSites, endStates, phases, findings, unread } = result;
   const lines = [...findings.map(formatFinding), ...unread.map(({ scenario, reason }) => `${script} ${formatHiddenCharacters(scenario)}: not read, since ${reason}.`)];
 
-  // cover() gives null lists when a scenario is unread, since a count over a part of the scenarios would report a gap that is none.
+  // cover() gives null lists when a scenario is unread, since a count over some of the scenarios would report a gap that is none.
   if (unread.length > 0) return lines;
   lines.push(
     `${script}: ${formatCount(scenarioCount, 'scenario')}`,
@@ -40,11 +41,11 @@ function formatScriptLines(result) {
 
 /**
  * @param {string} kind The plural of the kind, such as `roles`.
- * @param {{ reached: boolean }[]} parts
+ * @param {{ reached: boolean }[]} coverages
  * @returns {string}
  */
-function formatReachLine(kind, parts) {
-  return `  ${kind}: ${parts.filter(({ reached }) => reached).length} of ${parts.length} reached`;
+function formatReachLine(kind, coverages) {
+  return `  ${kind}: ${coverages.filter(({ reached }) => reached).length} of ${coverages.length} reached`;
 }
 
 /**

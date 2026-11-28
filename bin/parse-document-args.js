@@ -58,10 +58,11 @@ export function parseDocumentArgs(kind, args, usage) {
  */
 function findUsageProblem(kind, values, positionals) {
   const [script] = positionals;
+  const scriptProblem = findScriptUsageProblem(values, positionals, kind.verb);
 
-  return findScriptUsageProblem(values, positionals, kind.verb, {
-    findEmptyValueProblem: () => (values.out === '' ? `Name the ${kind.name} file with --out <file>` : null),
-    findValueProblem: () => (values.out !== undefined && isFolderPath(values.out) ? `The out path ${values.out} names a folder, so name a file with --out <file>` : null),
-    findMissingScriptProblem: () => (script === undefined && values.out !== undefined ? `Name the script whose ${kind.name} --out writes` : null),
-  });
+  if (scriptProblem !== null) return scriptProblem;
+  if (values.out === '') return `Name the ${kind.name} file with --out <file>`;
+  if (values.out !== undefined && isFolderPath(values.out)) return `The out path ${values.out} names a folder, so name a file with --out <file>`;
+  if (script === undefined && values.out !== undefined) return `Name the script whose ${kind.name} --out writes`;
+  return null;
 }

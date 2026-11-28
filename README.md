@@ -521,7 +521,7 @@ The command exits 0 when every prompt snapshot is written, unchanged, printed or
 
 ## dwfb cover
 
-`dwfb cover` runs a workflow script against each scenario of a scenarios file, with no model call, and reports each role, throw site, end state and phase of the script that no scenario reaches. A path of the script that no scenario takes is not tested before launch, so the command lists the parts of the script that need a scenario.
+`dwfb cover` runs a workflow script against each scenario of a scenarios file, with no model call, and reports each role, throw site, end state and phase of the script that no scenario reaches. A path of the script that no scenario takes is not tested before launch, so the command lists each role, throw site, end state and phase that needs a scenario.
 
 `.claude/workflows/fix.js`:
 
@@ -568,7 +568,7 @@ $ dwfb cover .claude/workflows/fix.js --scenarios workflows/fix/scenarios.js
   phases: 2 of 2 reached
 ```
 
-The command prints each finding, then the count of scenarios and one line per kind with how many of its parts a scenario reaches.
+The command prints each finding, then the count of scenarios, then one line each for the roles, throw sites, end states and phases with how many of them a scenario reaches. For a script that declares no end state, the end states line reads `end states: none declared with // @end-states`.
 
 | Kind | A scenario reaches it when |
 |---|---|
@@ -598,7 +598,7 @@ An error that the script catches reaches no throw site, since a trace records on
 
 A built script keeps each comment line of its source, so the directives are written in the source, such as above a `const` of a module. [`dwfb locate`](#dwfb-locate) gives the source line of a finding's line.
 
-A scenario whose simulation stops is unread, and so is each scenario of a script that breaks a rule of [`dwfb validate`](#dwfb-validate). For each unread scenario, the command prints `<script> <scenario>: not read, since <reason>.` after the findings of a refused script. A script with an unread scenario gets no count lines, since a count over a part of the scenarios would report a gap that is none.
+A scenario whose simulation stops is unread, and so is each scenario of a script that breaks a rule of [`dwfb validate`](#dwfb-validate). For each unread scenario, the command prints `<script> <scenario>: not read, since <reason>.` after the findings of a refused script. A script with an unread scenario gets no count lines, since a count over some of the scenarios would report a gap that is none.
 
 With a script and no `--scenarios`, the command finds the scenarios file as `dwfb simulate` does. With no script, it covers the `out` of each workflow of the config file that has `scenarios`. `--config <path>` names another config file. The command exits 0 when no script has a finding or an unread scenario, 1 when one does and 2 for a usage error, such as a scenarios file that does not load. `--json` prints `{ ok, runtime, scripts }`. Each element of `scripts` holds `ok`, `script`, `scenarios`, `scenarioCount`, `roles`, `throwSites`, `endStates`, `phases`, `findings` and `unread`, where `scenarios` is the scenarios file. `endStates` is `null` for a script that declares no end state, and each of the four lists is `null` for a script with an unread scenario.
 
