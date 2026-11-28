@@ -480,9 +480,9 @@ Review the unit core, whose id is dd5e607e. Report at most 3 findings.
 
 The 20 calls of the four scenarios hold five variants. A variant is one distinct prompt of a role. Two prompts of one role are one variant when they have the same schema and are equal after three masks, applied in this order:
 
-1. The item of the label becomes `<item>` where no letter or digit touches it, such as `core` in `review:core`. Only a call whose role is a role of the script has an item. An item that the next two masks turn into one `N`, such as `2` in `fix:2`, is left to those masks, so the `2` of `round 2` becomes `N` in each call.
-2. Each UUID and each lowercase hex word of 8 or more characters becomes `N`, such as the id `dd5e607e`.
-3. Each run of digits becomes `N`, such as the `1` of `round 1`.
+1. The item of the label is written as `<item>` where no letter or digit touches it, such as `core` in `review:core`. Only a call whose role is a role of the script has an item. An item that the next two masks turn into one `N`, such as `2` in `fix:2`, is left to those masks, so the `2` of `round 2` is written as `N` in each call.
+2. Each UUID and each lowercase hex word of 8 or more characters is written as `N`, such as the id `dd5e607e`.
+3. Each run of digits is written as `N`, such as the `1` of `round 1`.
 
 So the reviews of `core` and `tools` are one variant, and the strict review is a second. The role of a call is the longest [role](#script-rules) of the script that its label starts with. A label that is not empty and starts with no role of the script is its own role, and a call with no label or with the empty label has the role `(no label)`. The table lists each variant in the order its first call was made. Each section holds the label, the prompt and the schema of that first call. A schema number counts the distinct schemas of a role.
 

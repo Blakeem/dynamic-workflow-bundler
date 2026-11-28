@@ -2205,7 +2205,7 @@ describe('dwfb snapshot', () => {
 
     assert.equal(status, 0);
     assert.match(stdout, /^Usage: dwfb snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[--check\] \[--config <path>\] \[--json\] \[--help\]\n[^]*\n {2}--out <file> {9}Write the prompt snapshot to this file\.\n/);
-    assert.match(stdout, /the item of the call's label becomes <item> where no\nletter or digit touches it, unless the later masks turn the item into one N, each UUID and each lowercase hex\nword of 8 or more characters becomes N, and each run of digits becomes N\./);
+    assert.match(stdout, /the item of the call's label is written as <item>\nwhere no letter or digit touches it, unless the later masks turn the item into one N, each UUID and each\nlowercase hex word of 8 or more characters is written as N, and each run of digits is written as N\./);
     assert.match(runCommand(['--help']).stdout, /\n {2}snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
   });
 });
