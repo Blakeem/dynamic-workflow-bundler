@@ -255,7 +255,7 @@ describe('locate', () => {
     const [finding] = (await locate({ script, line: 1, config })).findings;
     const bannerBuild = await build({ entry, out: script, write: false });
 
-    assert.equal(finding.fix, `Run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)} --no-validate, since the line numbers may not match the source`);
+    assert.equal(finding.fix, `Remove ${formatCommandPath(script)}, then run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)} --no-validate, since the line numbers may not match the source`);
     assert.deepEqual(bannerBuild.findings.map((buildFinding) => buildFinding.rule), ['script-too-large']);
   });
 
@@ -307,8 +307,25 @@ describe('locate', () => {
     await writeFile(script, ['<<<<<<< HEAD', ...lines].join('\n'));
     const [noBannerFinding] = (await locate({ script, line: 1, config: noBannerConfig })).findings;
 
-    assert.equal(bannerFinding.fix, `Run ${buildCommand}, since the line numbers may not match the source`);
+    assert.equal(bannerFinding.fix, `Remove ${formatCommandPath(script)}, then run ${buildCommand}, since the line numbers may not match the source`);
     assert.deepEqual({ rule: noBannerFinding.rule, fix: noBannerFinding.fix }, { rule: 'script-stale', fix: `Run ${buildCommand} --no-banner, since the line numbers may not match the source` });
+  });
+
+  it('names a remove step in the script-stale fix of a script the build command would refuse, and that removal and command rewrite the script', async () => {
+    const { folder, entry, script } = await writeBuiltFixture(false);
+    const config = join(folder, 'dwfb.config.mjs');
+    await writeFile(config, "export default { workflows: [{ entry: 'entry.js', out: 'dist/workflow.js' }] };\n");
+    await writeFile(join(folder, 'part.js'), 'const partValue = 3;\n');
+
+    const [finding] = (await locate({ script, line: 1, config })).findings;
+    await assert.rejects(build({ entry, out: script }), { name: 'UsageError', message: /exists and is no script that dwfb build wrote with a banner,/ });
+    await rm(script);
+    const rewrite = await build({ entry, out: script });
+    const located = await locate({ script, line: 1, config });
+
+    assert.equal(finding.fix, `Remove ${formatCommandPath(script)}, then run dwfb build ${formatCommandPath(entry)} --out ${formatCommandPath(script)}, since the line numbers may not match the source`);
+    assert.equal(rewrite.status, 'written');
+    assert.deepEqual({ ok: located.ok, findings: located.findings }, { ok: true, findings: [] });
   });
 
   it('names the banner and asks for the entry when the entry the banner names does not exist', async () => {

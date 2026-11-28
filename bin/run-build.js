@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { build } from '../src/build.js';
 import { formatBuildCommand } from '../src/build-command.js';
+import { checkExistingScript } from '../src/check-existing-script.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findConfigWorkflows } from '../src/find-config-workflows.js';
 import { findSameFile } from '../src/find-same-file.js';
@@ -22,9 +23,11 @@ workflow of the config file that has this entry. With an entry and --out, reads 
 
 Options:
   --out <file>      Write the built script to this file.
+                    An existing file must be a built script.
   --config <path>   Read this config file in place of ${CONFIG_FILES_TEXT}.
   --check           Write nothing, and report each built script that differs from its source.
   --no-banner       Leave out the banner line.
+                    Such a build can replace a hand-written workflow script.
   --no-validate     Skip the check of the built script against the runtime's contract.
   --json            Print the result as one JSON object.
   --help            Print this help.
@@ -77,13 +80,16 @@ export async function runBuild(args) {
     const banner = values['no-banner'] ? false : workflow.banner;
     const validate = values['no-validate'] ? false : workflow.validate;
     try {
-      builtWorkflows.push({ workflow, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false, validate }), out: null });
+      builtWorkflows.push({ workflow, banner, result: await build({ entry: workflow.entry, out: workflow.out, banner, check: values.check === true, write: false, validate }), out: null });
     } catch (error) {
       return printCommandFailure('dwfb build', error);
     }
   }
   try {
     await checkOutFiles(builtWorkflows, configFile);
+    for (const { workflow, banner, result } of builtWorkflows) {
+      if (result.status === 'built') await checkExistingScript(resolve(workflow.out), workflow.out, banner);
+    }
   } catch (error) {
     return printCommandFailure('dwfb build', error);
   }

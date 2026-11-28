@@ -23,7 +23,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | part | A source file joined into the script as text, in a stated order. |
 | build | To write a workflow script from its source. The result is the built script. |
 | scope | The function scope that holds one module's code in the built script. |
-| banner | The comment line after `meta` that names the entry a built script comes from. |
+| banner | The comment line after `meta` that names the entry a built script comes from. A build replaces an existing file at `out` only when it is a built script, which a banner marks, or for a build with no banner a first statement that is the `meta` statement. |
 | directive | A `// @include <path>` comment line in an entry, which names a part. |
 | config file | The `dwfb.config.js` or `dwfb.config.mjs` file, which lists the workflows a project builds. |
 | line origin | The source file and line that a line of the built script comes from. |

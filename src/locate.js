@@ -2,11 +2,12 @@ import { stat } from 'node:fs/promises';
 import { dirname, parse, resolve } from 'node:path';
 import { findBanner } from './banner.js';
 import { buildMappedScript } from './build.js';
-import { formatBuildCommand } from './build-command.js';
+import { formatBuildCommand, formatCommandPath } from './build-command.js';
 import { checkContract } from './check-contract.js';
 import { convertRuntimePosition } from './convert-runtime-position.js';
 import { formatDisplayPath } from './display-path.js';
 import { findConfigWorkflows } from './find-config-workflows.js';
+import { isBuiltScript } from './is-built-script.js';
 import { isObject } from './is-object.js';
 import { CONFIG_FILES_TEXT, loadCommandConfig } from './load-config.js';
 import { MISSING_FILE_CODES } from './load-sources.js';
@@ -92,7 +93,7 @@ export async function locate(options = /** @type {LocateOptions} */ ({})) {
   if (result.status === 'stale') {
     // A script with no banner may come from a workflow whose build writes one, and the banner's bytes may make that script too large.
     const commandScript = hasBanner === scriptWorkflow.banner ? result.script : await buildCommandScript(script, scriptWorkflow);
-    return createFailedResult([await createStaleFinding(script, result.firstDifference.line, scriptWorkflow, commandScript)]);
+    return createFailedResult([await createStaleFinding(script, scriptText, result.firstDifference.line, scriptWorkflow, commandScript)]);
   }
   const position = runtime ? convertRuntimePosition(scriptText, /** @type {number} */ (metaEnd), line, column) : { line, column };
   checkScriptPosition(scriptText, script, position, runtime ? { line, column } : null);
@@ -186,23 +187,27 @@ function createFailedResult(findings) {
 
 /**
  * @param {string} script
+ * @param {string} scriptText The script's text on disk, which the command replaces.
  * @param {number} line The script's first line that differs from the script the build gives.
  * @param {ScriptWorkflow} scriptWorkflow
  * @param {string | null} commandScript The script the command builds, or null when that build has a finding.
  * @returns {Promise<Finding>} The finding, whose fix names the command that rewrites the script as its
- *   workflow gives it.
+ *   workflow gives it, after a step that removes the script when that command would refuse to replace it.
  */
-async function createStaleFinding(script, line, scriptWorkflow, commandScript) {
+async function createStaleFinding(script, scriptText, line, scriptWorkflow, commandScript) {
   // The command reads no config file, so it runs the contract check whatever the workflow's validate says.
   const breaksContract = commandScript !== null && checkContract(commandScript, '').length > 0;
   const buildCommand = formatBuildCommand(scriptWorkflow.entry, { out: script, 'no-banner': !scriptWorkflow.banner, 'no-validate': breaksContract });
+  // A command whose build has a finding stops before its refusal, so the script stays in place until the source is fixed.
+  const isRefused = commandScript !== null && !isBuiltScript(scriptText, scriptWorkflow.banner);
+  const runStep = isRefused ? `Remove ${formatCommandPath(script)}, then run` : 'Run';
   // The script takes the form `dwfb build` gives its out, so both commands name one script one way.
   const scriptPath = await formatRealDisplayPath(script);
 
   return {
     rule: 'script-stale',
     message: 'The script differs from the script the build gives',
-    fix: `Run ${buildCommand}, since the line numbers may not match the source`,
+    fix: `${runStep} ${buildCommand}, since the line numbers may not match the source`,
     file: scriptPath,
     line,
     column: 1,

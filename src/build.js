@@ -1,6 +1,7 @@
 import { open, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { checkContract, formatScriptOversizeReason, SCRIPT_BYTE_LIMIT } from './check-contract.js';
+import { checkExistingScript } from './check-existing-script.js';
 import { checkOutPath } from './check-out-path.js';
 import { compileScript } from './compile-script.js';
 import { formatForwardSlashes, isFolderPath } from './display-path.js';
@@ -72,8 +73,8 @@ const BUILD_OPTION_KEYS = new Set(['entry', 'out', 'banner', 'write', 'check', '
  * imports. Prints nothing.
  * Rejects with a UsageError for options that are not an object, an unknown or wrong option, `check` with
  * `write: true`, a missing entry, an entry or `out` that ends in a path separator or a `.` or `..` segment, an
- * `out` that names a source, a folder or a path inside a file, and an `out` on another drive than the entry
- * when the banner is on.
+ * `out` that names a source, a folder or a path inside a file, an `out` on another drive than the entry
+ * when the banner is on, and, with `write`, an existing file at `out` that is no built script.
  * @param {BuildOptions} options
  * @returns {Promise<BuildResult>}
  */
@@ -110,6 +111,7 @@ export async function buildMappedScript(options = /** @type {BuildOptions} */ ({
   const [, ...importedFiles] = sources.keys();
   const sourceFiles = [...new Set([entryFile, ...parts, ...importedFiles])];
   await checkOutFile(outFile, out, sourceFiles);
+  if (write) await checkExistingScript(outFile, out, banner);
   const bannerPath = banner ? formatForwardSlashes(relative(await findRealPath(dirname(outFile)), entryFile)) : null;
   if (bannerPath !== null && isAbsolute(bannerPath)) {
     throw new UsageError(`The out file ${out} is on another drive than the entry, so the banner cannot name the entry by a relative path`);

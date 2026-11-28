@@ -27,7 +27,15 @@ export function findBanner(script) {
   const lineBreak = firstStatement === undefined ? -1 : script.indexOf('\n', firstStatement.end);
   const banner = lineBreak === -1 ? undefined : comments.find((comment) => comment.start === lineBreak + 1 && comment.type === 'Line');
   const bannerText = banner === undefined ? '' : script.slice(banner.start, banner.end);
-  const isBanner = bannerText.length > BANNER_START.length + BANNER_END.length && bannerText.startsWith(BANNER_START) && bannerText.endsWith(BANNER_END);
 
-  return { path: isBanner ? bannerText.slice(BANNER_START.length, -BANNER_END.length) : null, hasSyntaxError: false };
+  return { path: isBannerText(bannerText) ? bannerText.slice(BANNER_START.length, -BANNER_END.length) : null, hasSyntaxError: false };
+}
+
+/**
+ * @param {string} text The text of a line comment.
+ * @returns {boolean} True for a text that starts with BANNER_START, ends with BANNER_END and holds one or more
+ *   characters between them.
+ */
+export function isBannerText(text) {
+  return text.length > BANNER_START.length + BANNER_END.length && text.startsWith(BANNER_START) && text.endsWith(BANNER_END);
 }

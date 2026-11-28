@@ -6,6 +6,7 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'acorn';
 import { build } from 'dynamic-workflow-bundler';
+import { BANNER_END, BANNER_START } from '../src/banner.js';
 import { compileBuiltScript, placeContractFinding } from '../src/build.js';
 import { SCRIPT_BYTE_LIMIT } from '../src/check-contract.js';
 import { FIXES } from '../src/finding.js';
@@ -700,6 +701,53 @@ describe('build output and usage errors', () => {
     assert.deepEqual(await readdir(folder), ['entry.js']);
   });
 
+  it('refuses to write over an existing file at out that is no built script, keeps its bytes, and replaces a built script', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    const notes = '# Notes\n\nWritten by hand.\n';
+    await writeFile(entry, 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+
+    const missing = await build({ entry, out });
+    await writeFile(entry, 'export const meta = { name: "p", description: "d" };\nreturn 2;\n');
+    const replaced = await build({ entry, out });
+    await writeFile(out, notes);
+
+    assert.equal(missing.status, 'written');
+    assert.equal(replaced.status, 'written');
+    await assert.rejects(build({ entry, out }), {
+      name: 'UsageError',
+      message: `The out file ${out} exists and is no script that dwfb build wrote with a banner, so remove the file or name another one`,
+    });
+    assert.equal(await readFile(out, 'utf8'), notes);
+  });
+
+  it('gives the result of a build with write: false or check on a hand-written file at out, and writes nothing', async () => {
+    const folder = await makeTemporaryFolder();
+    const entry = join(folder, 'entry.js');
+    const out = join(folder, 'out.js');
+    const notes = '# Notes\n';
+    await writeFile(entry, 'export const meta = { name: "p", description: "d" };\nreturn 1;\n');
+    await writeFile(out, notes);
+
+    const built = await build({ entry, out, write: false });
+    const checked = await build({ entry, out, check: true });
+
+    assert.deepEqual({ ok: built.ok, status: built.status }, { ok: true, status: 'built' });
+    assert.deepEqual({ ok: checked.ok, status: checked.status, firstDifference: checked.firstDifference }, { ok: false, status: 'stale', firstDifference: { line: 1, file: built.sources[0], sourceLine: 1 } });
+    assert.equal(await readFile(out, 'utf8'), notes);
+  });
+
+  it('refuses a hand-written file at out before the findings of a build', async () => {
+    const folder = await makeTemporaryFolder();
+    const out = join(folder, 'out.js');
+    await writeFile(join(folder, 'entry.js'), "export const meta = { name: 'p', description: 'd' };\nimport x from 'package';\n");
+    await writeFile(out, '# Notes\n');
+
+    await assert.rejects(build({ entry: join(folder, 'entry.js'), out }), { name: 'UsageError', message: /^The out file .* exists and is no script that dwfb build wrote with a banner,/ });
+    assert.equal(await readFile(out, 'utf8'), '# Notes\n');
+  });
+
   it('rejects a missing entry, a missing out, an out that is a source, a folder or inside a file, a path that ends in a separator, . or .., and options of another shape', async () => {
     const folder = await makeTemporaryFolder();
     await mkdir(join(folder, 'dist'));
@@ -942,6 +990,7 @@ describe('build check', () => {
 
 describe('build contract check', () => {
   const META = "export const meta = { name: 'p', description: 'd' };\n";
+  const EARLIER_SCRIPT = `${META}${BANNER_START}entry.js${BANNER_END}\nreturn 0;\n`;
 
   /**
    * @param {string} folder
@@ -959,7 +1008,7 @@ describe('build contract check', () => {
     await writeFile(entry, `${META}import { stamp } from './clock.js';\n// @include ./part.js\nconst loaded = require('x');\nreturn [stamp(), pick, loaded];\n`);
     await writeFile(join(folder, 'clock.js'), 'export function stamp() {\n  return Date.now();\n}\n');
     await writeFile(join(folder, 'part.js'), 'const first = 1;\nconst pick = Math.random();\n');
-    await writeFile(out, 'earlier script\n');
+    await writeFile(out, EARLIER_SCRIPT);
 
     const result = await build({ entry, out });
     const filesAfterFailure = (await readdir(folder)).sort();
@@ -967,7 +1016,7 @@ describe('build contract check', () => {
     const unvalidated = await build({ entry, out, validate: false });
 
     assert.deepEqual(filesAfterFailure, ['clock.js', 'entry.js', 'out.js', 'part.js']);
-    assert.equal(outAfterFailure, 'earlier script\n');
+    assert.equal(outAfterFailure, EARLIER_SCRIPT);
 
     assert.deepEqual(result, {
       ok: false,
