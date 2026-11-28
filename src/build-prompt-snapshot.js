@@ -107,7 +107,8 @@ export function buildPromptSnapshot({ roles, runs, promptBudgets }) {
  */
 function readSnapshotCall({ label, prompt, opts }, scenario, scriptRoles) {
   const scriptRole = findRole(label, scriptRoles);
-  const role = scriptRole ?? label ?? NO_LABEL_ROLE;
+  const isUnlabeled = label === null || label === '';
+  const role = scriptRole ?? (isUnlabeled ? NO_LABEL_ROLE : label);
   const schema = isObject(opts) && Object.hasOwn(opts, 'schema') ? opts.schema : null;
   const schemaText = JSON.stringify(schema, null, 2);
   const item = scriptRole === null ? '' : readItem(/** @type {string} */ (label), scriptRole);

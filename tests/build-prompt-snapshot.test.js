@@ -84,6 +84,19 @@ describe('buildPromptSnapshot', () => {
     assert.deepEqual(result.roles.map(({ role }) => role), ['(no label)', 'note', 'review']);
   });
 
+  it('gives a call with the empty label the role (no label), and keeps its empty label on its variant', () => {
+    const result = build([
+      createSimulation('a', [
+        { label: null, prompt: 'Run.' },
+        { label: '', prompt: 'Run the empty label.' },
+      ]),
+    ]);
+
+    assert.deepEqual(listVariantNames(result), ['(no label) 1 1 null', '(no label) 2 1 ']);
+    assert.equal(/** @type {any[]} */ (result.variants)[1].label, '');
+    assert.deepEqual(result.roles, [{ role: '(no label)', characters: 20, promptBudget: null }]);
+  });
+
   it('numbers each distinct schema of a role, and gives a call with no schema the schema null', () => {
     const result = build([
       createSimulation('a', [

@@ -1,4 +1,5 @@
 import { describeObjectKind, findNonJsonValue, isPlainObject } from './find-non-json-value.js';
+import { formatCount } from './format-count.js';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
 
 /** @typedef {import('./simulate.js').Respond} Respond */
@@ -82,9 +83,7 @@ function formatListEndMessage(keyName, listLength, callName) {
 
   if (listLength === 0) return `The list of ${keyName} is empty, so it has none for ${callName}. ${addText}`;
 
-  const countText = listLength === 1 ? '1 scripted return' : `${listLength} scripted returns`;
-
-  return `The list of ${keyName} holds ${countText}, which earlier calls used up, so it has none for ${callName}. ${addText}`;
+  return `The list of ${keyName} holds ${formatCount(listLength, 'scripted return')}, which earlier calls used up, so it has none for ${callName}. ${addText}`;
 }
 
 /**

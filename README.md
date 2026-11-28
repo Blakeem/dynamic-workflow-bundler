@@ -484,7 +484,7 @@ The 20 calls of the four scenarios hold five variants. A variant is one distinct
 2. Each UUID and each lowercase hex word of 8 or more characters becomes `N`, such as the id `dd5e607e`.
 3. Each run of digits becomes `N`, such as the `1` of `round 1`.
 
-So the reviews of `core` and `tools` are one variant, and the strict review is a second. The role of a call is the longest [role](#script-rules) of the script that its label starts with. A label that starts with no role of the script is its own role, and a call with no label has the role `(no label)`. The table lists each variant in the order its first call was made. Each section holds the label, the prompt and the schema of that first call. A schema number counts the distinct schemas of a role.
+So the reviews of `core` and `tools` are one variant, and the strict review is a second. The role of a call is the longest [role](#script-rules) of the script that its label starts with. A label that is not empty and starts with no role of the script is its own role, and a call with no label or with the empty label has the role `(no label)`. The table lists each variant in the order its first call was made. Each section holds the label, the prompt and the schema of that first call. A schema number counts the distinct schemas of a role.
 
 A count of characters is the `length` of the prompt, which counts UTF-16 code units. After the file line, the command prints one line per role with the characters of its largest prompt among every call of the role.
 
