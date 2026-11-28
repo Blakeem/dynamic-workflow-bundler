@@ -1,4 +1,3 @@
-import { listFreeReferences } from './find-free-names.js';
 import { findPosition, readPositionText } from './source-position.js';
 import { listTreeNodes } from './syntax-tree.js';
 
@@ -9,9 +8,6 @@ import { listTreeNodes } from './syntax-tree.js';
  * @property {number} line The line of the `new` keyword, from 1.
  * @property {number} column The column of the `new` keyword, from 1. With `line`, the place that the newest frame
  *   of an error the site creates names, which a thrown error is matched by.
- * @property {string} name The `<Name>` that the `new` expression calls, such as `Error`.
- * @property {boolean} isGlobalName True when no scope of the script declares `<Name>`, so it names a global.
- * @property {boolean} hasSpread True when an argument of the `new` expression is a spread.
  * @property {string} template The message with `...` for each expression of a template literal, which a flow map
  *   shows. A concatenation gives the text of its leftmost operand alone.
  * @property {boolean} isMessageBuilt True when the message argument holds an expression, so the runtime builds the
@@ -30,14 +26,10 @@ export const EXPRESSION_MARK = '...';
  */
 export function readThrowSites(program, text) {
   const throwStatements = listTreeNodes(program).filter(isThrowSite);
-  const freeReferences = new Set(listFreeReferences(program));
   const { positionText, markLength } = readPositionText(text);
 
   return throwStatements.map(({ argument }) => ({
     ...findPosition(positionText, Math.max(0, argument.start - markLength)),
-    name: argument.callee.name,
-    isGlobalName: freeReferences.has(argument.callee),
-    hasSpread: argument.arguments.some((node) => node.type === 'SpreadElement'),
     ...readMessageText(argument.arguments[0]),
   }));
 }

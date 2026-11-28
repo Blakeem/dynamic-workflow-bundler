@@ -169,6 +169,13 @@ Markdown document with one Mermaid diagram. With a script and no --scenarios, re
 workflow of the config file whose out is the script. The flow map goes to --out, else to the map of that
 workflow, else to stdout. With no script, writes the map of each workflow of the config file that has map.
 
+A scenario is mapped only when its script follows these rules. Each agent() call has a label. Each label
+starts with a role. A role is the text before the first \${...} of a label string in the script. The script
+returns an object with a string status, or its scenario has an endState. An error that the script throws on
+purpose is created by the throw new <Name>(...) statement that throws it. After the top level of the script or
+a lane starts a parallel() or pipeline() group, it makes no agent() call of its own before the last call made
+in that group or in a group started inside it. A lane is one thunk of a parallel() or one item of a pipeline().
+
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
   --out <file>         Write the flow map to this file.

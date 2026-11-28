@@ -5,8 +5,8 @@ import { buildFlowGraph } from '../src/build-flow-graph.js';
 const DONE = { kind: 'returned', value: { status: 'done' } };
 const SEQ_ROLES = ['dev', 'check'];
 const SEQ_SITES = [
-  { line: 12, column: 31, name: 'Error', isGlobalName: true, hasSpread: false, template: 'No block to build', isMessageBuilt: false },
-  { line: 20, column: 34, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
+  { line: 12, column: 31, template: 'No block to build', isMessageBuilt: false },
+  { line: 20, column: 34, template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
 ];
 // The labels of the seq script's scenario in which each check passes in round 2.
 const SEQ_ROUND_2_LABELS = ['dev a r1', 'check a r1', 'dev a r2', 'check a r2', 'dev b r1', 'check b r1', 'dev b r2', 'check b r2'];
@@ -102,7 +102,7 @@ function createThrewEnd(message, frames, name = 'Error') {
  * @returns {string} The label of the throw node that an error the site creates reaches.
  */
 function readThrowLabel(template, isMessageBuilt = false) {
-  const site = { line: 3, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template, isMessageBuilt };
+  const site = { line: 3, column: 7, template, isMessageBuilt };
   const graph = buildGraph([createSimulation('a', [], createThrewEnd(template, [{ line: 3, column: 7 }]))], { roles: [], throwSites: [site] });
 
   return graph.nodes[0].label;
@@ -152,10 +152,10 @@ describe('buildFlowGraph', () => {
 
   it('gives a simulation that threw the throw site at the line and column of its newest frame, whatever the message', () => {
     const sites = [
-      { line: 4, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead', isMessageBuilt: false },
-      { line: 4, column: 30, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead', isMessageBuilt: false },
-      { line: 7, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead in round ...', isMessageBuilt: true },
-      { line: 9, column: 7, name: 'TypeError', isGlobalName: true, hasSpread: false, template: 'Wrong type', isMessageBuilt: false },
+      { line: 4, column: 7, template: 'Dead', isMessageBuilt: false },
+      { line: 4, column: 30, template: 'Dead', isMessageBuilt: false },
+      { line: 7, column: 7, template: 'Dead in round ...', isMessageBuilt: true },
+      { line: 9, column: 7, template: 'Wrong type', isMessageBuilt: false },
     ];
     const graph = buildGraph(
       [
@@ -179,30 +179,27 @@ describe('buildFlowGraph', () => {
     );
   });
 
-  it('leaves unmapped an error with the name of an engine error at a throw site of another name', () => {
+  it('ends an error of each engine error name at the throw site of its newest frame', () => {
     const names = ['EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError'];
-    const sites = [{ line: 3, column: 7, name: 'Fail', isGlobalName: false, hasSpread: false, template: 'boom', isMessageBuilt: false }];
-    const unmapped = findUnmapped(
+    const sites = [{ line: 3, column: 7, template: 'boom', isMessageBuilt: false }];
+    const graph = buildGraph(
       names.map((name) => createSimulation(name, [], createThrewEnd('Fail is not a constructor', [{ line: 3, column: 7 }], name))),
       { roles: [], throwSites: sites },
     );
 
     assert.deepEqual(
-      unmapped,
-      names.map((name) => ({
-        scenario: name,
-        reason: `the script threw ${name}: Fail is not a constructor at line 3, column 7, the throw site of Fail, and an error named ${name} ends only at a throw site that calls the global ${name} with no spread argument`,
-      })),
+      graph.nodes.map(({ id, label, line, scenarios }) => ({ id, label, line, scenarios })),
+      [{ id: 'x1', label: 'throw: boom', line: 3, scenarios: names }],
     );
   });
 
-  it('leaves unmapped an engine error at a throw site that calls a binding of the script, spreads an argument or calls a global of another name', () => {
+  it('ends at each of three throw sites a TypeError that the site raises while it creates its error', () => {
     const sites = [
-      { line: 3, column: 7, name: 'TypeError', isGlobalName: false, hasSpread: false, template: 'x', isMessageBuilt: false },
-      { line: 4, column: 7, name: 'TypeError', isGlobalName: true, hasSpread: true, template: '', isMessageBuilt: true },
-      { line: 5, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: '', isMessageBuilt: true },
+      { line: 3, column: 7, template: 'x', isMessageBuilt: false },
+      { line: 4, column: 7, template: '', isMessageBuilt: true },
+      { line: 5, column: 7, template: '', isMessageBuilt: true },
     ];
-    const unmapped = findUnmapped(
+    const graph = buildGraph(
       [
         createSimulation('binding', [], createThrewEnd('TypeError is not a constructor', [{ line: 3, column: 7 }], 'TypeError')),
         createSimulation('spread', [], createThrewEnd('args.parts is not iterable', [{ line: 4, column: 7 }], 'TypeError')),
@@ -210,13 +207,15 @@ describe('buildFlowGraph', () => {
       ],
       { roles: [], throwSites: sites },
     );
-    const rule = 'and an error named TypeError ends only at a throw site that calls the global TypeError with no spread argument';
 
-    assert.deepEqual(unmapped, [
-      { scenario: 'binding', reason: `the script threw TypeError: TypeError is not a constructor at line 3, column 7, the throw site of TypeError, ${rule}` },
-      { scenario: 'spread', reason: `the script threw TypeError: args.parts is not iterable at line 4, column 7, the throw site of TypeError, ${rule}` },
-      { scenario: 'other global', reason: `the script threw TypeError: Cannot convert a Symbol value to a string at line 5, column 7, the throw site of Error, ${rule}` },
-    ]);
+    assert.deepEqual(
+      graph.nodes.map(({ id, line, scenarios }) => ({ id, line, scenarios })),
+      [
+        { id: 'x1', line: 3, scenarios: ['binding'] },
+        { id: 'x2', line: 4, scenarios: ['spread'] },
+        { id: 'x3', line: 5, scenarios: ['other global'] },
+      ],
+    );
   });
 
   it('folds the throws of the seq script in rounds 1 and 3 into one throw node', () => {
@@ -293,15 +292,18 @@ describe('buildFlowGraph', () => {
     assert.deepEqual(listEdges(graph), ['S0 -> a2 0', 'a1 =next=> a1 0', 'a1 -> a3 0', 'a2 -> a1 0', 'a3 -back-> a3 2', 'a3 -> t1 0']);
   });
 
-  it('leaves unmapped a call with no label and a call whose label starts with no role', () => {
+  it('leaves unmapped a call with no label and a call whose label starts with no role, each with what to change', () => {
     const unmapped = findUnmapped([createSimulation('no label', ['dev a', { label: null }]), createSimulation('ghost', ['ghost-role'])], { roles: SEQ_ROLES });
-    const noRole = findUnmapped([createSimulation('a', ['dev'])], { roles: [] });
+    const noRole = findUnmapped([createSimulation('a', ['dev']), createSimulation('b', [{ label: null }])], { roles: [] });
 
     assert.deepEqual(unmapped, [
-      { scenario: 'no label', reason: 'call 1 (no label) names no role of the script, whose roles are "dev", "check"' },
-      { scenario: 'ghost', reason: 'call 0 (label "ghost-role") names no role of the script, whose roles are "dev", "check"' },
+      { scenario: 'no label', reason: 'call 1 (no label) names no role of the script, whose roles are "dev", "check", so give the call a label that starts with a role' },
+      { scenario: 'ghost', reason: 'call 0 (label "ghost-role") names no role of the script, whose roles are "dev", "check", so start the label with a role' },
     ]);
-    assert.deepEqual(noRole, [{ scenario: 'a', reason: 'call 0 (label "dev") names no role of the script, which has no role' }]);
+    assert.deepEqual(noRole, [
+      { scenario: 'a', reason: 'call 0 (label "dev") names no role of the script, which has no role, so start the label with a role' },
+      { scenario: 'b', reason: 'call 0 (no label) names no role of the script, which has no role, so give the call a label that starts with a role' },
+    ]);
   });
 
   it('gives an agent node the phase and model of its first call, and the most lanes that held a call of its role at once', () => {
@@ -486,8 +488,8 @@ describe('buildFlowGraph', () => {
 
   it('gives a graph of JSON values with its nodes, edges, phases and loops in their order', () => {
     const sites = [
-      { line: 4, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Early', isMessageBuilt: false },
-      { line: 9, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Late', isMessageBuilt: false },
+      { line: 4, column: 7, template: 'Early', isMessageBuilt: false },
+      { line: 9, column: 7, template: 'Late', isMessageBuilt: false },
     ];
     const graph = buildGraph(
       [

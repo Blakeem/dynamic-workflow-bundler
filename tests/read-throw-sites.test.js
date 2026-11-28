@@ -34,13 +34,13 @@ function readFirstPlace(text) {
 }
 
 describe('readThrowSites', () => {
-  it('reads a throw of a new expression with a name as callee, at the place of the new keyword, with that name', () => {
+  it('reads a throw of a new expression with a name as callee, at the place of the new keyword', () => {
     const text = "const a = 1;\nif (a) throw new Error('No block');\nthrow new TypeError(\n  'Wrong type');\nthrow (\n  new RangeError('Far'));\n";
 
     assert.deepEqual(readTextSites(text), [
-      { line: 2, column: 14, name: 'Error', isGlobalName: true, hasSpread: false, template: 'No block', isMessageBuilt: false },
-      { line: 3, column: 7, name: 'TypeError', isGlobalName: true, hasSpread: false, template: 'Wrong type', isMessageBuilt: false },
-      { line: 6, column: 3, name: 'RangeError', isGlobalName: true, hasSpread: false, template: 'Far', isMessageBuilt: false },
+      { line: 2, column: 14, template: 'No block', isMessageBuilt: false },
+      { line: 3, column: 7, template: 'Wrong type', isMessageBuilt: false },
+      { line: 6, column: 3, template: 'Far', isMessageBuilt: false },
     ]);
   });
 
@@ -51,17 +51,6 @@ describe('readThrowSites', () => {
     assert.deepEqual(readFirstPlace(`${BYTE_ORDER_MARK}throw new Error('boom');`), { line: 1, column: 7 });
     // An offset lowered by the mark's length over text that still holds the mark lands on the LF, on line 1.
     assert.deepEqual(readFirstPlace(`${BYTE_ORDER_MARK}const a = 1;\nthrow new Error('boom');`), { line: 2, column: 7 });
-  });
-
-  it('tells a name that a scope of the script declares from a global, and an argument list with a spread', () => {
-    const text = "class BlockError extends Error {}\nthrow new BlockError('x');\nfunction f(TypeError) { throw new TypeError('x'); }\nthrow new TypeError(...parts);\n";
-    const readFacts = ({ name, isGlobalName, hasSpread }) => ({ name, isGlobalName, hasSpread });
-
-    assert.deepEqual(readTextSites(text).map(readFacts), [
-      { name: 'BlockError', isGlobalName: false, hasSpread: false },
-      { name: 'TypeError', isGlobalName: false, hasSpread: false },
-      { name: 'TypeError', isGlobalName: true, hasSpread: true },
-    ]);
   });
 
   it('reads no throw of a name, a call, a member callee or a literal', () => {
@@ -91,8 +80,8 @@ describe('readThrowSites', () => {
 
   it('gives an empty template for no argument, an empty literal or an expression of another kind', () => {
     assert.deepEqual(readTextSites('throw new Error;\nthrow new Error();'), [
-      { line: 1, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: '', isMessageBuilt: false },
-      { line: 2, column: 7, name: 'Error', isGlobalName: true, hasSpread: false, template: '', isMessageBuilt: false },
+      { line: 1, column: 7, template: '', isMessageBuilt: false },
+      { line: 2, column: 7, template: '', isMessageBuilt: false },
     ]);
     for (const message of ["''", '``']) {
       assert.deepEqual(readMessageText(message), { template: '', isMessageBuilt: false }, message);
@@ -115,8 +104,8 @@ describe('readThrowSites', () => {
     const readOracleSites = async (name) => readTextSites(await readFile(new URL(`${name}.js`, ORACLE), 'utf8'));
 
     assert.deepEqual(await readOracleSites('seq'), [
-      { line: 12, column: 31, name: 'Error', isGlobalName: true, hasSpread: false, template: 'No block to build', isMessageBuilt: false },
-      { line: 20, column: 34, name: 'Error', isGlobalName: true, hasSpread: false, template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
+      { line: 12, column: 31, template: 'No block to build', isMessageBuilt: false },
+      { line: 20, column: 34, template: 'Dead in round .... Resume with the same args.', isMessageBuilt: true },
     ]);
     assert.deepEqual(await readOracleSites('fan'), []);
     assert.deepEqual(await readOracleSites('rounds'), []);

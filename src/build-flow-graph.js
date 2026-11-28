@@ -25,8 +25,8 @@ const QUOTE_MARK = '"';
 const RUNTIME_MESSAGE_LABEL = '(message built at runtime)';
 const NO_MESSAGE_TEXT_LABEL = '(no message text)';
 const UNLISTED_PHASE_DETAIL = '(not in meta.phases)';
-// V8 places an error that a `new` operation raises, such as `Fail is not a constructor`, at the `new` keyword, measured on Node 24.
-const ENGINE_ERROR_NAMES = new Set(['EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError']);
+const NO_LABEL_FIX = 'so give the call a label that starts with a role';
+const LABEL_FIX = 'so start the label with a role';
 
 /**
  * @typedef {object} FlowSimulation The simulation of one scenario of a scenarios file.
@@ -151,10 +151,9 @@ const ENGINE_ERROR_NAMES = new Set(['EvalError', 'RangeError', 'ReferenceError',
 /**
  * Folds the traces of the scenarios of one script into one graph, and reads no disk and prints nothing.
  * A scenario whose simulation stopped or whose script was refused, a call whose label starts with no role,
- * a return with no end state, a returned status that differs from the scenario's endState, and a thrown error
- * whose newest frame is no throw site, that has no frame, or whose engine error name its site does not call as a
- * global with no spread, and a call that a context made after it started a group and before the last call made in that
- * group, each make the scenario unmapped.
+ * a return with no end state, a returned status that differs from the scenario's endState, a thrown error whose
+ * newest frame is no throw site or that has no frame, and a call that a context made after it started a group and
+ * before the last call made in that group or in a group nested in it, each make the scenario unmapped.
  * @param {object} input
  * @param {string[]} input.roles As readRoles gives them.
  * @param {ThrowSite[]} input.throwSites As readThrowSites gives them.
@@ -195,7 +194,7 @@ function readSimulationPath(simulation, roles, throwSites) {
 
   for (const call of trace.calls) {
     const role = findRole(call.label, roles);
-    if (role === null) return { reason: `${formatCallName(call)} names no role of the script, ${formatRoleList(roles)}` };
+    if (role === null) return { reason: `${formatCallName(call)} names no role of the script, ${formatRoleList(roles)}, ${call.label === null ? NO_LABEL_FIX : LABEL_FIX}` };
     steps.push({ call, role, item: readItem(/** @type {string} */ (call.label), role) });
   }
   const end = trace.end.kind === 'returned' ? readReturnedEnd(trace.end.value, simulation.endState) : readThrowEnd(trace.end, throwSites, `the script ${formatSimulationEnd(trace)}`);
@@ -266,15 +265,14 @@ function createEnd(label, source) {
 
 /**
  * Only the newest frame is read, so an error that a statement of a constructor creates does not end at the
- * throw site that invoked the constructor. An error with a name of ENGINE_ERROR_NAMES ends only at a site that
- * calls the global of that name with no spread, since V8 also places a spread of a value that is not iterable at
- * the `new` keyword, measured on Node 24.
- * @param {{ name: string, frames: Frame[] }} end
+ * throw site that invoked the constructor. An error that the `new` operation of a site raises, such as
+ * `Fail is not a constructor`, ends at that site, since V8 places it at the `new` keyword, measured on Node 24.
+ * @param {{ frames: Frame[] }} end
  * @param {ThrowSite[]} throwSites
  * @param {string} thrown What the script threw, as a reason starts.
  * @returns {PathEnd | { reason: string }}
  */
-function readThrowEnd({ name, frames }, throwSites, thrown) {
+function readThrowEnd({ frames }, throwSites, thrown) {
   const newest = frames[0];
 
   if (newest === undefined) return { reason: `${thrown}, and the simulation recorded no place it was created at` };
@@ -282,11 +280,6 @@ function readThrowEnd({ name, frames }, throwSites, thrown) {
   const order = throwSites.findIndex((site) => site.line === newest.line && site.column === newest.column);
   if (order === -1) return { reason: `${thrown} at ${place}, which is no throw site` };
   const site = throwSites[order];
-  const isGlobalCallOfName = site.name === name && site.isGlobalName && !site.hasSpread;
-  if (ENGINE_ERROR_NAMES.has(name) && !isGlobalCallOfName) {
-    return { reason: `${thrown} at ${place}, the throw site of ${formatHiddenCharacters(site.name)}, and an error named ${name} ends only at a throw site that calls the global ${name} with no spread argument` };
-  }
-
   const blankLabel = site.isMessageBuilt ? RUNTIME_MESSAGE_LABEL : NO_MESSAGE_TEXT_LABEL;
 
   return { key: `x:${order}`, kind: 'throw', label: `throw: ${readFirstClause(site.template, blankLabel)}`, source: 'throw', line: site.line, order };

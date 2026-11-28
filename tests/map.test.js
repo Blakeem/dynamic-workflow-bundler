@@ -94,7 +94,7 @@ function createAgentNode(id, role, concurrency) {
  * @param {string} to
  * @returns {import('../src/build-flow-graph.js').FlowEdge} A forward edge that the scenario `a` took.
  */
-function createStep(from, to) {
+function createEdge(from, to) {
   return { from, to, whens: ['a'], back: false, nextItem: false, repeat: 0 };
 }
 
@@ -148,8 +148,8 @@ describe('map', () => {
       result.unmapped.filter((entry) => entry !== parse),
       [
         { scenario: 'stops', reason: formatSimulationEnd(stopTrace) },
-        { scenario: 'no label', reason: 'call 0 (no label) names no role of the script, whose roles are "work"' },
-        { scenario: 'ghost', reason: 'call 0 (label "ghost") names no role of the script, whose roles are "work"' },
+        { scenario: 'no label', reason: 'call 0 (no label) names no role of the script, whose roles are "work", so give the call a label that starts with a role' },
+        { scenario: 'ghost', reason: 'call 0 (label "ghost") names no role of the script, whose roles are "work", so start the label with a role' },
         { scenario: 'no status', reason: 'the script returned no status that is a non-empty string, and the scenario names no endState' },
         { scenario: 'differs', reason: 'the script returned the status "done", which differs from the scenario\'s endState "finished"' },
       ],
@@ -203,7 +203,7 @@ describe('map', () => {
     assert.deepEqual((await map(text)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: Gone, and the simulation recorded no place it was created at' }]);
   });
 
-  it('leaves unmapped an error that the new operation of a throw site raises, and maps a TypeError of a TypeError site', async () => {
+  it('ends at a throw site an error that the site raises while it creates its error, and a TypeError of a TypeError site', async () => {
     const scenarioText = "export default [{ name: 'a', expect: 'threw', args: {} }];\n";
     const noConstructor = await writeFiles('no-constructor', "const Fail = args.missing;\nthrow new Fail('boom');\n", scenarioText);
     const derivedReturn = await writeFiles('derived-return', "class BlockError extends Error { constructor(m) { super(m); return 1; } }\nthrow new BlockError('boom');\n", scenarioText);
@@ -213,16 +213,25 @@ describe('map', () => {
     const spread = await writeFiles('spread', "const parts = args.parts;\nthrow new TypeError(...parts);\n", scenarioText);
     const otherGlobal = await writeFiles('other-global', "const reason = Symbol('s');\nthrow new Error(reason);\n", scenarioText);
     const typeSite = await writeFiles('type-site', "throw new TypeError('Wrong type');\n", scenarioText);
-    const engineReason = (message, name) => `the script threw TypeError: ${message} at line 3, column 7, the throw site of ${name}, and an error named TypeError ends only at a throw site that calls the global TypeError with no spread argument`;
+    const siteNode = [{ id: 'x1', line: 3, scenarios: ['a'] }];
 
-    assert.deepEqual((await map(noConstructor)).unmapped, [{ scenario: 'a', reason: engineReason('Fail is not a constructor', 'Fail') }]);
-    assert.deepEqual((await map(derivedReturn)).unmapped, [{ scenario: 'a', reason: engineReason('Derived constructors may only return object or undefined', 'BlockError') }]);
-    assert.deepEqual((await map(proxyTrap)).unmapped, [{ scenario: 'a', reason: engineReason("'construct' on proxy: trap returned non-object ('1')", 'Fail') }]);
-    assert.deepEqual((await map(shadowedName)).unmapped, [{ scenario: 'a', reason: engineReason('TypeError is not a constructor', 'TypeError') }]);
-    assert.deepEqual((await map(spread)).unmapped, [{ scenario: 'a', reason: engineReason('parts is not iterable (cannot read property undefined)', 'TypeError') }]);
-    assert.deepEqual((await map(otherGlobal)).unmapped, [{ scenario: 'a', reason: engineReason('Cannot convert a Symbol value to a string', 'Error') }]);
+    for (const files of [noConstructor, derivedReturn, proxyTrap, shadowedName, spread, otherGlobal]) {
+      const trace = await simulate({ script: files.script, scenario: { name: 'a', args: {} } });
+
+      assert.equal(trace.end.name, 'TypeError', files.script);
+      assert.deepEqual(await listThrowNodes(files), siteNode, files.script);
+    }
     assert.deepEqual((await map(noStack)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: boom, and the simulation recorded no place it was created at' }]);
     assert.deepEqual(await listThrowNodes(typeSite), [{ id: 'x1', line: 2, scenarios: ['a'] }]);
+  });
+
+  it('ends at its throw site an error of a class that extends an engine error, and an error whose site spreads its arguments', async () => {
+    const scenarioText = "export default [{ name: 'a', expect: 'threw', args: {} }];\n";
+    const subclass = await writeFiles('subclass', "class ValidationError extends TypeError {}\nthrow new ValidationError('bad input');\n", scenarioText);
+    const spreadParts = await writeFiles('spread-parts', "const parts = ['bad input'];\nthrow new TypeError(...parts);\n", scenarioText);
+
+    assert.deepEqual(await listThrowNodes(subclass), [{ id: 'x1', line: 3, scenarios: ['a'] }]);
+    assert.deepEqual(await listThrowNodes(spreadParts), [{ id: 'x1', line: 3, scenarios: ['a'] }]);
   });
 
   it('folds a group started inside a lane inside that lane, and counts the lanes that held a call of each role at once', async () => {
@@ -244,20 +253,20 @@ describe('map', () => {
 
     assert.deepEqual((await map(inStage)).graph, {
       nodes: [createAgentNode('a1', 'review', 4), createAgentNode('a2', 'verify', 2), DONE_NODE],
-      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a2', 't1')],
+      edges: [createEdge('S0', 'a1'), createEdge('a1', 'a2'), createEdge('a2', 't1')],
       phases: [],
       loops: [],
     });
     assert.deepEqual((await map(inThunk)).graph, {
       nodes: [createAgentNode('a1', 'draft', 4), createAgentNode('a2', 'merge', 2), DONE_NODE],
-      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a2', 't1')],
+      edges: [createEdge('S0', 'a1'), createEdge('a1', 'a2'), createEdge('a2', 't1')],
       phases: [],
       loops: [],
     });
     // Each lane of the inner groups walks review to review once, though the four calls alternate between the lanes.
     assert.deepEqual((await map(roundsInLane)).graph, {
       nodes: [createAgentNode('a1', 'review', 2), DONE_NODE],
-      edges: [createStep('S0', 'a1'), { ...createStep('a1', 'a1'), back: true, repeat: 2 }, createStep('a1', 't1')],
+      edges: [createEdge('S0', 'a1'), { ...createEdge('a1', 'a1'), back: true, repeat: 2 }, createEdge('a1', 't1')],
       phases: [],
       loops: [{ from: 'a1', to: 'a1', whens: ['a'], repeat: 2 }],
     });
@@ -273,7 +282,7 @@ describe('map', () => {
     // The top level reached check before the outer group, so the lane's step from work to check goes back.
     assert.deepEqual((await map(backIntoTop)).graph, {
       nodes: [createAgentNode('a1', 'check', 1), createAgentNode('a2', 'work', 1), DONE_NODE],
-      edges: [createStep('S0', 'a1'), createStep('a1', 'a2'), createStep('a1', 't1'), { ...createStep('a2', 'a1'), back: true, repeat: 2 }],
+      edges: [createEdge('S0', 'a1'), createEdge('a1', 'a2'), createEdge('a1', 't1'), { ...createEdge('a2', 'a1'), back: true, repeat: 2 }],
       phases: [],
       loops: [{ from: 'a2', to: 'a1', whens: ['a'], repeat: 2 }],
     });
@@ -288,7 +297,7 @@ describe('map', () => {
 
     assert.deepEqual((await map(together)).graph, {
       nodes: [createAgentNode('a1', 'scan', 2), createAgentNode('a2', 'probe', 3), createAgentNode('a3', 'report', 1), DONE_NODE],
-      edges: [createStep('S0', 'a1'), createStep('S0', 'a2'), createStep('a1', 'a3'), createStep('a2', 'a3'), createStep('a3', 't1')],
+      edges: [createEdge('S0', 'a1'), createEdge('S0', 'a2'), createEdge('a1', 'a3'), createEdge('a2', 'a3'), createEdge('a3', 't1')],
       phases: [],
       loops: [],
     });

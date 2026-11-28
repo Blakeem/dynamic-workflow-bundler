@@ -1834,6 +1834,7 @@ describe('dwfb map', () => {
 
     assert.equal(status, 0);
     assert.match(stdout, /^Usage: dwfb map \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[options\]\n[^]*\n {2}--out <file> {9}Write the flow map to this file\.\n/);
+    assert.match(stdout, /\n\nA scenario is mapped only when its script follows these rules\. Each agent\(\) call has a label\.[^]*the first \$\{\.\.\.\} of a label string[^]*one item of a pipeline\(\)\.\n\nOptions:\n/);
     assert.match(runCommand(['--help']).stdout, /\n {2}map \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
   });
 });
