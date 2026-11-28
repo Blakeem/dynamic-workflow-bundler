@@ -1,6 +1,6 @@
 {
   "name": "dynamic-workflow-bundler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Build, validate and simulate dynamic workflow scripts for Claude Code from several source files.",
   "keywords": [
