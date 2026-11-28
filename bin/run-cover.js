@@ -21,16 +21,19 @@ script, covers the out of each workflow of the config file that has scenarios. W
 A scenario reaches a role when its simulation makes a call of the role: the longest role of the script that
 the call's label starts with. It reaches a throw site when its simulation ends with an error whose newest
 frame is the new keyword of the site's throw new <Name>(...) statement. An error that the script catches
-reaches no throw site. It reaches an end state when its simulation returns an object whose status is the end
-state, or, with no status that is a string of 1 or more characters, when its endState is the end state, with
-each run of ASCII digits read as N on both sides. It reaches a phase of meta.phases when a call of its
+reaches no throw site. A thrown value with no stack, such as a value that is no Error, reaches no throw
+site. A scenario reaches an end state when its simulation returns an object whose status is the end state,
+or, with no status that is a string of 1 or more characters, when its endState is the end state, with each
+run of ASCII digits read as N on both sides. It reaches a phase of meta.phases when a call of its
 simulation runs under that phase.
 
-// @end-states alone on the line above a const declaration declares the end states it lists: each string of
-its object literal or array literal, which may sit inside Object.freeze(...). A script with no such comment
-declares no end state. // @unreached <reason> alone on the line above a throw site or a label marks the throw
-site or the role of the label as one that no scenario can reach, so it gets no finding while no scenario
-reaches it.
+// @end-states alone on the line above a const declaration of one name, with no destructuring, declares the
+end states it lists. Its value is an object literal or an array literal, which may sit inside
+Object.freeze(...), and each of its values is a string of 1 or more characters, written as a string literal
+or a template literal with no \${...}. A script with no such comment declares no end state.
+// @unreached <reason> alone on the line above a throw site or a label marks the throw site or the role of
+the label as one that no scenario can reach, so it gets no finding while no scenario reaches it. A comment
+above a line that holds a throw site marks the throw site alone.
 
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.

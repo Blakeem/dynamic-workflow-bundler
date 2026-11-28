@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { formatCoverText } from '../src/format-cover-text.js';
 
-const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role "audit"', fix: 'Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label', file: 'flow.js', line: 4, column: 30 };
+const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role "audit"', fix: 'Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label, with the label on a line that holds no throw site', file: 'flow.js', line: 4, column: 30 };
 const CONTRACT_FINDING = { rule: 'meta-not-first', message: 'The script does not open with meta', fix: 'Move meta first', file: 'flow.js', line: 1, column: 1 };
 
 /**
@@ -48,7 +48,7 @@ describe('formatCoverText', () => {
     });
 
     assert.equal(formatCoverText([result]), [
-      'flow.js:4:30 role-unreached No scenario reaches the role "audit". Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label.',
+      'flow.js:4:30 role-unreached No scenario reaches the role "audit". Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label, with the label on a line that holds no throw site.',
       'flow.js: 1 scenario',
       '  roles: 1 of 2 reached',
       '  throw sites: 0 of 0 reached',

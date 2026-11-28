@@ -106,6 +106,18 @@ describe('cover', () => {
     assert.deepEqual(result.findings.map(({ rule, line, column }) => [rule, line, column]), [['throw-site-unreached', 3, 9]]);
   });
 
+  it('gives throw-site-unreached for a site whose value has no stack, which a scenario ends with, and no finding once a comment marks it', async () => {
+    const body = "class Halt { constructor(reason) { this.reason = reason; } }\nawait agent('Run.', { label: 'work' });\nthrow new Halt('done');\n";
+    const scenariosText = "export default [{ name: 'a', expect: 'threw', respond: { '': 'ok' } }];\n";
+    const unmarked = await cover(await writeFiles('stackless', body, scenariosText));
+    const marked = await cover(await writeFiles('stackless-marked', body.replace('throw new', '// @unreached a Halt has no stack\nthrow new'), scenariosText));
+
+    assert.deepEqual(unmarked.unread, []);
+    assert.deepEqual(unmarked.findings.map(({ rule, line, column }) => [rule, line, column]), [['throw-site-unreached', 4, 7]]);
+    assert.deepEqual(marked.throwSites?.map(({ reached, unreachedReason }) => [reached, unreachedReason]), [[false, 'a Halt has no stack']]);
+    assert.deepEqual(marked.findings, []);
+  });
+
   it('reaches a listed phase by the phase that phase() sets for the calls after it, and lists a phase() title with no call after it', async () => {
     const meta = "export const meta = { name: 'phased', description: 'd', phases: [{ title: 'Build' }, { title: 'Ship' }] };\n";
     const script = join(folder, 'phased.js');

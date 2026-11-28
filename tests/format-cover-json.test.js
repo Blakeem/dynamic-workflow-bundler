@@ -10,7 +10,7 @@ const COVERAGE = Object.freeze({
   endStates: null,
   phases: [],
 });
-const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role "plan"', fix: 'Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label', file: 'gaps.js', line: 2, column: 30 };
+const GAP_FINDING = { rule: 'role-unreached', message: 'No scenario reaches the role "plan"', fix: 'Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label, with the label on a line that holds no throw site', file: 'gaps.js', line: 2, column: 30 };
 const CONTRACT_FINDING = { rule: 'meta-not-first', message: 'The script does not open with meta', fix: 'Move meta first', file: 'refused.js', line: 1, column: 1 };
 
 describe('formatCoverJson', () => {

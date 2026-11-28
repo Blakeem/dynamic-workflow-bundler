@@ -5,13 +5,17 @@ import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('isIncludeComment', () => {
   it('reads a line comment that starts with @include, and no other comment', () => {
-    const comment = (type, value) => ({ type, value, start: 0, end: 0 });
+    const isLineInclude = (value) => isIncludeComment({ type: 'Line', value, start: 0, end: value.length + 2 }, `//${value}`);
 
-    assert.equal(isIncludeComment(comment('Line', ' @include ./a.js')), true);
-    assert.equal(isIncludeComment(comment('Line', '@include')), true);
-    assert.equal(isIncludeComment(comment('Line', ' @included by ./a.js')), false);
-    assert.equal(isIncludeComment(comment('Line', ' see @include')), false);
-    assert.equal(isIncludeComment(comment('Block', ' @include ./a.js ')), false);
+    assert.equal(isLineInclude(' @include ./a.js'), true);
+    assert.equal(isLineInclude('@include'), true);
+    assert.equal(isLineInclude(' @included by ./a.js'), false);
+    assert.equal(isLineInclude(' see @include'), false);
+    assert.equal(isIncludeComment({ type: 'Block', value: ' @include ./a.js ', start: 0, end: 21 }, '/* @include ./a.js */'), false);
+  });
+
+  it('reads no #! line, which acorn reports as a line comment', () => {
+    assert.equal(isIncludeComment({ type: 'Line', value: ' @include ./a.js', start: 0, end: 18 }, '#! @include ./a.js'), false);
   });
 });
 
@@ -53,6 +57,10 @@ describe('findIncludeDirectives', () => {
       'The // @include comment shares its line with code',
     ]);
     assert.deepEqual(findIncludeDirectives(text).directives, []);
+  });
+
+  it('reads no directive and no misplaced comment from a #! line at the start of the entry', () => {
+    assert.deepEqual(findIncludeDirectives('#! @include ./p.js\nexport const meta = {};\n'), { directives: [], misplaced: [] });
   });
 
   it('leaves a // @include line inside a template literal as text', () => {

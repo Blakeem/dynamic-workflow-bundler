@@ -42,6 +42,7 @@ const RULE_CASES = [
   { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.md' with { type: 'css' };\n", passing: "import a from './a.md' with { type: 'text' };\n" },
   { rule: 'import-attribute-unknown', isEntry: false, breaking: "import a from './a.json' with { mode: 'json' };\n", passing: "import a from './a.json' with { 'type': 'json' };\n" },
   { rule: 'include-misplaced', isEntry: false, breaking: '// @include ./a.js\n', passing: '// @included by ./a.js\n' },
+  { rule: 'include-misplaced', isEntry: false, breaking: '// @include ./a.js\n', passing: '#! @include ./a.js\n' },
   { rule: 'import-dynamic', isEntry: false, breaking: "export const load = () => import('./a.js');\n", passing: "export const load = () => 'import(./a.js)';\n" },
   { rule: 'import-meta', isEntry: false, breaking: 'export const url = import.meta.url;\n', passing: 'export const url = null;\n' },
   { rule: 'export-not-constant', isEntry: false, breaking: 'export let count = 0;\n', passing: 'export const count = 0;\n' },

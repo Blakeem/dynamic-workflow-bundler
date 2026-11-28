@@ -45,7 +45,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | call site | One entry of the stack that V8 records for an error, with a file name and an offset into the compiled code. Each call site inside the script gives one frame. |
 | end state | A named way a script ends: the `status` of the object it returns, the name a scenario gives, or a throw site. |
 | coverage | Which roles, throw sites, declared end states and phases of one script its scenarios reach. |
-| reach | A scenario reaches a role when its simulation makes a call of the role, a throw site when its simulation ends with an error that the site created, a declared end state when its simulation ends in it, and a phase when a call of its simulation runs under it. |
+| reach | A scenario reaches a role when its simulation makes a call of the role, a throw site when its simulation ends with an error whose newest frame is the site, a declared end state when its simulation ends in it, and a phase when a call of its simulation runs under it. |
 | flow map | The graph of every path that the scenarios of one script reach, written as a Mermaid diagram with tables. |
 | node | One box of a flow map: the start, a role, an end state or a throw site. |
 | edge | One step of a flow map, from a node to the node a path reaches next. |

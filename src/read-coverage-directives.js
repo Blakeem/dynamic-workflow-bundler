@@ -58,7 +58,8 @@ export function readCoverageDirectives(program, comments, text, throwSites, role
   const unreachedReasons = new Map();
   const roleMarks = new Map();
   const problems = [];
-  const lineComments = comments.filter((comment) => comment.type === 'Line');
+  // Acorn 8.19.0 reports a #! line at the start of the script as a Line comment.
+  const lineComments = comments.filter((comment) => comment.type === 'Line' && text.startsWith('//', comment.start));
   const endStatesComments = lineComments.filter((comment) => END_STATES_COMMENT.test(comment.value));
   const unreachedComments = lineComments.filter((comment) => UNREACHED_COMMENT.test(comment.value));
   const { positionText, markLength } = readPositionText(text);
@@ -69,8 +70,7 @@ export function readCoverageDirectives(program, comments, text, throwSites, role
 
   for (const comment of endStatesComments) {
     const commentLine = readCommentLine(positionText, comment, markLength);
-    const declaration = commentLine.isAlone ? findDeclarationOnLine(constDeclarations, commentLine.nextLine, markLength) : undefined;
-    const stringNodes = declaration === undefined ? null : readEndStateNodes(declaration);
+    const stringNodes = commentLine.isAlone ? findEndStateNodes(constDeclarations, commentLine.nextLine, markLength) : null;
 
     if (stringNodes === null) {
       problems.push({ rule: 'end-states-misplaced', message: END_STATES_MISPLACED_MESSAGE, offset: comment.start });
@@ -161,11 +161,19 @@ function isConstDeclaration(node) {
  * @param {SyntaxNode[]} declarations In source order.
  * @param {{ start: number, end: number } | null} line Offsets in the position text.
  * @param {number} markLength
- * @returns {SyntaxNode | undefined} The first declaration that starts on the line.
+ * @returns {SyntaxNode[] | null} The strings that readEndStateNodes gives for the first declaration that starts on
+ *   the line and lists end states, or null when none does.
  */
-function findDeclarationOnLine(declarations, line, markLength) {
-  if (line === null) return undefined;
-  return declarations.find((declaration) => declaration.start - markLength >= line.start && declaration.start - markLength < line.end);
+function findEndStateNodes(declarations, line, markLength) {
+  if (line === null) return null;
+  for (const declaration of declarations) {
+    const start = declaration.start - markLength;
+    if (start >= line.end) break;
+    const stringNodes = start >= line.start ? readEndStateNodes(declaration) : null;
+
+    if (stringNodes !== null) return stringNodes;
+  }
+  return null;
 }
 
 /**

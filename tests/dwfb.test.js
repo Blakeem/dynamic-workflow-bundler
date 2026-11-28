@@ -2394,7 +2394,7 @@ describe('dwfb cover', () => {
     'gaps.js:4:31 phase-unreached No scenario makes a call under the phase "Audit" of meta.phases. Add a scenario with a call under it, or remove it from meta.phases.',
     'gaps.js:8:54 end-state-unreached No scenario reaches the end state "halted". Add a scenario whose simulation ends in it, or remove it from the constant.',
     'gaps.js:14:9 throw-site-unreached No scenario reaches this throw site. Add a scenario whose simulation ends with its error, or put // @unreached <reason> on the line above it.',
-    'gaps.js:18:43 role-unreached No scenario reaches the role "audit". Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label.',
+    'gaps.js:18:43 role-unreached No scenario reaches the role "audit". Add a scenario whose simulation makes a call of the role, or put // @unreached <reason> on the line above its label, with the label on a line that holds no throw site.',
     'gaps.js: 2 scenarios',
     '  roles: 2 of 3 reached',
     '  throw sites: 1 of 2 reached, 1 marked unreached',

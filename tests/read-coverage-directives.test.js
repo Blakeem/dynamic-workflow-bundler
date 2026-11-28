@@ -56,6 +56,13 @@ describe('readCoverageDirectives', () => {
     ]);
   });
 
+  it('reads the first const that starts on the next line and lists end states, past one that lists none', () => {
+    assert.deepEqual(readEndStates("// @end-states\nconst A = 1; const S = ['done', 'gone'];"), ['done', 'gone']);
+    assert.deepEqual(readProblemRules("// @end-states\nconst A = 1; const S = ['done', 'gone'];"), []);
+    assert.deepEqual(readEndStates("// @end-states\nconst f = () => { const S = ['done']; };"), ['done']);
+    assert.deepEqual(readEndStates("// @end-states\nconst S = ['done']; const T = ['gone'];"), ['done']);
+  });
+
   it('gives end-states-misplaced at the comment for each form it does not take, and reads no end state', () => {
     const cases = {
       'shares its line with code': "foo(); // @end-states\nconst A = ['done'];",
@@ -71,6 +78,8 @@ describe('readCoverageDirectives', () => {
       'a shorthand property': "// @end-states\nconst A = { done };",
       'a method': "// @end-states\nconst A = { done() {} };",
       'two names in one declaration': "// @end-states\nconst A = ['done'], B = ['halted'];",
+      'two names, the second of no list': "// @end-states\nconst A = ['done', 'gone'], B = 1;",
+      'a const that lists end states on the line after the next': "// @end-states\nconst A = 1;\nconst B = ['done'];",
       'a pattern': "// @end-states\nconst [A] = ['done'];",
       'a call other than Object.freeze': "// @end-states\nconst A = Object.seal(['done']);",
       'Object.freeze of two arguments': "// @end-states\nconst A = Object.freeze(['done'], 1);",
@@ -141,6 +150,14 @@ describe('readCoverageDirectives', () => {
       assert.deepEqual(roleMarks, new Map(), name);
       assert.deepEqual(problems, [{ rule: 'unreached-misplaced', message: UNREACHED_MISPLACED, offset: text.indexOf('// @unreached') }], name);
     }
+  });
+
+  it('reads no directive from a #! line at the start of the script', () => {
+    const empty = { endStates: [], unreachedReasons: new Map(), roleMarks: new Map(), problems: [] };
+
+    assert.deepEqual(readTextDirectives("#! @end-states\nconst A = ['done'];"), empty);
+    assert.deepEqual(readTextDirectives("#! @end-states\nfoo();"), empty);
+    assert.deepEqual(readTextDirectives("#! @unreached reason\nthrow new Error('x');"), empty);
   });
 
   it('gives both problems for a misplaced comment with no reason', () => {

@@ -577,7 +577,7 @@ The command prints each finding, then the count of scenarios, then one line each
 | end state | its simulation returns an object whose `status` is the end state. A scenario whose script returns no `status` that is a string of 1 or more characters uses its `endState` in place of the status. Each run of ASCII digits is compared as `N`, so the status `round 12 of 40` reaches the end state `round 3 of 5`. |
 | phase | a call of its simulation runs under the phase, which `phase()` or the call's `phase` option sets. The phases are the elements of `meta.phases`. |
 
-An error that the script catches reaches no throw site, since a trace records only the error that ends a simulation.
+An error that the script catches reaches no throw site, since a trace records only the error that ends a simulation. A thrown value whose stack names no place in the script reaches no throw site. The [diagram](#diagram) section of `dwfb map` lists such values. A throw site of such a value takes a `// @unreached <reason>` comment, or it throws an `Error` whose `stack` the script has not read.
 
 `// @end-states` alone on the line above a `const` declaration declares the end states that the declaration lists. The declaration has one name, and its value is an object literal or an array literal, or one of those inside `Object.freeze(...)`. Each property value or element is a string of 1 or more characters, written as a string literal or as a template literal with no `${...}`. The keys are not read. The end states of several such comments are joined, and an end state that two of them hold counts once. A script with no such comment declares no end state, and the command checks none.
 

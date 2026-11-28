@@ -144,7 +144,7 @@ export function analyzeSource(text, file, isEntry, hasBanner, includes = []) {
       addFinding('syntax-error', 'The module starts with a #! line, which is legal only at the start of a script', 0);
     }
     if (!isEntry) {
-      for (const comment of comments.filter(isIncludeComment)) {
+      for (const comment of comments.filter((comment) => isIncludeComment(comment, text))) {
         addFinding('include-misplaced', 'The module holds a // @include comment, which only the entry may hold', comment.start);
       }
     }

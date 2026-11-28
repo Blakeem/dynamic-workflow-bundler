@@ -19,10 +19,12 @@ const INCLUDE_COMMENT = /^\s*@include(?=\s|$)/;
 /**
  * Whether a comment reads `// @include`, such as `// @include ./part.js`. A `// @included` comment does not.
  * @param {import('acorn').Comment} comment
+ * @param {string} text The text the comment was parsed from.
  * @returns {boolean}
  */
-export function isIncludeComment(comment) {
-  return comment.type === 'Line' && INCLUDE_COMMENT.test(comment.value);
+export function isIncludeComment(comment, text) {
+  // Acorn 8.19.0 reports a #! line at the start of the text as a Line comment.
+  return comment.type === 'Line' && text.startsWith('//', comment.start) && INCLUDE_COMMENT.test(comment.value);
 }
 
 /**
@@ -49,7 +51,7 @@ export function findIncludeDirectives(text) {
   }
 
   const metaEnd = program.body[0]?.end ?? text.length;
-  for (const comment of comments.filter(isIncludeComment)) {
+  for (const comment of comments.filter((comment) => isIncludeComment(comment, text))) {
     const start = text.lastIndexOf('\n', comment.start - 1) + 1;
     const lineBreak = text.indexOf('\n', comment.end);
     const lineEnd = lineBreak === -1 ? text.length : lineBreak;

@@ -38,7 +38,7 @@ export function checkPart(text, file) {
   for (const statement of program.body) {
     if (MODULE_STATEMENT_TYPES.has(statement.type)) addFinding('part-not-plain', MODULE_STATEMENT_TYPES.get(statement.type), statement.start);
   }
-  for (const comment of comments.filter(isIncludeComment)) {
+  for (const comment of comments.filter((comment) => isIncludeComment(comment, text))) {
     addFinding('include-misplaced', 'The part holds a // @include comment, which only the entry may hold', comment.start);
   }
 
