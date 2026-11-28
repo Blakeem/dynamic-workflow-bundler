@@ -1,0 +1,116 @@
+{
+  "callCount": 20,
+  "digest": "ff15dbec25e4dcdeaf461d0905dd014e014a91afd9eb4b4971fd4bcb7b265bd9",
+  "roles": [
+    {
+      "role": "review",
+      "characters": 108,
+      "promptBudget": null
+    },
+    {
+      "role": "verify",
+      "characters": 84,
+      "promptBudget": null
+    },
+    {
+      "role": "summary",
+      "characters": 55,
+      "promptBudget": null
+    }
+  ],
+  "variants": [
+    {
+      "role": "review",
+      "number": 1,
+      "schemaNumber": 1,
+      "characters": 70,
+      "scenario": "passes at once",
+      "label": "review:core",
+      "prompt": "Review the unit core, whose id is dd5e607e. Report at most 3 findings.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "findings"
+        ]
+      }
+    },
+    {
+      "role": "verify",
+      "number": 1,
+      "schemaNumber": 1,
+      "characters": 42,
+      "scenario": "passes at once",
+      "label": "verify r1",
+      "prompt": "Verify the findings of 2 units in round 1.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "role": "summary",
+      "number": 1,
+      "schemaNumber": 1,
+      "characters": 55,
+      "scenario": "passes at once",
+      "label": "summary",
+      "prompt": "Write the summary between the fences.\n~~~~\nsummary\n~~~~",
+      "schema": null
+    },
+    {
+      "role": "verify",
+      "number": 2,
+      "schemaNumber": 2,
+      "characters": 84,
+      "scenario": "passes in round 2",
+      "label": "verify r2",
+      "prompt": "Verify the findings of 2 units in round 2.\nRound 1 failed. Check each finding again.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "role": "review",
+      "number": 2,
+      "schemaNumber": 1,
+      "characters": 107,
+      "scenario": "strict review of three units",
+      "label": "review:core",
+      "prompt": "Review the unit core, whose id is dd5e607e. Report at most 3 findings.\nReport each finding, also a low one.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "findings"
+        ]
+      }
+    }
+  ]
+}

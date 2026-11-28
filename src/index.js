@@ -4,4 +4,5 @@ export { loadConfig } from './load-config.js';
 export { locate } from './locate.js';
 export { map } from './map.js';
 export { simulate } from './simulate.js';
+export { snapshot } from './snapshot.js';
 export { validate } from './validate.js';

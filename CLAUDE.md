@@ -55,6 +55,10 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | back edge | An edge into a node that the path first reached no later than the node the edge leaves, which closes a loop. A join out of a lane counts only the nodes that the lane or the path before its group reached. |
 | next-item edge | An edge between two calls whose items differ, the step from one item of work to the next. |
 | loop | A back edge, with the count of times one lane walks it. |
+| prompt snapshot | The document that holds one copy of each variant of one script. A diff of it shows which prompts an edit reached. |
+| variant | One distinct prompt of a role. Two prompts of one role are one variant when they have one schema and are equal once the item, each UUID, each lowercase hex word of 8 or more characters and each number are masked. |
+| prompt budget | The most characters that the largest prompt of one role may hold. It is never shortened to `budget`, which names the numbers a script reads from the runtime. |
+| prompt digest | One hash of the label, the prompt and the schema of every call of every scenario. Two scripts have one digest only when their calls, in scenario file order and then in call order, have the same labels, prompts and schemas. |
 | scripted return | The value a scenario gives one call. `null` stands for an agent that died. |
 | stop | The end of a simulation that cannot go on: at a call that gets no usable scripted return, at the call after the runtime's cap on `agent()` calls, when the script waits on a promise that nothing settles, or before a script that reads a name the running Node lacks. |
 | group | One `parallel()` or `pipeline()` invocation in a simulation. Each call made inside it records the group's index. |

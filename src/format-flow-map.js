@@ -1,3 +1,5 @@
+import { escapeCell } from './escape-cell.js';
+
 /** @typedef {import('./build-flow-graph.js').FlowGraph} FlowGraph */
 /** @typedef {import('./build-flow-graph.js').FlowEdge} FlowEdge */
 /** @typedef {import('./build-flow-graph.js').AgentNode} AgentNode */
@@ -17,7 +19,6 @@ const NEXT_ITEM_CAPTION = 'next item';
 const MIN_BOX_NODES = 2;
 const EDGES_NOTE = 'The thick edge with no caption of each pair above is the step to the next item.';
 const WHITE_SPACE_RUN = /\s+/g;
-const MARKDOWN_INLINE_MARK = /[\\`*_~[\]]/g;
 
 /**
  * Writes the flow map of a script as one Markdown document with one Mermaid diagram, and reads no disk and
@@ -217,15 +218,4 @@ function formatPairKey({ from, to }) {
  */
 function escapeMermaid(text) {
   return text.replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('#', '#35;').replaceAll('`', '#96;').replaceAll('&', '#38;').replaceAll('"', '#quot;').replaceAll('|', '#124;').replaceAll('<', '#lt;').replaceAll('>', '#gt;');
-}
-
-/**
- * Markdown ends a table cell at `|`, reads `<` and `>` as the bounds of an HTML tag, reads `&<name>;` as an
- * entity, reads a backslash as an escape, and reads `` ` ``, `*`, `_`, `~`, `[` and `]` as inline marks, such as
- * a code span, in which no entity is decoded.
- * @param {string} text
- * @returns {string}
- */
-function escapeCell(text) {
-  return text.replace(WHITE_SPACE_RUN, ' ').trim().replace(MARKDOWN_INLINE_MARK, '\\$&').replaceAll('|', '\\|').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }

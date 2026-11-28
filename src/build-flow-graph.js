@@ -1,8 +1,10 @@
+import { findRole } from './find-role.js';
 import { formatCallName } from './find-scripted-return.js';
 import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { formatSimulationEnd } from './format-simulation-end.js';
 import { isObject } from './is-object.js';
-import { LABEL_SEPARATOR } from './read-roles.js';
+import { isUnfinishedTrace } from './is-unfinished-trace.js';
+import { readItem } from './read-item.js';
 import { EXPRESSION_MARK } from './read-throw-sites.js';
 
 /** @typedef {import('./simulate.js').Trace} Trace */
@@ -15,8 +17,6 @@ import { EXPRESSION_MARK } from './read-throw-sites.js';
 const START_ID = 'S0';
 const TOP_CONTEXT_KEY = 'top';
 const DIGIT_RUN = /\d+/g;
-const ROUND_MARKER_END = new RegExp(`${LABEL_SEPARATOR}+r\\d+$`);
-const LEADING_SEPARATORS = new RegExp(`^${LABEL_SEPARATOR}+`);
 const WHITE_SPACE_RUN = /\s+/g;
 const CLAUSE_SEPARATORS = [' — ', ': ', ' (', '; ', '. '];
 const OPENING_BRACKETS = new Set(['(', '[', '{']);
@@ -191,7 +191,7 @@ function readSimulationPath(simulation, roles, throwSites) {
   const { trace } = simulation;
   const steps = [];
 
-  if (trace.end.kind === 'stopped' || trace.end.kind === 'refused') return { reason: formatSimulationEnd(trace) };
+  if (isUnfinishedTrace(trace)) return { reason: formatSimulationEnd(trace) };
 
   for (const call of trace.calls) {
     const role = findRole(call.label, roles);
@@ -208,33 +208,12 @@ function readSimulationPath(simulation, roles, throwSites) {
 }
 
 /**
- * @param {string | null} label
- * @param {string[]} roles
- * @returns {string | null} The longest role the label starts with, or null.
- */
-function findRole(label, roles) {
-  if (label === null) return null;
-  const matches = roles.filter((role) => label.startsWith(role));
-
-  return matches.length === 0 ? null : matches.reduce((longest, role) => (role.length > longest.length ? role : longest));
-}
-
-/**
  * @param {string[]} roles
  * @returns {string}
  */
 function formatRoleList(roles) {
   if (roles.length === 0) return 'which has no role';
   return `whose roles are ${roles.map((role) => `"${formatHiddenCharacters(role)}"`).join(', ')}`;
-}
-
-/**
- * @param {string} label
- * @param {string} role A role the label starts with.
- * @returns {string} The label after the role, with no round marker at its end and no separator at its start.
- */
-function readItem(label, role) {
-  return label.slice(role.length).replace(ROUND_MARKER_END, '').replace(LEADING_SEPARATORS, '').trim();
 }
 
 /**
