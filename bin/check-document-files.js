@@ -5,12 +5,14 @@ import { checkOutPath } from '../src/check-out-path.js';
 import { formatDisplayPath } from '../src/display-path.js';
 import { findSameFile } from '../src/find-same-file.js';
 import { formatCaseNote, formatConfigFileConflict } from '../src/format-path-conflict.js';
+import { hasGeneratedMark } from '../src/generated-mark.js';
 import { loadCommandConfig } from '../src/load-config.js';
 import { loadSources, MISSING_FILE_CODES } from '../src/load-sources.js';
 import { readScript } from '../src/read-script.js';
 import { findRealPath, formatRealDisplayPath } from '../src/real-path.js';
 import { UsageError } from '../src/usage-error.js';
 import { DOCUMENT_KINDS } from './document-kinds.js';
+import { readExistingFile } from './write-document.js';
 
 /** @typedef {import('./document-kinds.js').DocumentKind} DocumentKind */
 /** @typedef {import('./find-document-targets.js').DocumentTarget} DocumentTarget */
@@ -30,7 +32,8 @@ import { DOCUMENT_KINDS } from './document-kinds.js';
  * another kind of any workflow, a document file of the same kind of another workflow or target, or the config file
  * the command read, by any spelling, such as through a link or in another letter case, since the write would
  * replace that file. checkConfig cannot see a link or a source that an entry reaches. Also throws for a document
- * path that names a folder or is inside a file, so that no document is written before the refusal.
+ * path that names a folder or is inside a file, and, with no --check, for an existing file that is no document of
+ * the kind, so that no document is written before the refusal.
  * @param {DocumentKind} kind
  * @param {DocumentTarget[]} targets
  * @param {import('./parse-document-args.js').DocumentValues} values The options of the command.
@@ -42,7 +45,7 @@ export async function checkDocumentFiles(kind, targets, values) {
   // --json with no --check reads and writes no document file, so it skips the checks of the document files on disk.
   if (values.json && !values.check) return;
   if (values.scenarios === undefined) ({ configFile, workflows } = await findConfigWorkflowFiles(values.config));
-  await checkTargetFiles(kind, targets, workflows, configFile);
+  await checkTargetFiles(kind, targets, workflows, configFile, values.check === true);
 }
 
 /**
@@ -72,8 +75,9 @@ async function findConfigWorkflowFiles(configPath) {
  * @param {WorkflowFiles[]} workflows Every workflow of the config file when the command read one, since the entry
  *   of a workflow with no document file can reach the file a document file names. Else the targets.
  * @param {string | null} configFile The config file the command read, or null when it read none.
+ * @param {boolean} isCheck True for --check, which writes no document file.
  */
-async function checkTargetFiles(kind, targets, workflows, configFile) {
+async function checkTargetFiles(kind, targets, workflows, configFile, isCheck) {
   const takenFiles = [];
   let targetScripts = new Set();
   let configFiles = [];
@@ -104,8 +108,22 @@ async function checkTargetFiles(kind, targets, workflows, configFile) {
     if (sameConfigFile !== undefined) throw new UsageError(formatConfigFileConflict(`The ${kind.name} file ${file}`, /** @type {string} */ (configFile), formatCaseNote(sameConfigFile.file, documentFile)));
     if (sameFile !== undefined) throw new UsageError(`The ${kind.name} file ${file} names ${sameFile.label}${formatCaseNote(sameFile.file, documentFile)}, which the ${kind.name} would replace`);
     await checkOutPath(resolve(file), `The ${kind.name} path ${file}`);
+    if (!isCheck) await checkExistingDocument(kind, file);
     takenFiles.push({ file: documentFile, label: `the ${kind.name} file ${file} of the script ${script}` });
   }
+}
+
+/**
+ * Throws a UsageError for an existing file at a document path whose third line does not start with the generated
+ * mark of the kind, since the command can write its document again and cannot restore a file it did not write.
+ * @param {DocumentKind} kind
+ * @param {string} file A document path that checkOutPath accepted.
+ */
+async function checkExistingDocument(kind, file) {
+  const fileBytes = await readExistingFile(file);
+
+  if (fileBytes === null || hasGeneratedMark(fileBytes.toString('utf8'), kind.mark)) return;
+  throw new UsageError(`The ${kind.name} file ${file} exists and is no ${kind.name} that ${kind.command} wrote, so remove the file or name another one`);
 }
 
 /**

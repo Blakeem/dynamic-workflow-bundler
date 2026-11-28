@@ -46,7 +46,7 @@ export async function compareDocumentFile(file, document) {
  * @param {string} file
  * @returns {Promise<Buffer | null>} The bytes of the file, or null when no file exists at the path.
  */
-async function readExistingFile(file) {
+export async function readExistingFile(file) {
   try {
     return await readFile(resolve(file));
   } catch (error) {

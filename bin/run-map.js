@@ -33,6 +33,7 @@ one item of a pipeline().
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
   --out <file>         Write the flow map to this file.
+                       An existing file must be a flow map that dwfb map wrote.
   --check              Write nothing, and report each flow map file that differs from the flow map the
                        script and its scenarios give.
   --config <path>      Read this config file in place of ${CONFIG_FILES_TEXT}.

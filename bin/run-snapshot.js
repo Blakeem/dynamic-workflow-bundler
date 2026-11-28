@@ -33,6 +33,7 @@ give each role the most characters its largest prompt may hold.
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
   --out <file>         Write the prompt snapshot to this file.
+                       An existing file must be a prompt snapshot that dwfb snapshot wrote.
   --check              Write nothing, and report each prompt snapshot file that differs from the prompt
                        snapshot the script and its scenarios give.
   --config <path>      Read this config file in place of ${CONFIG_FILES_TEXT}.
