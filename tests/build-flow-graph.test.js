@@ -250,7 +250,7 @@ describe('buildFlowGraph', () => {
     );
 
     assert.deepEqual(unmapped, [
-      { scenario: 'no frame', reason: 'the script threw Bad\\u{0009}Error: Gone\\u{000A}, and the simulation recorded no place it was created at' },
+      { scenario: 'no frame', reason: 'the script threw Bad\\u{0009}Error: Gone\\u{000A}, and the simulation recorded no place it was created at, such as for a thrown value that is no Error, an error that the simulator threw, or an error whose stack the script read before it threw' },
       { scenario: 'older frame', reason: 'the script threw Error: No block to build at line 2, column 5, which is no throw site' },
       { scenario: 'other column', reason: 'the script threw Error: No block to build at line 12, column 30, which is no throw site' },
     ]);
@@ -436,6 +436,67 @@ describe('buildFlowGraph', () => {
     assert.deepEqual(listEdges(seq), ['S0 -> a1 0', 'a1 -> a2 0', 'a2 -back-> a1 2', 'a2 -> t1 0']);
     assert.deepEqual(listEdges(lanes), ['S0 -> a1 0', 'S0 -> a2 0', 'a1 -> a2 0', 'a1 -> t1 0', 'a2 -> a1 0', 'a2 -> t1 0']);
     assert.deepEqual(listEdges(join), ['S0 -> a2 0', 'a1 -back-> a2 2', 'a2 -> a1 0', 'a2 -> t1 0']);
+  });
+
+  it('makes the back edge and loop of a lane that walks check, fix and check whatever order a sibling lane reached the roles in', () => {
+    // Lane b reaches fix and then check, and lane a walks check, fix and check, with either lane's thunk first.
+    const laneBFirst = createSimulation('lane b first', [
+      'plan',
+      { label: 'fix:b', group: [0, 0] },
+      { label: 'check:a', group: [0, 1] },
+      { label: 'check:b', group: [0, 0] },
+      { label: 'fix:a', group: [0, 1] },
+      { label: 'check:a', group: [0, 1] },
+    ]);
+    const laneAFirst = createSimulation('lane a first', [
+      'plan',
+      { label: 'check:a', group: [0, 0] },
+      { label: 'fix:b', group: [0, 1] },
+      { label: 'fix:a', group: [0, 0] },
+      { label: 'check:b', group: [0, 1] },
+      { label: 'check:a', group: [0, 0] },
+    ]);
+
+    for (const simulation of [laneBFirst, laneAFirst]) {
+      const graph = buildGraph([simulation], { roles: ['plan', 'fix', 'check'] });
+      const ids = Object.fromEntries(graph.nodes.filter((node) => node.kind === 'agent').map((node) => [node.role, node.id]));
+
+      assert.deepEqual(graph.edges.find((edge) => edge.from === ids.fix && edge.to === ids.check), { from: ids.fix, to: ids.check, whens: [simulation.name], back: true, nextItem: false, repeat: 2 });
+      assert.deepEqual(graph.loops, [{ from: ids.fix, to: ids.check, whens: [simulation.name], repeat: 2 }]);
+    }
+  });
+
+  it('judges the join out of a group by the lane of each exit, and each step after the group by no order of the lanes', () => {
+    // Lane a reaches check and then fix, and lane b reaches fix, with either lane's call first.
+    const joinLaneBFirst = ['plan', { label: 'fix:b', group: [0, 1] }, { label: 'check:a', group: [0, 0] }, { label: 'fix:a', group: [0, 0] }, 'check'];
+    const joinLaneAFirst = ['plan', { label: 'check:a', group: [0, 0] }, { label: 'fix:b', group: [0, 1] }, { label: 'fix:a', group: [0, 0] }, 'check'];
+    // Lane a reaches check, and lane b reaches fix, before the top level calls plan, check and fix.
+    const afterLaneAFirst = ['plan', { label: 'check:a', group: [0, 0] }, { label: 'fix:b', group: [0, 1] }, 'plan', 'check', 'fix'];
+    const afterLaneBFirst = ['plan', { label: 'fix:b', group: [0, 1] }, { label: 'check:a', group: [0, 0] }, 'plan', 'check', 'fix'];
+    const roles = { roles: ['plan', 'fix', 'check'] };
+
+    for (const labels of [joinLaneBFirst, joinLaneAFirst]) {
+      assert.deepEqual(listEdges(buildGraph([createSimulation('join', labels)], roles)), ['S0 -> a1 0', 'a1 -> a2 0', 'a1 -> a3 0', 'a2 -back-> a3 2', 'a3 -> a2 0', 'a3 -> t1 0']);
+    }
+    // Lane b never reached check, so its join into check is no back edge.
+    const forwardJoin = ['plan', { label: 'check:a', group: [0, 0] }, { label: 'fix:b', group: [0, 1] }, 'check'];
+
+    assert.deepEqual(listEdges(buildGraph([createSimulation('forward join', forwardJoin)], roles)), ['S0 -> a1 0', 'a1 -> a2 0', 'a1 -> a3 0', 'a2 -> a3 0', 'a3 -back-> a3 2', 'a3 -> t1 0']);
+    for (const labels of [afterLaneAFirst, afterLaneBFirst]) {
+      assert.deepEqual(listEdges(buildGraph([createSimulation('after', labels)], roles)), ['S0 -> a1 0', 'a1 -> a2 0', 'a1 -> a3 0', 'a2 -back-> a1 2', 'a2 -> t1 0', 'a3 -back-> a1 2', 'a3 -back-> a2 2']);
+    }
+  });
+
+  it('judges the join out of a lane of a group nested in a lane by that nested lane and the path before its group', () => {
+    // Lane 0 of group 0 starts group 1, whose lanes call check and fix, and then calls check.
+    const nested = (firstCall) => ['plan', { label: `${firstCall}:a`, group: [0, 0] }, { label: 'check:x', group: [1, 0] }, { label: 'fix:y', group: [1, 1] }, { label: 'check:a', group: [0, 0] }];
+    const roles = { roles: ['plan', 'scan', 'fix', 'check'] };
+    const scenario = { parents: [null, [0, 0]] };
+
+    // Only the check lane reached check, so the fix lane joins check forward.
+    assert.deepEqual(listEdges(buildGraph([createSimulation('scan first', nested('scan'), DONE, scenario)], roles)), ['S0 -> a1 0', 'a1 -> a2 0', 'a2 -> a3 0', 'a2 -> a4 0', 'a3 -> a4 0', 'a4 -back-> a4 2', 'a4 -> t1 0']);
+    // The path before group 1 reached check, so the fix lane joins check back.
+    assert.deepEqual(listEdges(buildGraph([createSimulation('check first', nested('check'), DONE, scenario)], roles)), ['S0 -> a1 0', 'a1 -> a3 0', 'a2 -back-> a3 2', 'a3 -> a2 0', 'a3 -back-> a3 2', 'a3 -> t1 0']);
   });
 
   it('gives a back edge one more than the most times one lane walks it in one scenario, over every scenario', () => {

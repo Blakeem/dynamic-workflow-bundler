@@ -1749,6 +1749,20 @@ describe('dwfb map', () => {
     assert.deepEqual(await readdir(join(folder, 'maps')), []);
   });
 
+  it('refuses an out that names the map of another config workflow, and writes the map of its own workflow', async () => {
+    const folder = await writeMapFolder();
+    await mkdir(join(folder, 'maps'));
+    await writeFile(join(folder, 'maps', 'gap.flow-map.md'), 'keep\n');
+
+    assert.deepEqual(runCommand(['map', 'flow.js', '--out', 'maps/gap.flow-map.md'], folder), {
+      status: 2,
+      stdout: '',
+      stderr: 'dwfb map: The flow map file maps/gap.flow-map.md names the flow map file maps/gap.flow-map.md of the script gap.js, which the flow map would replace.\n',
+    });
+    assert.equal(await readFile(join(folder, 'maps', 'gap.flow-map.md'), 'utf8'), 'keep\n');
+    assert.deepEqual(runCommand(['map', 'flow.js', '--out', 'maps/flow.flow-map.md'], folder), { status: 0, stdout: 'Wrote maps/flow.flow-map.md.\n', stderr: '' });
+  });
+
   it('refuses a flow map path that names a folder or is inside a file before it writes any flow map', async () => {
     const folder = await writeMapFolder();
     await writeFile(join(folder, 'gap.scenarios.js'), FLOW_SCENARIOS);

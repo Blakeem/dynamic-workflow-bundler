@@ -17,6 +17,7 @@ const NEXT_ITEM_CAPTION = 'next item';
 const MIN_BOX_NODES = 2;
 const EDGES_NOTE = 'The thick edge with no caption of each pair above is the step to the next item.';
 const WHITE_SPACE_RUN = /\s+/g;
+const MARKDOWN_INLINE_MARK = /[\\`*_~[\]]/g;
 
 /**
  * Writes the flow map of a script as one Markdown document with one Mermaid diagram, and reads no disk and
@@ -208,20 +209,23 @@ function formatPairKey({ from, to }) {
 }
 
 /**
- * Mermaid ends a quoted text at `"` and an edge caption at `|`, and drops the text between `<` and `>` as an
- * HTML tag, as mermaid 11.4.1 renders it.
+ * Mermaid ends a quoted text at `"` and an edge caption at `|`, reads a backtick right after the opening `"` as
+ * the start of a markdown string, drops the text between `<` and `>` as an HTML tag, and decodes each `#<code>;`
+ * as an entity code and each `&<name>;` as an HTML entity, as mermaid 11.4.1 renders it.
  * @param {string} text
  * @returns {string}
  */
 function escapeMermaid(text) {
-  return text.replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('"', '#quot;').replaceAll('|', '#124;').replaceAll('<', '#lt;').replaceAll('>', '#gt;');
+  return text.replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('#', '#35;').replaceAll('`', '#96;').replaceAll('&', '#38;').replaceAll('"', '#quot;').replaceAll('|', '#124;').replaceAll('<', '#lt;').replaceAll('>', '#gt;');
 }
 
 /**
- * Markdown ends a table cell at `|` and reads `<` and `>` as the bounds of an HTML tag.
+ * Markdown ends a table cell at `|`, reads `<` and `>` as the bounds of an HTML tag, reads `&<name>;` as an
+ * entity, reads a backslash as an escape, and reads `` ` ``, `*`, `_`, `~`, `[` and `]` as inline marks, such as
+ * a code span, in which no entity is decoded.
  * @param {string} text
  * @returns {string}
  */
 function escapeCell(text) {
-  return text.replace(WHITE_SPACE_RUN, ' ').trim().replaceAll('|', '\\|').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  return text.replace(WHITE_SPACE_RUN, ' ').trim().replace(MARKDOWN_INLINE_MARK, '\\$&').replaceAll('|', '\\|').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }

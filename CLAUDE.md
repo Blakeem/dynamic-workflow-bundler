@@ -50,7 +50,9 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | context | The top level of a trace, or one lane of a group, with the calls it made and the groups it started. |
 | segment | A part of the calls of one context that a flow map folds as one unit: a run of its own calls, or the groups it started that ran at the same time. |
 | lane | The calls of one item of a group. |
-| back edge | An edge into a node that the path reached before, which closes a loop. |
+| context chain | A context with each context that encloses it, up to the top level of the trace. |
+| chain length | The count of calls along a context chain before a call, where a segment of groups counts the calls of its longest lane. |
+| back edge | An edge into a node that the path first reached no later than the node the edge leaves, which closes a loop. A join out of a lane counts only the nodes that the lane or the path before its group reached. |
 | next-item edge | An edge between two calls whose items differ, the step from one item of work to the next. |
 | loop | A back edge, with the count of times one lane walks it. |
 | scripted return | The value a scenario gives one call. `null` stands for an agent that died. |

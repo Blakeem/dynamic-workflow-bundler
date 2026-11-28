@@ -71,7 +71,8 @@ const LABEL_FIX = 'so start the label with a role';
  * @property {string} from A node id, or `S0` for the start.
  * @property {string} to A node id.
  * @property {string[]} whens Each distinct `when` of the scenarios that took the step, in first-seen order.
- * @property {boolean} back True for a step back to a node that the path reached before.
+ * @property {boolean} back True for a step to a node that the path first reached no later than the node the step
+ *   leaves, where a step out of a lane counts only the nodes that the lane or the path before its group reached.
  * @property {boolean} nextItem True for a step from one item to the next.
  * @property {number} repeat For a back edge, one more than the most times one lane took the step in one
  *   scenario. 0 for every other edge.
@@ -275,7 +276,7 @@ function createEnd(label, source) {
 function readThrowEnd({ frames }, throwSites, thrown) {
   const newest = frames[0];
 
-  if (newest === undefined) return { reason: `${thrown}, and the simulation recorded no place it was created at` };
+  if (newest === undefined) return { reason: `${thrown}, and the simulation recorded no place it was created at, such as for a thrown value that is no Error, an error that the simulator threw, or an error whose stack the script read before it threw` };
   const place = `line ${newest.line}, column ${newest.column}`;
   const order = throwSites.findIndex((site) => site.line === newest.line && site.column === newest.column);
   if (order === -1) return { reason: `${thrown} at ${place}, which is no throw site` };
@@ -485,17 +486,13 @@ function cutLanes(contexts, groupIndexes) {
  * @param {SimulationPath} path
  */
 function foldPath(fold, { simulation, steps, top, end }) {
-  const firstSeen = new Map();
   /** @type {ContextFold | null} */
   let topFold = null;
 
-  steps.forEach((step, position) => {
-    if (!firstSeen.has(step.role)) firstSeen.set(step.role, position);
-    addAgent(fold, step);
-  });
+  for (const step of steps) addAgent(fold, step);
   addEnd(fold, end, simulation);
 
-  topFold = foldContext(fold, top, { simulation, reachedBefore: new Set(), firstSeen, walkCounts: new Map() });
+  topFold = foldContext(fold, top, { simulation, reachedBefore: new Map(), chainLength: 0, walkCounts: new Map() });
   for (const [role, count] of topFold.concurrency) {
     const agent = fold.agents.get(role);
     agent.concurrency = Math.max(agent.concurrency, count);
@@ -532,9 +529,10 @@ function addEnd(fold, end, simulation) {
 /**
  * @typedef {object} FoldInput
  * @property {FlowSimulation} simulation
- * @property {Set<string>} reachedBefore The roles that the segments before this unit reached, in its own context and
- *   in every enclosing one.
- * @property {Map<string, number>} firstSeen The position of each role's first call in the trace.
+ * @property {Map<string, number>} reachedBefore The roles that the segments before this unit reached, in its own context
+ *   and in every enclosing one, each with the chain length before the call that first reached it along the context chain.
+ * @property {number} chainLength The count of calls along the context chain before this unit, where a segment of groups
+ *   counts the calls of its longest lane. It ignores the order in which sibling lanes made their calls.
  * @property {Map<string, number>} walkCounts
  */
 
@@ -542,7 +540,11 @@ function addEnd(fold, end, simulation) {
  * @typedef {object} ContextFold What folding a context or one of its segments gives the unit around it.
  * @property {PathStep[]} entries
  * @property {PathStep[]} exits Empty for a context with no segment.
- * @property {Set<string>} reached The roles reached before the unit and in it.
+ * @property {Map<PathStep, Map<string, number>>} exitReached By exit, the roles reached along the context chain of the
+ *   exit's own lane up to it, so a join from one lane never counts a role that only a sibling lane reached.
+ * @property {Map<string, number>} reached The roles reached before the unit and in it, each with the chain length before
+ *   the call that first reached it along the context chain.
+ * @property {number} chainLength The chain length after the unit.
  * @property {Map<string, number>} concurrency By role, the most lanes that held a call of the role at once in the unit.
  */
 
@@ -557,23 +559,28 @@ function addEnd(fold, end, simulation) {
 function foldContext(fold, { isLane, segments }, input) {
   const concurrency = new Map();
   let reached = input.reachedBefore;
+  let { chainLength } = input;
   /** @type {PathStep[]} */
   let entries = [];
   /** @type {PathStep[]} */
   let exits = [];
+  /** @type {Map<PathStep, Map<string, number>>} */
+  let exitReached = new Map();
 
   segments.forEach((segment, position) => {
-    const segmentInput = { ...input, reachedBefore: reached };
+    const segmentInput = { ...input, reachedBefore: reached, chainLength };
     const segmentFold = segment.kind === 'calls' ? foldCallSegment(fold, segment.steps, isLane, segmentInput) : foldGroupSegment(fold, segment.lanes, segmentInput);
 
-    if (position > 0 || !isLane) foldJoins(fold, { ...segmentInput, exits: position === 0 ? null : exits, entries: segmentFold.entries });
+    if (position > 0 || !isLane) foldJoins(fold, { ...segmentInput, exits: position === 0 ? null : exits, exitReached, entries: segmentFold.entries });
     if (position === 0) entries = segmentFold.entries;
     exits = segmentFold.exits;
+    exitReached = segmentFold.exitReached;
     reached = segmentFold.reached;
+    chainLength = segmentFold.chainLength;
     for (const [role, count] of segmentFold.concurrency) concurrency.set(role, Math.max(concurrency.get(role) ?? 0, count));
   });
 
-  return { entries, exits, reached, concurrency };
+  return { entries, exits, exitReached, reached, chainLength, concurrency };
 }
 
 /**
@@ -584,24 +591,25 @@ function foldContext(fold, { isLane, segments }, input) {
  * @param {FoldInput} input
  * @returns {ContextFold}
  */
-function foldCallSegment(fold, steps, isLane, { simulation, reachedBefore, firstSeen, walkCounts }) {
-  const reached = new Set(reachedBefore);
+function foldCallSegment(fold, steps, isLane, { simulation, reachedBefore, chainLength, walkCounts }) {
+  const reached = new Map(reachedBefore);
   const concurrency = new Map();
+  const lastStep = /** @type {PathStep} */ (steps.at(-1));
 
   steps.forEach((step, position) => {
     if (position > 0) {
       const previous = steps[position - 1];
       const nextItem = !isLane && isItemChange(previous.item, step.item);
-      const back = !nextItem && isBackStep(previous.role, step.role, reached, firstSeen);
+      const back = !nextItem && isBackStep(previous.role, step.role, reached);
       const repeat = back ? countWalk(walkCounts, previous, step) + 1 : 0;
 
       addEdge(fold, { from: agentKey(previous.role), to: agentKey(step.role), when: simulation.when, back, nextItem, repeat });
     }
-    reached.add(step.role);
+    if (!reached.has(step.role)) reached.set(step.role, chainLength + position);
     concurrency.set(step.role, 1);
   });
 
-  return { entries: [steps[0]], exits: [/** @type {PathStep} */ (steps.at(-1))], reached, concurrency };
+  return { entries: [steps[0]], exits: [lastStep], exitReached: new Map([[lastStep, reached]]), reached, chainLength: chainLength + steps.length, concurrency };
 }
 
 /**
@@ -612,30 +620,34 @@ function foldCallSegment(fold, steps, isLane, { simulation, reachedBefore, first
  * @returns {ContextFold}
  */
 function foldGroupSegment(fold, lanes, input) {
-  const reached = new Set(input.reachedBefore);
+  const reached = new Map(input.reachedBefore);
   const concurrency = new Map();
   const entries = [];
   const exits = [];
+  const exitReached = new Map();
+  let { chainLength } = input;
 
   for (const lane of lanes) {
     const laneFold = foldContext(fold, lane, input);
 
     entries.push(...laneFold.entries);
     exits.push(...laneFold.exits);
-    for (const role of laneFold.reached) reached.add(role);
+    for (const [exit, exitRoles] of laneFold.exitReached) exitReached.set(exit, exitRoles);
+    for (const [role, laneStart] of laneFold.reached) reached.set(role, Math.min(reached.get(role) ?? laneStart, laneStart));
+    chainLength = Math.max(chainLength, laneFold.chainLength);
     for (const [role, count] of laneFold.concurrency) concurrency.set(role, (concurrency.get(role) ?? 0) + count);
   }
 
-  return { entries, exits, reached, concurrency };
+  return { entries, exits, exitReached, reached, chainLength, concurrency };
 }
 
 /**
  * Adds an edge from each exit of the segment before to each entry of this one, or from the start.
  * @param {Fold} fold
- * @param {{ simulation: FlowSimulation, exits: PathStep[] | null, entries: PathStep[], reachedBefore: Set<string>,
- *   firstSeen: Map<string, number>, walkCounts: Map<string, number> }} input
+ * @param {{ simulation: FlowSimulation, exits: PathStep[] | null, exitReached: Map<PathStep, Map<string, number>>,
+ *   entries: PathStep[], walkCounts: Map<string, number> }} input
  */
-function foldJoins(fold, { simulation, exits, entries, reachedBefore, firstSeen, walkCounts }) {
+function foldJoins(fold, { simulation, exits, exitReached, entries, walkCounts }) {
   // A back step from one source lane counts once per pair of segments, however many lanes it enters.
   const walkedKeys = new Map();
 
@@ -647,7 +659,7 @@ function foldJoins(fold, { simulation, exits, entries, reachedBefore, firstSeen,
     for (const entry of entries) {
       const isGroupedPair = exit.call.group !== null && entry.call.group !== null;
       const nextItem = !isGroupedPair && isItemChange(exit.item, entry.item);
-      const back = !nextItem && isBackStep(exit.role, entry.role, reachedBefore, firstSeen);
+      const back = !nextItem && isBackStep(exit.role, entry.role, /** @type {Map<string, number>} */ (exitReached.get(exit)));
       const walkKey = createWalkKey(exit, entry);
 
       if (back && !walkedKeys.has(walkKey)) walkedKeys.set(walkKey, countWalk(walkCounts, exit, entry) + 1);
@@ -668,12 +680,13 @@ function isItemChange(from, to) {
 /**
  * @param {string} sourceRole
  * @param {string} targetRole
- * @param {Set<string>} reachedBefore
- * @param {Map<string, number>} firstSeen
- * @returns {boolean} True when the target was reached before and first reached no later than the source.
+ * @param {Map<string, number>} reached Each role reached before the step, with the chain length before the call that
+ *   first reached it along the context chain.
+ * @returns {boolean} True when the target was reached before and first reached along the context chain no later than
+ *   the source.
  */
-function isBackStep(sourceRole, targetRole, reachedBefore, firstSeen) {
-  return reachedBefore.has(targetRole) && firstSeen.get(targetRole) <= firstSeen.get(sourceRole);
+function isBackStep(sourceRole, targetRole, reached) {
+  return reached.has(targetRole) && /** @type {number} */ (reached.get(targetRole)) <= /** @type {number} */ (reached.get(sourceRole));
 }
 
 /**

@@ -100,6 +100,8 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * and does not run, and a script larger than READ_BYTE_LIMIT is refused as `validate()` refuses it.
  * Not simulated: the check of `agentType` and `model` against the session, any check of a schema other
  * than its root type, and a budget that grows by a different count at each call.
+ * The `stack` text of an error may name files and lines of the simulator on this machine, so a script that
+ * logs a stack or puts one in a prompt gets output that differs between machines.
  * A call of `workflow()` that names a workflow throws an Error with the message
  * `workflow() is not simulated`. Time is virtual, so each `agent()` call answers before any timer runs and
  * a wait of any length ends at once. Code after a script's first `await` has no time limit. So a loop

@@ -120,31 +120,31 @@ describe('formatFlowMap', () => {
     );
   });
 
-  it('escapes " | < and > in the diagram, | < and > in a table cell and in the title, and folds each run of white space', () => {
-    const role = 'say"hi|<x>';
+  it('escapes # ` & " | < and > in the diagram, the backslash, the inline marks and & | < and > in a table cell and in the title, and folds each run of white space', () => {
+    const role = 'say"hi|<x>#lt;&amp;';
     const graph = {
       nodes: [
         agentNode({ role, label: role, phase: 'Plan "a"|<b>', model: 'big\tmodel' }),
-        endNode({ label: 'done | "x"  <y>', whens: ['when | <z>\n'] }),
+        endNode({ label: '`done | "x"  <y>', whens: ['when | <z>\n&amp; `x` *y*_\\[z]~'] }),
         endNode({ id: 'x1', kind: 'throw', label: 'throw: Bad "a" | <b>', source: 'throw', line: 9, whens: ['it | throws'] }),
         agentNode({ id: 'a2', role: 'check' }),
       ],
-      edges: [edge({}), edge({ from: 'a1', to: 't1' }), edge({ from: 'a1', to: 'x1' }), edge({ from: 'a1', to: 'a2' }), edge({ from: 'a2', to: 'a1', back: true, repeat: 1, whens: ['<n> "left" | more'] })],
+      edges: [edge({}), edge({ from: 'a1', to: 't1' }), edge({ from: 'a1', to: 'x1' }), edge({ from: 'a1', to: 'a2' }), edge({ from: 'a2', to: 'a1', back: true, repeat: 1, whens: ['`agent()` <n> "left" | more #1;'] })],
       phases: [{ id: 'p1', title: 'Plan "a"|<b>', detail: 'Plans | <things>', nodes: ['a1'] }],
       loops: [],
     };
-    const document = formatFlowMap('a|b <c>\n"d"', graph);
+    const document = formatFlowMap('a|b <c>\n"d" &amp;', graph);
 
-    assert.ok(document.startsWith('# a\\|b &lt;c&gt; "d" flow map\n'));
+    assert.ok(document.startsWith('# a\\|b &lt;c&gt; "d" &amp;amp; flow map\n'));
     assert.deepEqual(readDiagramBody(document).slice(0, 3), [
-      '  a1["say#quot;hi#124;#lt;x#gt; · big model<br/>Plan #quot;a#quot;#124;#lt;b#gt;"]',
-      '  t1(["done #124; #quot;x#quot; #lt;y#gt;"])',
+      '  a1["say#quot;hi#124;#lt;x#gt;#35;lt;#38;amp; · big model<br/>Plan #quot;a#quot;#124;#lt;b#gt;"]',
+      '  t1(["#96;done #124; #quot;x#quot; #lt;y#gt;"])',
       '  x1[/"throw: Bad #quot;a#quot; #124; #lt;b#gt;"/]',
     ]);
-    assert.equal(readDiagramBody(document).at(-1), '  a2 -.->|"#lt;n#gt; #quot;left#quot; #124; more"| a1');
+    assert.equal(readDiagramBody(document).at(-1), '  a2 -.->|"#96;agent()#96; #lt;n#gt; #quot;left#quot; #124; more #35;1;"| a1');
     assert.deepEqual(readTableRows(sliceMarkdownSection(document, '\n## Phases\n')), ['| Plan "a"\\|&lt;b&gt; | Plans \\| &lt;things&gt; |']);
     assert.deepEqual(readTableRows(sliceMarkdownSection(document, '\n## End states\n')), [
-      '| done \\| "x" &lt;y&gt; | when \\| &lt;z&gt; | returned |',
+      '| \\`done \\| "x" &lt;y&gt; | when \\| &lt;z&gt; &amp;amp; \\`x\\` \\*y\\*\\_\\\\\\[z\\]\\~ | returned |',
       '| throw: Bad "a" \\| &lt;b&gt; | it \\| throws | throw (line 9) |',
     ]);
   });

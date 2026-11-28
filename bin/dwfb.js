@@ -171,10 +171,11 @@ workflow, else to stdout. With no script, writes the map of each workflow of the
 
 A scenario is mapped only when its script follows these rules. Each agent() call has a label. Each label
 starts with a role. A role is the text before the first \${...} of a label string in the script. The script
-returns an object with a string status, or its scenario has an endState. An error that the script throws on
-purpose is created by the throw new <Name>(...) statement that throws it. After the top level of the script or
-a lane starts a parallel() or pipeline() group, it makes no agent() call of its own before the last call made
-in that group or in a group started inside it. A lane is one thunk of a parallel() or one item of a pipeline().
+returns an object whose status is a string of 1 or more characters, or its scenario has an endState. An error
+that the script throws on purpose is created by the throw new <Name>(...) statement that throws it. After the
+top level of the script or a lane starts a parallel() or pipeline() group, it makes no agent() call of its own
+before the last call made in that group or in a group started inside it. A lane is one thunk of a parallel() or
+one item of a pipeline().
 
 Options:
   --scenarios <file>   Read the scenarios of the script from this file.
@@ -919,6 +920,7 @@ async function mapTarget(target) {
  * @property {string | null} scenariosFile Null for a config workflow with no scenarios.
  * @property {string | null} entry The entry of the config workflow, or null for a script that a named scenarios
  *   file maps, whose banner names its entry.
+ * @property {string | null} map The flow map file of the config workflow, or null for none.
  */
 
 /**
@@ -936,16 +938,17 @@ async function findConfigWorkflowFiles(configPath) {
       script: formatDisplayPath(workflow.out),
       scenariosFile: workflow.scenarios === null ? null : formatDisplayPath(workflow.scenarios),
       entry: formatDisplayPath(workflow.entry),
+      map: workflow.map === null ? null : formatDisplayPath(workflow.map),
     })),
   };
 }
 
 /**
- * Throws a UsageError for a flow map file that names a script, a scenarios file, a source, another flow map
- * file or the config file the command read, by any spelling, such as through a link or in another letter case,
- * since the write would replace that file. checkConfig cannot see a link or a source that an entry reaches. Also
- * throws for a flow map path that names a folder or is inside a file, so that no flow map is written before the
- * refusal.
+ * Throws a UsageError for a flow map file that names a script, a scenarios file, a source, the flow map file of
+ * another workflow or target, or the config file the command read, by any spelling, such as through a link or in
+ * another letter case, since the write would replace that file. checkConfig cannot see a link or a source that an
+ * entry reaches. Also throws for a flow map path that names a folder or is inside a file, so that no flow map is
+ * written before the refusal.
  * @param {MapTarget[]} targets
  * @param {WorkflowFiles[]} workflows Every workflow of the config file when the command read one, since the entry
  *   of a workflow with no map can reach the file a map names. Else the targets.
@@ -953,13 +956,21 @@ async function findConfigWorkflowFiles(configPath) {
  */
 async function checkMapFiles(targets, workflows, configFile) {
   const takenFiles = [];
+  let targetScripts = new Set();
   let configFiles = [];
 
   if (targets.every(({ file }) => file === null)) return;
   if (configFile !== null) configFiles = [{ file: await findRealPath(configFile) }];
+  targetScripts = new Set(await Promise.all(targets.map(({ script }) => findRealPath(script))));
   for (const workflow of workflows) {
-    takenFiles.push({ file: await findRealPath(workflow.script), label: `the script ${workflow.script}` });
+    const scriptFile = await findRealPath(workflow.script);
+
+    takenFiles.push({ file: scriptFile, label: `the script ${workflow.script}` });
     if (workflow.scenariosFile !== null) takenFiles.push({ file: await findRealPath(workflow.scenariosFile), label: `the scenarios file ${workflow.scenariosFile}` });
+    // A target may rewrite the flow map file of its own workflow, which the target loop adds in target order.
+    if (workflow.map !== null && !targetScripts.has(scriptFile)) {
+      takenFiles.push({ file: await findRealPath(workflow.map), label: `the flow map file ${workflow.map} of the script ${workflow.script}` });
+    }
     takenFiles.push(...(await findTargetSources(workflow)));
   }
   for (const { script, file } of targets) {

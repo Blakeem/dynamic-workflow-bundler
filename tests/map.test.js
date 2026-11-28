@@ -33,6 +33,7 @@ const GAPS_SCENARIOS = `export default [
 `;
 
 const ANSWER_ALL_SCENARIOS = "export default [{ name: 'a', respond: { '': 'ok' } }];\n";
+const NO_PLACE_NOTE = ', and the simulation recorded no place it was created at, such as for a thrown value that is no Error, an error that the simulator threw, or an error whose stack the script read before it threw';
 const DONE_NODE = { id: 't1', kind: 'end', label: 'done', source: 'returned', line: null, scenarios: ['a'], whens: ['a'] };
 
 const folder = await mkdtemp(join(tmpdir(), 'dwfb-map-'));
@@ -200,7 +201,16 @@ describe('map', () => {
     assert.deepEqual((await map(scriptBug)).unmapped, [{ scenario: 'a', reason: "the script threw TypeError: Cannot read properties of undefined (reading 'text') at line 2, column 29, which is no throw site" }]);
     assert.deepEqual((await map(returned)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: Gone at line 2, column 33, which is no throw site' }]);
     assert.deepEqual((await map(inConstructor)).unmapped, [{ scenario: 'a', reason: "the script threw TypeError: Cannot read properties of undefined (reading 'name') at line 4, column 17, which is no throw site" }]);
-    assert.deepEqual((await map(text)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: Gone, and the simulation recorded no place it was created at' }]);
+    assert.deepEqual((await map(text)).unmapped, [{ scenario: 'a', reason: `the script threw Error: Gone${NO_PLACE_NOTE}` }]);
+  });
+
+  it('leaves unmapped an error that the simulator threw, and an error whose stack a catch block read before it threw the error again', async () => {
+    const scenarioText = "export default [{ name: 'a', expect: 'threw', args: {} }];\n";
+    const simulatorError = await writeFiles('simulator-error', "await workflow('other');\n", scenarioText);
+    const readStack = await writeFiles('read-stack', "try {\n  throw new Error('Gone');\n} catch (error) {\n  log(error.stack);\n  throw error;\n}\n", scenarioText);
+
+    assert.deepEqual((await map(simulatorError)).unmapped, [{ scenario: 'a', reason: `the script threw Error: workflow() is not simulated${NO_PLACE_NOTE}` }]);
+    assert.deepEqual((await map(readStack)).unmapped, [{ scenario: 'a', reason: `the script threw Error: Gone${NO_PLACE_NOTE}` }]);
   });
 
   it('ends at a throw site an error that the site raises while it creates its error, and a TypeError of a TypeError site', async () => {
@@ -221,7 +231,7 @@ describe('map', () => {
       assert.equal(trace.end.name, 'TypeError', files.script);
       assert.deepEqual(await listThrowNodes(files), siteNode, files.script);
     }
-    assert.deepEqual((await map(noStack)).unmapped, [{ scenario: 'a', reason: 'the script threw Error: boom, and the simulation recorded no place it was created at' }]);
+    assert.deepEqual((await map(noStack)).unmapped, [{ scenario: 'a', reason: `the script threw Error: boom${NO_PLACE_NOTE}` }]);
     assert.deepEqual(await listThrowNodes(typeSite), [{ id: 'x1', line: 2, scenarios: ['a'] }]);
   });
 
