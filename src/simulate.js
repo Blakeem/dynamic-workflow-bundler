@@ -98,8 +98,16 @@ const NEVER_SETTLES_MESSAGE = 'The script waits on a promise that nothing settle
  * that gets none it can use, at the call after the AGENT_CALL_LIMIT calls the runtime allows one workflow,
  * or when the script waits on a promise that nothing settles. A script that breaks the contract is refused
  * and does not run, and a script larger than READ_BYTE_LIMIT is refused as `validate()` refuses it.
- * Not simulated: the check of `agentType` and `model` against the session, any check of a schema other
- * than its root type, and a budget that grows by a different count at each call.
+ * agent() throws the runtime's error for a schema that holds a keyword JSON Schema draft-07 does not define,
+ * with `$defs`, `deprecated` and `nullable` beside a `type` among the keywords taken beside the draft-07
+ * keywords, a keyword whose value has the wrong form, a `$ref` that names no place in the schema, a `$schema`
+ * other than draft-07, or a root `type` other than `'object'`. A `format` is taken and not checked. For a
+ * `pattern` that is no regular expression, the text of the error differs from the runtime's, since the
+ * JavaScript engine words it. A schema that is `false`, `0`, `''` or a function gives a call with no schema.
+ * agent() checks a JSON copy of the schema, and a schema with no JSON copy gets only the check of its root
+ * `type`. So does a call whose compile runs out of stack, such as for a schema nested a few hundred levels deep.
+ * Not simulated: the check of `agentType` and `model` against the session, the check of a scripted return
+ * against the schema of its call, and a budget that grows by a different count at each call.
  * The `stack` text of an error may name files and lines of the simulator on this machine, so a script that
  * logs a stack or puts one in a prompt gets output that differs between machines.
  * A call of `workflow()` that names a workflow throws an Error with the message
@@ -396,7 +404,7 @@ function copyOptions(opts) {
 }
 
 /**
- * agent() threw for every other schema before it called answerCall.
+ * agent() threw, or gave a call with no schema, for every other schema before it called answerCall.
  * @param {unknown} opts
  * @returns {boolean} True when the options pass a schema object.
  */

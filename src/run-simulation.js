@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { promiseHooks } from 'node:v8';
 import { createContext, runInContext, Script } from 'node:vm';
 import { RESERVED_PREFIX } from './analyze-source.js';
+import { compileSchema } from './compile-schema.js';
 import { SCRIPT_BODY_PREFIX, wrapScriptBody } from './compile-script.js';
 import { RUNTIME_GLOBAL_NAMES } from './contract.js';
 import { readMetaObject } from './meta-statement.js';
@@ -380,6 +381,8 @@ function createSimulation(answerCall) {
     /** @type {Set<Promise<void>>} */
     pendingAnswers: new Set(),
     runtimeErrors: new WeakSet(),
+    /** @type {Map<string, import('./compile-schema.js').CompiledSchema>} Keyed by the JSON text of each schema. */
+    compiledSchemas: new Map(),
     groupStore,
     /** @type {string[]} */
     logs: [],
@@ -416,9 +419,43 @@ function createSimulation(answerCall) {
       simulation.runtimeErrors.add(error);
       return error;
     },
+    findSchemaRefusal: (schema) => findCompiledSchema(simulation.compiledSchemas, schema)?.refusal ?? null,
   };
 
   return { simulation, host };
+}
+
+/**
+ * Compiles each distinct schema of one simulation once. Not measured: the runtime compiles a JSON copy of
+ * the schema too. When it does not, a key whose value is `undefined` or a `toJSON` gives another outcome there.
+ * @param {Map<string, import('./compile-schema.js').CompiledSchema>} compiledSchemas Keyed by the JSON text of each schema.
+ * @param {object} schema A schema of the script's realm.
+ * @returns {import('./compile-schema.js').CompiledSchema | null} Null for a schema with no JSON copy, such as
+ *   one that holds a cycle, and for a compile that ran past a limit of the running Node, since the runtime's
+ *   outcome for either was not measured.
+ */
+function findCompiledSchema(compiledSchemas, schema) {
+  let schemaText;
+  let compiled = null;
+
+  // A getter or toJSON of the script may throw here, as JSON.stringify throws for a cycle or a BigInt.
+  try {
+    schemaText = JSON.stringify(schema);
+  } catch {
+    return null;
+  }
+  if (schemaText === undefined) return null;
+  compiled = compiledSchemas.get(schemaText) ?? null;
+  if (compiled !== null) return compiled;
+  // A call from deep recursion may run out of stack here and not at a later call, so the RangeError is not kept.
+  try {
+    compiled = compileSchema(JSON.parse(schemaText));
+  } catch (error) {
+    if (error instanceof RangeError) return null;
+    throw error;
+  }
+  compiledSchemas.set(schemaText, compiled);
+  return compiled;
 }
 
 /**

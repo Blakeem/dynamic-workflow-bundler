@@ -1,0 +1,1558 @@
+{
+  "measuredOn": "2.1.332",
+  "note": "What the Workflow runtime of Claude Code 2.1.332 gave on 2026-11-28 for schema-probe-1.js to schema-probe-4.js, launched with no args. Each case of schemas is one agent() call with that schema, and its outcome is the error agent() threw before any agent started, or that an agent started. Each case of returns is one StructuredOutput call that an agent made with that value, and its outcome is whether the runtime accepted it, with the text the tool answered for a rejected one. An agent whose output the runtime rejected 5 times made agent() throw the TelemetrySafeError of retryCap. The text of the case with engineText comes from the JavaScript engine of the runtime, and Node words it differently. The values of the extra keys reached the validator as strings, since the agent wrote them as tool call text. An agent that was told to send the number 5 for a string property sent the text 5, which the runtime accepted as the string \"5\", so that case measures the tool call and no rule of the schema.",
+  "retryCap": {
+    "name": "TelemetrySafeError",
+    "message": "agent({schema}): StructuredOutput retry cap (5) exceeded — 5 failed calls with no valid output — last StructuredOutput error: Output does not match required schema: /list/1: must be string"
+  },
+  "schemas": [
+    {
+      "key": "false",
+      "schema": false,
+      "outcome": {
+        "started": "with no schema"
+      }
+    },
+    {
+      "key": "zero",
+      "schema": 0,
+      "outcome": {
+        "started": "with no schema"
+      }
+    },
+    {
+      "key": "empty string",
+      "schema": "",
+      "outcome": {
+        "started": "with no schema"
+      }
+    },
+    {
+      "key": "function",
+      "schemaKind": "function",
+      "outcome": {
+        "started": "with no schema"
+      }
+    },
+    {
+      "key": "true",
+      "schema": true,
+      "outcome": {
+        "threw": {
+          "name": "TypeError",
+          "message": "WeakMap keys must be objects or non-registered symbols"
+        }
+      }
+    },
+    {
+      "key": "one",
+      "schema": 1,
+      "outcome": {
+        "threw": {
+          "name": "TypeError",
+          "message": "WeakMap keys must be objects or non-registered symbols"
+        }
+      }
+    },
+    {
+      "key": "empty object",
+      "schema": {},
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an unusable JSON Schema — the API only accepts an object-rooted tool input schema, so every request would be rejected: the root schema must declare type: 'object' (the API rejects any other root type for a tool input schema); wrap arrays or primitives in an object property. The subagent was not started — fix the schema and call agent() again."
+        }
+      }
+    },
+    {
+      "key": "root type list with object",
+      "schema": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an unusable JSON Schema — the API only accepts an object-rooted tool input schema, so every request would be rejected: the root schema must declare type: 'object' (the API rejects any other root type for a tool input schema); wrap arrays or primitives in an object property. The subagent was not started — fix the schema and call agent() again."
+        }
+      }
+    },
+    {
+      "key": "root type array with an unknown keyword",
+      "schema": {
+        "type": "array",
+        "fooBar": 1
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"fooBar\""
+        }
+      }
+    },
+    {
+      "key": "no root type with an unknown keyword",
+      "schema": {
+        "fooBar": 1
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"fooBar\""
+        }
+      }
+    },
+    {
+      "key": "unknown keyword",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "fooBar": 1
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"fooBar\""
+        }
+      }
+    },
+    {
+      "key": "two unknown keywords",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "zeta": 1
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "alpha": 1
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"alpha\""
+        }
+      }
+    },
+    {
+      "key": "unknown keyword and a wrong keyword form",
+      "schema": {
+        "type": "object",
+        "properties": [],
+        "fooBar": 1
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/properties must be object"
+        }
+      }
+    },
+    {
+      "key": "unknown type name",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "strng"
+          }
+        }
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/properties/a/type must be equal to one of the allowed values, data/properties/a/type must be array, data/properties/a/type must match a schema in anyOf"
+        }
+      }
+    },
+    {
+      "key": "prefixItems",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "t": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"prefixItems\""
+        }
+      }
+    },
+    {
+      "key": "unevaluatedProperties",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "unevaluatedProperties": false
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"unevaluatedProperties\""
+        }
+      }
+    },
+    {
+      "key": "dependentRequired",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "dependentRequired": {
+          "a": [
+            "a"
+          ]
+        }
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"dependentRequired\""
+        }
+      }
+    },
+    {
+      "key": "dependentSchemas",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "dependentSchemas": {
+          "a": {
+            "type": "object"
+          }
+        }
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"dependentSchemas\""
+        }
+      }
+    },
+    {
+      "key": "minContains",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "t": {
+            "type": "array",
+            "contains": {
+              "type": "string"
+            },
+            "minContains": 1
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"minContains\""
+        }
+      }
+    },
+    {
+      "key": "example",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "example": "x"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"example\""
+        }
+      }
+    },
+    {
+      "key": "vendor keyword x-note",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "x-note": "n"
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: \"x-note\""
+        }
+      }
+    },
+    {
+      "key": "schema uri draft 2020-12",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: no schema with key or ref \"https://json-schema.org/draft/2020-12/schema\""
+        }
+      }
+    },
+    {
+      "key": "schema uri draft-06",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "$schema": "http://json-schema.org/draft-06/schema#"
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: no schema with key or ref \"http://json-schema.org/draft-06/schema#\""
+        }
+      }
+    },
+    {
+      "key": "schema uri draft-04",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "$schema": "http://json-schema.org/draft-04/schema#"
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: no schema with key or ref \"http://json-schema.org/draft-04/schema#\""
+        }
+      }
+    },
+    {
+      "key": "required with a key twice",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/required must NOT have duplicate items (items ## 1 and 0 are identical)"
+        }
+      }
+    },
+    {
+      "key": "required that is a string",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": "a"
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/required must be array"
+        }
+      }
+    },
+    {
+      "key": "minimum that is a string",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "number",
+            "minimum": "1"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/properties/n/minimum must be number"
+        }
+      }
+    },
+    {
+      "key": "enum with no value",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "e": {
+            "type": "string",
+            "enum": []
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/properties/e/enum must NOT have fewer than 1 items"
+        }
+      }
+    },
+    {
+      "key": "properties that is a list",
+      "schema": {
+        "type": "object",
+        "properties": []
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: data/properties must be object"
+        }
+      }
+    },
+    {
+      "key": "ref that names no place",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "$ref": "#/definitions/nope"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: can't resolve reference #/definitions/nope from id #"
+        }
+      }
+    },
+    {
+      "key": "ref to another document",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "$ref": "https://example.com/other.json"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: can't resolve reference https://example.com/other.json from id #"
+        }
+      }
+    },
+    {
+      "key": "nullable with no type",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: \"nullable\" cannot be used without \"type\""
+        }
+      }
+    },
+    {
+      "key": "pattern that is no regular expression",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "("
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "threw": {
+          "name": "TelemetrySafeError",
+          "message": "agent({schema}) received an invalid JSON Schema: Invalid regular expression: missing )"
+        }
+      },
+      "engineText": true
+    },
+    {
+      "key": "every standard draft-07 keyword",
+      "schema": {
+        "type": "object",
+        "title": "t",
+        "description": "d",
+        "$comment": "c",
+        "definitions": {
+          "s": {
+            "type": "string"
+          }
+        },
+        "$defs": {
+          "t": {
+            "type": "string"
+          }
+        },
+        "properties": {
+          "a": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10,
+            "pattern": "^x",
+            "title": "t",
+            "description": "d",
+            "default": "x",
+            "examples": [
+              "x"
+            ],
+            "const": "x",
+            "deprecated": false,
+            "readOnly": false,
+            "writeOnly": false
+          },
+          "n": {
+            "type": "number",
+            "multipleOf": 1,
+            "maximum": 5,
+            "exclusiveMaximum": 6,
+            "minimum": 0,
+            "exclusiveMinimum": -1
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "contains": {
+              "type": "string"
+            }
+          },
+          "o": {
+            "type": "object",
+            "properties": {
+              "k": {
+                "type": "string"
+              }
+            },
+            "patternProperties": {
+              "^x": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "minProperties": 0,
+            "maxProperties": 5,
+            "dependencies": {
+              "k": [
+                "k"
+              ]
+            }
+          },
+          "any": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "one": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "all": {
+            "allOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "neg": {
+            "not": {
+              "type": "number"
+            }
+          },
+          "cond": {
+            "if": {
+              "type": "string"
+            },
+            "then": {
+              "type": "string"
+            },
+            "else": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "required names a key that properties lacks",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "zz"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "unknown format",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "format": "no-such-format"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "no properties key",
+      "schema": {
+        "type": "object"
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "ref into defs",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "$ref": "#/$defs/s"
+          }
+        },
+        "$defs": {
+          "s": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "type list with null",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "nullable",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "schema uri draft-07",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "id",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "$id": "https://example.com/probe.schema.json"
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    },
+    {
+      "key": "boolean schema of a property",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": true
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "outcome": {
+        "started": "with the schema"
+      }
+    }
+  ],
+  "returns": [
+    {
+      "key": "missing required key",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "e": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y"
+            ]
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {},
+      "outcome": "rejected",
+      "answer": null
+    },
+    {
+      "key": "fraction for an integer",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "e": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y"
+            ]
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "n": 1.5
+      },
+      "outcome": "rejected",
+      "answer": null
+    },
+    {
+      "key": "below minimum",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "e": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y"
+            ]
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "n": 0
+      },
+      "outcome": "rejected",
+      "answer": null
+    },
+    {
+      "key": "outside enum",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "e": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y"
+            ]
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "e": "z"
+      },
+      "outcome": "rejected",
+      "answer": null
+    },
+    {
+      "key": "item of the wrong type",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "e": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y"
+            ]
+          },
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "list": [
+          "a",
+          2
+        ]
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /list/1: must be string"
+    },
+    {
+      "key": "nested missing required key",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "k": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "k"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "o"
+        ]
+      },
+      "value": {
+        "o": {}
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /o: must have required property 'k'"
+    },
+    {
+      "key": "nested value of the wrong type",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "k": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "k"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "o"
+        ]
+      },
+      "value": {
+        "o": {
+          "k": 1
+        }
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /o/k: must be string"
+    },
+    {
+      "key": "string for an object",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "o": {
+            "type": "object",
+            "properties": {
+              "k": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "k"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "o"
+        ]
+      },
+      "value": {
+        "o": "text"
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /o: must be object"
+    },
+    {
+      "key": "null for an integer",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "flag": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "count": null
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /count: must be integer"
+    },
+    {
+      "key": "null for a boolean",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "flag": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "flag": null
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /flag: must be boolean"
+    },
+    {
+      "key": "string for a boolean",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "flag": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "flag": "yes"
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /flag: must be boolean"
+    },
+    {
+      "key": "boolean for an integer",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "flag": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "count": true
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: /count: must be integer"
+    },
+    {
+      "key": "extra key with additionalProperties false",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ],
+        "additionalProperties": false
+      },
+      "value": {
+        "a": "x",
+        "extra": 1
+      },
+      "outcome": "rejected",
+      "answer": "Output does not match required schema: root: must NOT have additional properties ('extra' is not allowed)"
+    },
+    {
+      "key": "extra keys with no additionalProperties",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "extra": "1",
+        "nested": "{\"k\":[1,\"two\"]}"
+      },
+      "outcome": "accepted",
+      "returned": {
+        "a": "x",
+        "extra": "1",
+        "nested": "{\"k\":[1,\"two\"]}"
+      }
+    },
+    {
+      "key": "missing key with a default",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "d": {
+            "type": "string",
+            "default": "dflt"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x"
+      },
+      "outcome": "accepted",
+      "returned": {
+        "a": "x"
+      }
+    },
+    {
+      "key": "text that is no date for format date",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "day": {
+            "type": "string",
+            "format": "date"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "day": "not-a-date"
+      },
+      "outcome": "accepted",
+      "returned": {
+        "a": "x",
+        "day": "not-a-date"
+      }
+    },
+    {
+      "key": "null for a string or null type",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "maybe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "maybe"
+        ]
+      },
+      "value": {
+        "a": "x",
+        "maybe": null
+      },
+      "outcome": "accepted",
+      "returned": {
+        "a": "x",
+        "maybe": null
+      }
+    }
+  ]
+}

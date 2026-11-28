@@ -112,6 +112,18 @@ describe('buildPromptSnapshot', () => {
     assert.equal(/** @type {any[]} */ (result.variants)[2].schema, null);
   });
 
+  it('gives a call whose schema is false, 0 or the empty string the variant and digest of a call with no schema', () => {
+    const noSchema = build([createSimulation('a', [{ label: 'review', prompt: 'Review it.' }])]);
+
+    for (const schema of [false, 0, '']) {
+      const falsySchema = build([createSimulation('a', [{ label: 'review', prompt: 'Review it.', schema }, { label: 'review', prompt: 'Review it.' }])]);
+
+      assert.deepEqual(listVariantNames(falsySchema), ['review 1 1 review'], `schema ${JSON.stringify(schema)}`);
+      assert.equal(/** @type {any[]} */ (falsySchema.variants)[0].schema, null);
+      assert.equal(build([createSimulation('a', [{ label: 'review', prompt: 'Review it.', schema }])]).digest, noSchema.digest);
+    }
+  });
+
   it('masks a lowercase hex word of 8 characters or more, and no shorter or uppercase one', () => {
     const seven = build([createSimulation('a', [{ label: 'review', prompt: 'Id abcdef1.' }, { label: 'review', prompt: 'Id fedcba2.' }])]);
     const eight = build([createSimulation('a', [{ label: 'review', prompt: 'Id abcdef12.' }, { label: 'review', prompt: 'Id fedcba21.' }])]);

@@ -36,7 +36,7 @@ const REGEXP_SYNTAX_CHARACTER = /[\\^$.*+?()[\]{}|]/g;
  * @property {string} scenario The name of the scenario of the first call.
  * @property {string | null} label
  * @property {string} prompt
- * @property {unknown} schema The `schema` of the call's options, or null for none.
+ * @property {unknown} schema The `schema` of the call's options, or null for a call with no schema.
  */
 
 /**
@@ -104,7 +104,9 @@ function readSnapshotCall({ label, prompt, opts }, scenario, scriptRoles) {
   const scriptRole = findRole(label, scriptRoles);
   const isUnlabeled = label === null || label === '';
   const role = scriptRole ?? (isUnlabeled ? NO_LABEL_ROLE : label);
-  const schema = isObject(opts) && Object.hasOwn(opts, 'schema') ? opts.schema : null;
+  // agent() of Claude Code 2.1.332 gives a call with no schema for a falsy schema, such as `false`, or a function,
+  // and throws for any other schema that is no object (tests/fixtures/runtime/schema-probe.measured.json).
+  const schema = isObject(opts) && isObject(opts.schema) ? opts.schema : null;
   const schemaText = JSON.stringify(schema, null, 2);
   const item = scriptRole === null ? '' : readItem(/** @type {string} */ (label), scriptRole);
 

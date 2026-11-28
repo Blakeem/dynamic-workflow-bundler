@@ -106,9 +106,11 @@ Add a row before a new concept gets a name in code.
 
 ## Code
 
-- JavaScript for Node 22 and later, ES modules. The one dependency is the `acorn` parser, pinned to an exact
-  version. Read code structure from its syntax tree, never from a text pattern, since a pattern also matches
-  inside a prompt string. Add no other dependency.
+- JavaScript for Node 22 and later, ES modules. The dependencies are the `acorn` parser and the `ajv` JSON
+  Schema validator, each pinned to an exact version. Read code structure from the syntax tree of `acorn`,
+  never from a text pattern, since a pattern also matches inside a prompt string. `ajv` checks a call's
+  schema as the runtime checks it, and of the files under `src/` and `bin/`, `src/compile-schema.js` alone
+  imports it. Add no other dependency.
 - Types go in JSDoc comments.
 - Files that read or write disk, or print, stay separate from files that compute.
 - Tests use `node:test` and sit in `tests/`, one file per source file, named `<source file>.test.js`.

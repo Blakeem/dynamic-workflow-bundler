@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -12,6 +12,8 @@ import { SCENARIOS } from './fixtures/simulate/scenarios.js';
 import { findSimulateFixture } from './support/find-simulate-fixture.js';
 import { writeSizedFile } from './support/write-sized-file.js';
 
+const INVALID_SCHEMA_START = 'agent({schema}) received an invalid JSON Schema: ';
+const schemaProbe = JSON.parse(await readFile(new URL('./fixtures/runtime/schema-probe.measured.json', import.meta.url), 'utf8'));
 const temporaryFolders = [];
 after(async () => {
   for (const folder of temporaryFolders) await rm(folder, { recursive: true, force: true });
@@ -439,4 +441,25 @@ describe('the schema of an agent() call', () => {
     ]);
     assert.deepEqual(trace.calls.map((call) => call.label), ['null', null, 'object']);
   });
+});
+
+describe(`schema-probe.measured.json, as Claude Code ${schemaProbe.measuredOn} ran it`, () => {
+  for (const probe of schemaProbe.schemas) {
+    it(`gives the measured outcome for the schema case ${probe.key}`, async () => {
+      const schemaSource = probe.schemaKind === 'function' ? "() => ({ type: 'object' })" : JSON.stringify(probe.schema);
+      const script = await writeScript('workflow.js', `return await agent('p', { schema: ${schemaSource} });\n`);
+      const scriptedReturn = probe.outcome.started === 'with the schema' ? { checked: true } : 'checked';
+      const trace = await simulateScript(script, { respond: { '': scriptedReturn } });
+
+      if (probe.outcome.threw === undefined) {
+        assert.deepEqual(trace.end, { kind: 'returned', value: scriptedReturn });
+        return;
+      }
+      assert.equal(trace.end.kind, 'threw');
+      assert.equal(trace.end.name, probe.outcome.threw.name);
+      if (probe.engineText) assert.ok(trace.end.message.startsWith(`${INVALID_SCHEMA_START}Invalid regular expression: `), trace.end.message);
+      else assert.equal(trace.end.message, probe.outcome.threw.message);
+      assert.deepEqual(trace.calls, []);
+    });
+  }
 });

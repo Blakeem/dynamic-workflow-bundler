@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { createContext, runInContext } from 'node:vm';
+import Ajv from 'ajv';
 import { RUNTIME_GLOBAL_NAMES } from '../src/contract.js';
 import { listMissingGlobalNames, runSimulation, SCRIPT_TIME_LIMIT_MS, SimulationStop } from '../src/run-simulation.js';
 
@@ -27,6 +28,8 @@ const MAXIMUM_LEFT_OUT_KEYS = 16;
 const STAND_IN_NAMES = ['__wRg$loop', '__wRg$resolve', 'agent', 'args', 'budget', 'clearTimeout', 'console', 'log', 'parallel', 'phase', 'pipeline', 'setTimeout', 'then', 'workflow'];
 // A short limit ends a sync loop fast and gives the code before the first await room under the load of the full suite.
 const SHORT_TIME_LIMIT_MS = 50;
+// On Node.js 24.22.1 the validator ran out of stack at 300 levels, and JSON.stringify kept going past 2,000.
+const DEEP_SCHEMA_DEPTH = 1000;
 
 /**
  * @param {string} name
@@ -620,6 +623,60 @@ describe('answers', () => {
     const { end } = await simulateBody("try { await agent('a') } catch (error) { return error.message }", { answerCall: () => cyclic });
 
     assert.deepEqual(end, { kind: 'returned', value: 'Maximum call stack size exceeded.' });
+  });
+});
+
+describe('the schema of a call', () => {
+  it('compiles each distinct schema of one simulation once', async (t) => {
+    const compile = t.mock.method(Ajv.prototype, 'compile');
+    const body = "const one = { type: 'object' }\nfor (const schema of [one, one, one, { type: 'object', properties: {} }]) await agent('p', { schema })";
+    const { end } = await simulateBody(body, { answerCall: () => ({}) });
+
+    assert.equal(end.kind, 'returned');
+    assert.equal(compile.mock.callCount(), 2);
+  });
+
+  it('skips the compile of a schema with no JSON copy, and still checks its root type', async () => {
+    const body = [
+      'const describe = (call) => call.then(() => \'started\', (error) => error.message.slice(0, 48))',
+      "const cyclic = { type: 'object', fooBar: 1 }",
+      'cyclic.self = cyclic',
+      "const throwing = { type: 'array', get fooBar() { throw new Error('getter') } }",
+      "const silent = { type: 'object', fooBar: 1, toJSON: () => undefined }",
+      "return [await describe(agent('p', { schema: cyclic })), await describe(agent('p', { schema: throwing })), await describe(agent('p', { schema: silent }))]",
+    ].join('\n');
+    const { end } = await simulateBody(body, { answerCall: () => ({}) });
+
+    assert.deepEqual(end.value, ['started', 'agent({schema}) received an unusable JSON Schema', 'started']);
+  });
+
+  it('keeps no compile that ran out of stack, so a later call with the schema compiles it again', async (t) => {
+    const compile = t.mock.method(Ajv.prototype, 'compile');
+    const body = [
+      "const schema = { type: 'object', fooBar: 1 }",
+      "const describe = (call) => call.then(() => 'started', (error) => error.message)",
+      "return [await describe(agent('p', { schema })), await describe(agent('p', { schema }))]",
+    ].join('\n');
+
+    compile.mock.mockImplementationOnce(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    const { end } = await simulateBody(body, { answerCall: () => ({}) });
+
+    assert.deepEqual(end.value, ['started', 'agent({schema}) received an invalid JSON Schema: strict mode: unknown keyword: "fooBar"']);
+    assert.equal(compile.mock.callCount(), 2);
+  });
+
+  it('checks only the root type of a schema nested deep enough to run the validator out of stack', async () => {
+    const body = [
+      "let schema = { type: 'object' }",
+      `for (let depth = 0; depth < ${DEEP_SCHEMA_DEPTH}; depth += 1) schema = { type: 'object', properties: { a: schema } }`,
+      "const describe = (call) => call.then(() => 'started', (error) => error.message.slice(0, 48))",
+      "return [await describe(agent('p', { schema })), await describe(agent('p', { schema: { type: 'array', properties: { a: schema } } }))]",
+    ].join('\n');
+    const { end } = await simulateBody(body, { answerCall: () => ({}) });
+
+    assert.deepEqual(end.value, ['started', 'agent({schema}) received an unusable JSON Schema']);
   });
 });
 
