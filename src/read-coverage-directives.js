@@ -1,0 +1,174 @@
+import { normalizeDigits } from './normalize-digits.js';
+import { findPosition, readPositionText } from './source-position.js';
+import { listTreeNodes } from './syntax-tree.js';
+
+/** @typedef {import('./syntax-tree.js').SyntaxNode} SyntaxNode */
+
+const END_STATES_COMMENT = /^\s*@end-states(?=\s|$)/;
+const UNREACHED_COMMENT = /^\s*@unreached(?=\s|$)/;
+// Acorn ends a line comment before the CR of a CRLF, and also at U+2028 or U+2029, where code can follow.
+const LINE_END_REST = /^\r?$/;
+const END_STATES_MISPLACED_MESSAGE = 'The // @end-states comment is not alone on the line above a const that lists end states';
+const UNREACHED_MISPLACED_MESSAGE = 'The // @unreached comment is not alone on the line above a throw site';
+const UNREACHED_NO_REASON_MESSAGE = 'The // @unreached comment gives no reason';
+
+/**
+ * @typedef {object} DeclaredEndState
+ * @property {string} endState As its declaration writes it.
+ * @property {number} offset The offset of its string in the script.
+ */
+
+/**
+ * @typedef {object} CoverageDirectiveProblem
+ * @property {'end-states-misplaced' | 'unreached-misplaced' | 'unreached-no-reason'} rule
+ * @property {string} message
+ * @property {number} offset The offset of the comment in the script.
+ */
+
+/**
+ * @typedef {object} CoverageDirectives
+ * @property {DeclaredEndState[]} endStates The end states of every `// @end-states` comment, in source order,
+ *   each once when compared with each run of digits written as `N`.
+ * @property {Map<number, string>} unreachedReasons By the line of the `new` keyword of each throw site that a
+ *   `// @unreached` comment marks, the comment's reason, or '' for a comment that gives none.
+ * @property {CoverageDirectiveProblem[]} problems
+ */
+
+/**
+ * Reads the `// @end-states` and `// @unreached` comments of a workflow script. A misplaced comment marks
+ * nothing and declares nothing.
+ * @param {SyntaxNode} program The tree that parseSource gives for the script.
+ * @param {import('acorn').Comment[]} comments The comments acorn reported for the same parse, in source order.
+ * @param {string} text The text the program was parsed from.
+ * @param {import('./read-throw-sites.js').ThrowSite[]} throwSites As readThrowSites gives them.
+ * @returns {CoverageDirectives}
+ */
+export function readCoverageDirectives(program, comments, text, throwSites) {
+  const endStates = [];
+  const endStateKeys = new Set();
+  const unreachedReasons = new Map();
+  const problems = [];
+  const lineComments = comments.filter((comment) => comment.type === 'Line');
+  const endStatesComments = lineComments.filter((comment) => END_STATES_COMMENT.test(comment.value));
+  const unreachedComments = lineComments.filter((comment) => UNREACHED_COMMENT.test(comment.value));
+  const { positionText, markLength } = readPositionText(text);
+  const throwSiteLines = new Set(throwSites.map(({ line }) => line));
+  // A script with no `// @end-states` comment needs no walk of its tree.
+  const constDeclarations = endStatesComments.length === 0 ? [] : listTreeNodes(program).filter(isConstDeclaration);
+
+  for (const comment of endStatesComments) {
+    const commentLine = readCommentLine(positionText, comment, markLength);
+    const declaration = commentLine.isAlone ? findDeclarationOnLine(constDeclarations, commentLine.nextLine, markLength) : undefined;
+    const stringNodes = declaration === undefined ? null : readEndStateNodes(declaration);
+
+    if (stringNodes === null) {
+      problems.push({ rule: 'end-states-misplaced', message: END_STATES_MISPLACED_MESSAGE, offset: comment.start });
+      continue;
+    }
+    for (const node of stringNodes) {
+      const endState = readStringValue(node);
+      const key = normalizeDigits(endState);
+
+      if (endStateKeys.has(key)) continue;
+      endStateKeys.add(key);
+      endStates.push({ endState, offset: node.start });
+    }
+  }
+
+  for (const comment of unreachedComments) {
+    const commentLine = readCommentLine(positionText, comment, markLength);
+    const reason = comment.value.replace(UNREACHED_COMMENT, '').trim();
+    const markedLine = commentLine.line + 1;
+
+    if (reason === '') problems.push({ rule: 'unreached-no-reason', message: UNREACHED_NO_REASON_MESSAGE, offset: comment.start });
+    if (commentLine.isAlone && throwSiteLines.has(markedLine)) unreachedReasons.set(markedLine, reason);
+    else problems.push({ rule: 'unreached-misplaced', message: UNREACHED_MISPLACED_MESSAGE, offset: comment.start });
+  }
+
+  return { endStates, unreachedReasons, problems };
+}
+
+/**
+ * Places a comment as readThrowSites places a throw site: at LF and at a lone CR, after a leading byte order mark.
+ * @param {string} positionText As readPositionText gives it.
+ * @param {import('acorn').Comment} comment
+ * @param {number} markLength As readPositionText gives it.
+ * @returns {{ line: number, isAlone: boolean, nextLine: { start: number, end: number } | null }} `nextLine`
+ *   holds the offsets in `positionText` of the line below the comment, or null for a comment on the last line.
+ */
+function readCommentLine(positionText, comment, markLength) {
+  const start = comment.start - markLength;
+  const end = comment.end - markLength;
+  const lineStart = positionText.lastIndexOf('\n', start - 1) + 1;
+  const lineBreak = positionText.indexOf('\n', end);
+  const lineEnd = lineBreak === -1 ? positionText.length : lineBreak;
+  const isAlone = positionText.slice(lineStart, start).trim() === '' && LINE_END_REST.test(positionText.slice(end, lineEnd));
+  const nextLineBreak = lineBreak === -1 ? -1 : positionText.indexOf('\n', lineBreak + 1);
+  const nextLine = lineBreak === -1 ? null : { start: lineBreak + 1, end: nextLineBreak === -1 ? positionText.length : nextLineBreak };
+
+  return { line: findPosition(positionText, start).line, isAlone, nextLine };
+}
+
+/**
+ * @param {SyntaxNode} node
+ * @returns {boolean}
+ */
+function isConstDeclaration(node) {
+  return node.type === 'VariableDeclaration' && node.kind === 'const';
+}
+
+/**
+ * @param {SyntaxNode[]} declarations In source order.
+ * @param {{ start: number, end: number } | null} line Offsets in the position text.
+ * @param {number} markLength
+ * @returns {SyntaxNode | undefined} The first declaration that starts on the line.
+ */
+function findDeclarationOnLine(declarations, line, markLength) {
+  if (line === null) return undefined;
+  return declarations.find((declaration) => declaration.start - markLength >= line.start && declaration.start - markLength < line.end);
+}
+
+/**
+ * @param {SyntaxNode} declaration A const declaration.
+ * @returns {SyntaxNode[] | null} The string of each end state the declaration lists, or null when it lists none
+ *   in the form a `// @end-states` comment takes.
+ */
+function readEndStateNodes(declaration) {
+  if (declaration.declarations.length !== 1) return null;
+  const [declarator] = declaration.declarations;
+  if (declarator.id.type !== 'Identifier') return null;
+  const list = readFrozenArgument(declarator.init);
+  if (list?.type !== 'ArrayExpression' && list?.type !== 'ObjectExpression') return null;
+  // A key is not read, so a computed key is kept, and a spread element reaches the check as no string.
+  const values = list.type === 'ArrayExpression' ? list.elements : list.properties.map((property) => (property.type === 'Property' ? property.value : property));
+
+  return values.length > 0 && values.every(isEndStateString) ? values : null;
+}
+
+/**
+ * @param {SyntaxNode | null} init
+ * @returns {SyntaxNode | null} The one argument of `Object.freeze(...)`, or the value itself for any other value.
+ */
+function readFrozenArgument(init) {
+  const callee = init?.type === 'CallExpression' && !init.optional ? init.callee : null;
+  const isFreeze = callee?.type === 'MemberExpression' && !callee.computed && !callee.optional && callee.object.type === 'Identifier' && callee.object.name === 'Object' && callee.property.name === 'freeze';
+
+  return isFreeze && init.arguments.length === 1 ? init.arguments[0] : init;
+}
+
+/**
+ * @param {SyntaxNode | null} node An element of an array literal or the value of a property, or null for a hole.
+ * @returns {boolean} True for a string literal, or a template literal with no expression, of 1 or more characters.
+ */
+function isEndStateString(node) {
+  if (node?.type === 'Literal') return typeof node.value === 'string' && node.value !== '';
+  return node?.type === 'TemplateLiteral' && node.expressions.length === 0 && node.quasis[0].value.cooked !== '';
+}
+
+/**
+ * @param {SyntaxNode} node A node that isEndStateString accepts.
+ * @returns {string}
+ */
+function readStringValue(node) {
+  return node.type === 'Literal' ? node.value : node.quasis[0].value.cooked;
+}

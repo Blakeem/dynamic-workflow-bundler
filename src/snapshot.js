@@ -12,7 +12,7 @@ import { checkScriptFile } from './validate.js';
 /** @typedef {import('./build-prompt-snapshot.js').PromptVariant} PromptVariant */
 /** @typedef {import('./build-prompt-snapshot.js').RolePromptSize} RolePromptSize */
 /** @typedef {import('./build-prompt-snapshot.js').PromptBudgetProblem} PromptBudgetProblem */
-/** @typedef {import('./build-prompt-snapshot.js').UnreadScenario} UnreadScenario */
+/** @typedef {import('./list-unread-scenarios.js').UnreadScenario} UnreadScenario */
 
 // A misspelled key such as `scenario` would otherwise read as a missing scenarios file.
 const SNAPSHOT_OPTION_KEYS = new Set(['script', 'scenarios', 'promptBudgets']);

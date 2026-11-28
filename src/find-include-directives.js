@@ -1,7 +1,7 @@
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
 
 /**
- * @typedef {object} Directive
+ * @typedef {object} IncludeDirective
  * @property {string} path The path the directive names, relative to the entry's folder.
  * @property {number} offset The offset of the directive's comment.
  * @property {number} start The offset of the directive's line.
@@ -9,7 +9,7 @@ import { PARSE_OPTIONS, parseSource } from './parse-source.js';
  */
 
 /**
- * @typedef {object} MisplacedDirective
+ * @typedef {object} MisplacedIncludeDirective
  * @property {number} offset
  * @property {string} message
  */
@@ -26,14 +26,14 @@ export function isIncludeComment(comment) {
 }
 
 /**
- * Reads the directives of an entry: each `// @include` line comment alone on its line, at the top level and
- * below the meta statement. Acorn reports no comment inside a template literal or a string, so a
+ * Reads the include directives of an entry: each `// @include` line comment alone on its line, at the top
+ * level and below the meta statement. Acorn reports no comment inside a template literal or a string, so a
  * `// @include` line in a prompt stays text.
  * @param {string} text The normalized text of the entry.
- * @returns {{ directives: Directive[], misplaced: MisplacedDirective[] }} Both empty when the entry does not
- *   parse, since its analysis reports the syntax error.
+ * @returns {{ directives: IncludeDirective[], misplaced: MisplacedIncludeDirective[] }} Both empty when the entry
+ *   does not parse, since its analysis reports the syntax error.
  */
-export function findDirectives(text) {
+export function findIncludeDirectives(text) {
   const directives = [];
   const misplaced = [];
   const comments = [];

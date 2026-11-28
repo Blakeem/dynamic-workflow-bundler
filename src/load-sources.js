@@ -7,7 +7,7 @@ import { analyzeSource, SOURCE_KIND_NAMES } from './analyze-source.js';
 import { formatScriptOversizeReason } from './check-contract.js';
 import { checkPart } from './check-part.js';
 import { expandParts, findExpandedOffset } from './expand-parts.js';
-import { findDirectives } from './find-directives.js';
+import { findIncludeDirectives } from './find-include-directives.js';
 import { checkJsonFile } from './find-json-error.js';
 import { createFinding } from './finding.js';
 import { normalizeSourceText, normalizeTextFile } from './normalize-source-text.js';
@@ -51,7 +51,7 @@ import { formatOversizeReason, READ_BYTE_LIMIT } from './read-byte-limit.js';
  */
 
 /**
- * @typedef {object} DirectiveProblem
+ * @typedef {object} IncludeDirectiveProblem
  * @property {string} rule
  * @property {string} message
  * @property {number} offset The offset of the directive in the entry's own text.
@@ -131,8 +131,8 @@ export async function loadSources(entryPath, hasBanner) {
  *   Each finding on the entry is placed in the expanded text, as the entry's analysis places its own.
  */
 async function includeParts(entryFile, entryText) {
-  const { directives, misplaced } = findDirectives(entryText);
-  /** @type {DirectiveProblem[]} */
+  const { directives, misplaced } = findIncludeDirectives(entryText);
+  /** @type {IncludeDirectiveProblem[]} */
   const problems = misplaced.map(({ offset, message }) => ({ rule: 'include-misplaced', message, offset }));
   /** @type {PartReplacement[]} */
   const replacements = [];
@@ -145,9 +145,9 @@ async function includeParts(entryFile, entryText) {
     if ('message' in read) {
       addProblem(read.rule, read.message);
     } else if (read.file === entryFile) {
-      addProblem('include-twice', 'The directive names the entry');
+      addProblem('include-twice', 'The // @include directive names the entry');
     } else if (parts.includes(read.file)) {
-      addProblem('include-twice', `The directive names ${JSON.stringify(directive.path)}, which an earlier directive names`);
+      addProblem('include-twice', `The // @include directive names ${JSON.stringify(directive.path)}, which an earlier // @include directive names`);
     } else {
       const partFindings = checkPart(read.text, read.file);
       parts.push(read.file);
@@ -201,7 +201,7 @@ async function readPart(path, entryFolder) {
   let spellingDifference = null;
   let read = null;
 
-  if (path === '') return reportNotFound('The directive names no path');
+  if (path === '') return reportNotFound('The // @include directive names no path');
   // Every file system call refuses a path that holds a NUL.
   if (path.includes('\0')) return reportNotFound(`The path ${quotedPath} holds a NUL character`);
   if (path.includes('\\')) return reportNotFound(`The path ${quotedPath} holds a backslash, which only Windows reads as a folder separator`);

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { BYTE_ORDER_MARK } from '../src/normalize-source-text.js';
 import { parseSource, PARSE_OPTIONS } from '../src/parse-source.js';
-import { readThrowSites } from '../src/read-throw-sites.js';
+import { findThrowSiteIndex, readThrowSites } from '../src/read-throw-sites.js';
 
 const ORACLE = new URL('./fixtures/flow-map/', import.meta.url);
 
@@ -109,5 +109,16 @@ describe('readThrowSites', () => {
     ]);
     assert.deepEqual(await readOracleSites('fan'), []);
     assert.deepEqual(await readOracleSites('rounds'), []);
+  });
+});
+
+describe('findThrowSiteIndex', () => {
+  it('gives the index of the site at the line and column of the frame, or -1', () => {
+    const sites = readTextSites("throw new Error('a');\nthrow new Error('b'); throw new Error('c');");
+
+    assert.equal(findThrowSiteIndex({ line: 2, column: 29 }, sites), 2);
+    assert.equal(findThrowSiteIndex({ line: 1, column: 7 }, sites), 0);
+    assert.equal(findThrowSiteIndex({ line: 1, column: 8 }, sites), -1);
+    assert.equal(findThrowSiteIndex({ line: 3, column: 7 }, sites), -1);
   });
 });

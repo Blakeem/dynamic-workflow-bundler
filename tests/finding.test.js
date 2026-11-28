@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createFinding, FIXES } from '../src/finding.js';
+import { createFinding, createPlacedFinding, FIXES } from '../src/finding.js';
 
 describe('createFinding', () => {
   it('gives the rule, its fix and the position of the offset', () => {
@@ -42,5 +42,19 @@ describe('createFinding', () => {
 
   it('throws for a rule that FIXES holds no fix for', () => {
     assert.throws(() => createFinding('no-such-rule', 'm', 'a.js', '', 0), /FIXES holds no fix for the rule no-such-rule/);
+  });
+});
+
+describe('createPlacedFinding', () => {
+  it('gives the finding that createFinding gives, at the place it is given', () => {
+    assert.deepEqual(createPlacedFinding('global-undefined', 'Reads a\u200Db', 'a.js', { line: 4, column: 9 }, 'meta'), {
+      rule: 'global-undefined',
+      message: 'Reads a\\u{200D}b',
+      fix: FIXES['global-undefined'].meta,
+      file: 'a.js',
+      line: 4,
+      column: 9,
+    });
+    assert.throws(() => createPlacedFinding('no-such-rule', 'm', 'a.js', { line: 1, column: 1 }), /FIXES holds no fix for the rule no-such-rule/);
   });
 });

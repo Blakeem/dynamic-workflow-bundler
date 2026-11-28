@@ -481,7 +481,7 @@ describe('build of text files, JSON files and parts', () => {
 
     assert.deepEqual(result.findings.map((finding) => `${finding.rule} ${finding.line} ${finding.message}`), [
       'include-not-found 2 The path "./folder.js" names a folder',
-      'include-not-found 3 The directive names no path',
+      'include-not-found 3 The // @include directive names no path',
       'include-not-found 4 The path "./a\\u0000b.js" holds a NUL character',
     ]);
     await assert.rejects(build({ entry: join(folder, 'with-part.js'), out: join(folder, 'part.js') }), (error) => error.name === 'UsageError' && /is a source/.test(error.message));

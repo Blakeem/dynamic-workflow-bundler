@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { findRole } from './find-role.js';
-import { formatSimulationEnd } from './format-simulation-end.js';
 import { isObject } from './is-object.js';
-import { isUnfinishedTrace } from './is-unfinished-trace.js';
+import { listUnreadScenarios } from './list-unread-scenarios.js';
 import { readItem } from './read-item.js';
 
 /** @typedef {import('./simulate.js').Trace} Trace */
 /** @typedef {import('./simulate.js').TraceCall} TraceCall */
+/** @typedef {import('./list-unread-scenarios.js').UnreadScenario} UnreadScenario */
 
 const NO_LABEL_ROLE = '(no label)';
 const ITEM_MASK = '<item>';
@@ -53,12 +53,6 @@ const REGEXP_SYNTAX_CHARACTER = /[\\^$.*+?()[\]{}|]/g;
  */
 
 /**
- * @typedef {object} UnreadScenario
- * @property {string} scenario The scenario's name.
- * @property {string} reason How its simulation ended, as formatSimulationEnd gives it.
- */
-
-/**
  * @typedef {object} PromptSnapshot
  * @property {PromptVariant[] | null} variants Null when a scenario is unread.
  * @property {RolePromptSize[]} roles In the order each role's first call was made.
@@ -90,7 +84,7 @@ const REGEXP_SYNTAX_CHARACTER = /[\\^$.*+?()[\]{}|]/g;
  * @returns {PromptSnapshot}
  */
 export function buildPromptSnapshot({ roles, runs, promptBudgets }) {
-  const unread = runs.filter(({ trace }) => isUnfinishedTrace(trace)).map(({ name, trace }) => ({ scenario: name, reason: formatSimulationEnd(trace) }));
+  const unread = listUnreadScenarios(runs);
 
   if (unread.length > 0) return { variants: null, roles: [], callCount: 0, digest: null, promptBudgetProblems: [], unread };
   const calls = runs.flatMap(({ name, trace }) => trace.calls.map((call) => readSnapshotCall(call, name, roles)));

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { findDirectives, isIncludeComment } from '../src/find-directives.js';
+import { findIncludeDirectives, isIncludeComment } from '../src/find-include-directives.js';
 import { DEEP_REGEXP_LITERAL } from './support/deep-regexp-literal.js';
 
 describe('isIncludeComment', () => {
@@ -15,10 +15,10 @@ describe('isIncludeComment', () => {
   });
 });
 
-describe('findDirectives', () => {
+describe('findIncludeDirectives', () => {
   it('reads each directive alone on its line at the top level below the meta statement, with its line range', () => {
     const text = 'export const meta = {};\n// @include ./a.js\n  // @include  parts/b.js  \nreturn 1;\n// @include ./c.js';
-    const { directives, misplaced } = findDirectives(text);
+    const { directives, misplaced } = findIncludeDirectives(text);
 
     assert.deepEqual(misplaced, []);
     assert.deepEqual(
@@ -45,25 +45,25 @@ describe('findDirectives', () => {
       '',
     ].join('\n');
 
-    assert.deepEqual(findDirectives(text).misplaced.map(({ message }) => message), [
+    assert.deepEqual(findIncludeDirectives(text).misplaced.map(({ message }) => message), [
       'The // @include comment sits above the end of the meta statement',
       'The // @include comment sits inside a statement, below the top level of the entry',
       'The // @include comment shares its line with code',
       'The // @include comment sits inside a statement, below the top level of the entry',
       'The // @include comment shares its line with code',
     ]);
-    assert.deepEqual(findDirectives(text).directives, []);
+    assert.deepEqual(findIncludeDirectives(text).directives, []);
   });
 
   it('leaves a // @include line inside a template literal as text', () => {
-    assert.deepEqual(findDirectives('export const meta = {};\nconst p = `\n// @include ./a.js\n`;\n'), { directives: [], misplaced: [] });
+    assert.deepEqual(findIncludeDirectives('export const meta = {};\nconst p = `\n// @include ./a.js\n`;\n'), { directives: [], misplaced: [] });
   });
 
   it('reads nothing from an entry that does not parse, whose analysis reports the syntax error', () => {
-    assert.deepEqual(findDirectives('export const meta = {};\n// @include ./a.js\nconst = 1;\n'), { directives: [], misplaced: [] });
+    assert.deepEqual(findIncludeDirectives('export const meta = {};\n// @include ./a.js\nconst = 1;\n'), { directives: [], misplaced: [] });
   });
 
   it('reads nothing from an entry whose first token is nested past the parser stack', () => {
-    assert.deepEqual(findDirectives(`${DEEP_REGEXP_LITERAL};\n// @include ./a.js\n`), { directives: [], misplaced: [] });
+    assert.deepEqual(findIncludeDirectives(`${DEEP_REGEXP_LITERAL};\n// @include ./a.js\n`), { directives: [], misplaced: [] });
   });
 });

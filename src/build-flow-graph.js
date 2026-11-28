@@ -4,8 +4,11 @@ import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { formatSimulationEnd } from './format-simulation-end.js';
 import { isObject } from './is-object.js';
 import { isUnfinishedTrace } from './is-unfinished-trace.js';
+import { normalizeDigits } from './normalize-digits.js';
 import { readItem } from './read-item.js';
-import { EXPRESSION_MARK } from './read-throw-sites.js';
+import { readPhaseText } from './read-phase-text.js';
+import { readReturnedStatus } from './read-returned-status.js';
+import { EXPRESSION_MARK, findThrowSiteIndex } from './read-throw-sites.js';
 
 /** @typedef {import('./simulate.js').Trace} Trace */
 /** @typedef {import('./simulate.js').TraceCall} TraceCall */
@@ -16,7 +19,6 @@ import { EXPRESSION_MARK } from './read-throw-sites.js';
 
 const START_ID = 'S0';
 const TOP_CONTEXT_KEY = 'top';
-const DIGIT_RUN = /\d+/g;
 const WHITE_SPACE_RUN = /\s+/g;
 const CLAUSE_SEPARATORS = [' — ', ': ', ' (', '; ', '. '];
 const OPENING_BRACKETS = new Set(['(', '[', '{']);
@@ -222,7 +224,7 @@ function formatRoleList(roles) {
  * @returns {PathEnd | { reason: string }}
  */
 function readReturnedEnd(value, endState) {
-  const status = isObject(value) && typeof value.status === 'string' && value.status !== '' ? value.status : null;
+  const status = readReturnedStatus(value);
   const statusLabel = status === null ? null : normalizeDigits(status);
   const endStateLabel = endState === null ? null : normalizeDigits(endState);
 
@@ -257,20 +259,12 @@ function readThrowEnd({ frames }, throwSites, thrown) {
 
   if (newest === undefined) return { reason: `${thrown}, and the simulation recorded no place it was created at, such as for a thrown value that is no Error, an error that the simulator threw, or an error whose stack the script read before it threw` };
   const place = `line ${newest.line}, column ${newest.column}`;
-  const order = throwSites.findIndex((site) => site.line === newest.line && site.column === newest.column);
+  const order = findThrowSiteIndex(newest, throwSites);
   if (order === -1) return { reason: `${thrown} at ${place}, which is no throw site` };
   const site = throwSites[order];
   const blankLabel = site.isMessageBuilt ? RUNTIME_MESSAGE_LABEL : NO_MESSAGE_TEXT_LABEL;
 
   return { key: `x:${order}`, kind: 'throw', label: `throw: ${readFirstClause(site.template, blankLabel)}`, source: 'throw', line: site.line, order };
-}
-
-/**
- * @param {string} label
- * @returns {string}
- */
-function normalizeDigits(label) {
-  return label.replace(DIGIT_RUN, 'N');
 }
 
 /**
@@ -782,13 +776,4 @@ function createPhases(metaPhases, agentNodes) {
     else phases.push({ id: `p${phases.length + 1}`, title: node.phase, detail: UNLISTED_PHASE_DETAIL, nodes: [node.id] });
   }
   return phases;
-}
-
-/**
- * @param {unknown} phase One element of the meta object's phases list.
- * @param {'title' | 'detail'} key
- * @returns {string} The key's value as text, or '' for a phase that is not an object or lacks the key.
- */
-function readPhaseText(phase, key) {
-  return isObject(phase) && phase[key] !== undefined && phase[key] !== null ? String(phase[key]) : '';
 }

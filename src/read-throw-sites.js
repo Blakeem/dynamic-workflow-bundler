@@ -35,6 +35,15 @@ export function readThrowSites(program, text) {
 }
 
 /**
+ * @param {import('./run-simulation.js').Frame} frame The newest frame of a thrown error.
+ * @param {ThrowSite[]} throwSites As readThrowSites gives them.
+ * @returns {number} The index of the throw site at the frame's line and column, or -1 for none.
+ */
+export function findThrowSiteIndex(frame, throwSites) {
+  return throwSites.findIndex((site) => site.line === frame.line && site.column === frame.column);
+}
+
+/**
  * @param {SyntaxNode} node
  * @returns {boolean}
  */

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import { parseSource, PARSE_OPTIONS } from '../src/parse-source.js';
-import { readRoles } from '../src/read-roles.js';
+import { readRolePlaces, readRoles } from '../src/read-roles.js';
 
 const ORACLE = new URL('./fixtures/flow-map/', import.meta.url);
 
@@ -68,6 +68,24 @@ describe('readRoles', () => {
     for (const [name, roles] of Object.entries(expected)) {
       const text = await readFile(new URL(`${name}.js`, ORACLE), 'utf8');
       assert.deepEqual(readTextRoles(text), roles, name);
+    }
+  });
+});
+
+describe('readRolePlaces', () => {
+  it('gives each role once, in source order, at the value of the first label property that gives it', () => {
+    const text = "await agent('p', { label: `dev ${id}` });\nawait agent('p', { label: 'check' });\nawait agent('p', { label: 'dev' });";
+
+    assert.deepEqual(readRolePlaces(parseSource(text, PARSE_OPTIONS)), [
+      { role: 'dev', offset: text.indexOf('`dev') },
+      { role: 'check', offset: text.indexOf("'check'") },
+    ]);
+  });
+
+  it('gives the roles that readRoles gives, for the three oracle scripts', async () => {
+    for (const name of ['seq', 'fan', 'rounds']) {
+      const program = parseSource(await readFile(new URL(`${name}.js`, ORACLE), 'utf8'), PARSE_OPTIONS);
+      assert.deepEqual(readRolePlaces(program).map(({ role }) => role), readRoles(program), name);
     }
   });
 });

@@ -2,7 +2,7 @@ import { posix } from 'node:path';
 import { tokenizer, tokTypes } from 'acorn';
 import { RUNTIME_RESERVED_PREFIX } from './check-contract.js';
 import { createFinding } from './finding.js';
-import { isIncludeComment } from './find-directives.js';
+import { isIncludeComment } from './find-include-directives.js';
 import { findExportAssignments } from './find-export-assignments.js';
 import { findFreeNames } from './find-free-names.js';
 import { readMetaObject } from './meta-statement.js';

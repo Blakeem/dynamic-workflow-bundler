@@ -15,7 +15,8 @@ const EXPECTED_ENDS = new Set(['returned', 'threw']);
  * @property {'returned' | 'threw'} expect The end kind of a simulation that passes. Defaults to 'returned'.
  * @property {string} when The words that say when the scenario's path is taken, which a flow map shows.
  *   Defaults to the name.
- * @property {string | null} endState The end state a flow map gives a script that returns no status, or null.
+ * @property {string | null} endState The end state a flow map and the coverage give a script that returns no
+ *   status, or null.
  *   A flow map leaves the scenario unmapped when the script returns a status that differs from it, digit runs aside.
  * @property {Scenario} scenario The scenario as simulate() takes it, with its name.
  */

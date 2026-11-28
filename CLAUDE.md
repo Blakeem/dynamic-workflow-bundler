@@ -24,7 +24,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | build | To write a workflow script from its source. The result is the built script. |
 | scope | The function scope that holds one module's code in the built script. |
 | banner | The comment line after `meta` that names the entry a built script comes from. A build replaces an existing file at `out` only when it is a built script, which a banner marks, or for a build with no banner a first statement that is the `meta` statement. |
-| directive | A `// @include <path>` comment line in an entry, which names a part. |
+| directive | A line comment that starts with @ and a word the tool reads. `// @include <path>` in an entry names a part. `// @end-states` on the line above a const declares the end states it lists. `// @unreached <reason>` on the line above a throw site marks a throw site that no scenario can reach. |
 | config file | The `dwfb.config.js` or `dwfb.config.mjs` file, which lists the workflows a project builds. |
 | line origin | The source file and line that a line of the built script comes from. |
 | contract | The rules the Workflow runtime enforces on a script. |
@@ -44,6 +44,8 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | frame | One place in a script that the stack of a thrown error names: a line and a column. The newest frame is where the error was created. |
 | call site | One entry of the stack that V8 records for an error, with a file name and an offset into the compiled code. Each call site inside the script gives one frame. |
 | end state | A named way a script ends: the `status` of the object it returns, the name a scenario gives, or a throw site. |
+| coverage | Which roles, throw sites, declared end states and phases of one script its scenarios reach. |
+| reach | A scenario reaches a role when its simulation makes a call of the role, a throw site when its simulation ends with an error that the site created, a declared end state when its simulation ends in it, and a phase when a call of its simulation runs under it. |
 | flow map | The graph of every path that the scenarios of one script reach, written as a Mermaid diagram with tables. |
 | node | One box of a flow map: the start, a role, an end state or a throw site. |
 | edge | One step of a flow map, from a node to the node a path reaches next. |

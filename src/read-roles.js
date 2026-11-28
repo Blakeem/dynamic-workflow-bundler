@@ -10,19 +10,38 @@ const ROUND_MARKER_START = new RegExp(`${LABEL_SEPARATOR}r$`);
 const TRAILING_SEPARATORS = new RegExp(`${LABEL_SEPARATOR}+$`);
 
 /**
+ * @typedef {object} RolePlace
+ * @property {string} role
+ * @property {number} offset The offset of the value of the first `label` property that gives the role.
+ */
+
+/**
  * Lists the roles that the call labels of a workflow script start with, from each `label` property of an
  * object literal anywhere in the script, since a script may build the options of a call away from the call.
  * @param {SyntaxNode} program The tree that parseSource gives for the script.
  * @returns {string[]} Each role once, in source order.
  */
 export function readRoles(program) {
+  return readRolePlaces(program).map(({ role }) => role);
+}
+
+/**
+ * Lists the roles as readRoles does, each with the place of the first label that gives it.
+ * @param {SyntaxNode} program The tree that parseSource gives for the script.
+ * @returns {RolePlace[]} Each role once, in source order.
+ */
+export function readRolePlaces(program) {
+  const offsets = new Map();
   const labelValues = listTreeNodes(program)
     .filter((node) => node.type === 'ObjectExpression')
     .flatMap((object) => object.properties.filter(isLabelProperty))
     .map((property) => property.value);
-  const roles = labelValues.map(readRole).filter((role) => role !== '');
 
-  return [...new Set(roles)];
+  for (const value of labelValues) {
+    const role = readRole(value);
+    if (role !== '' && !offsets.has(role)) offsets.set(role, value.start);
+  }
+  return [...offsets].map(([role, offset]) => ({ role, offset }));
 }
 
 /**

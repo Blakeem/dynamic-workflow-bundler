@@ -1,5 +1,5 @@
 import { createFinding } from './finding.js';
-import { isIncludeComment } from './find-directives.js';
+import { isIncludeComment } from './find-include-directives.js';
 import { formatSyntaxErrorReason, isStackSpaceError, PARSE_OPTIONS, PARSER_DEPTH_MESSAGE, parseSource } from './parse-source.js';
 
 /** @typedef {import('./finding.js').Finding} Finding */

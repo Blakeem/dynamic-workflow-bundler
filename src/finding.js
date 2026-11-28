@@ -36,8 +36,8 @@ export const FIXES = Object.freeze({
   'import-kind-conflict': 'Give every import of the file the same type attribute, or none',
   'json-invalid': 'Correct the JSON',
   'include-not-found': 'Correct the path or create the file',
-  'include-misplaced': 'Put the directive alone on its line at the top level of the entry, below the meta statement',
-  'include-twice': 'Name each part in one directive, name no part that is the entry, and import no part as a module',
+  'include-misplaced': 'Put the // @include directive alone on its line at the top level of the entry, below the meta statement',
+  'include-twice': 'Name each part in one // @include directive, name no part that is the entry, and import no part as a module',
   'source-encoding-invalid': 'Save the file as UTF-8',
   'source-too-large': SCRIPT_SIZE_FIX,
   'part-not-plain': 'Make the part a list of complete statements with no import and no export',
@@ -66,6 +66,15 @@ export const FIXES = Object.freeze({
   'clock-unavailable': 'Pass the time through args, or stamp the result after the workflow returns',
   'random-unavailable': 'Pass random values through args, or derive them from a value in args',
   'eval-unavailable': 'Write the code into the script in place of the string',
+  'end-states-misplaced': 'Put it alone on the line above a const whose value is an object literal or an array literal of strings of 1 or more characters',
+  'unreached-misplaced': 'Put it alone on the line above the line that holds the new keyword of a throw new <Name>(...) statement, or remove it',
+  'unreached-no-reason': 'Write the reason after it, as in // @unreached <reason>',
+  'role-unreached': 'Add a scenario whose simulation makes a call of the role',
+  'throw-site-unreached': 'Add a scenario whose simulation ends with its error, or put // @unreached <reason> on the line above it',
+  'throw-site-reached': 'Remove the comment',
+  'end-state-unreached': 'Add a scenario whose simulation ends in it, or remove it from the constant',
+  'phase-unreached': 'Add a scenario with a call under it, or remove it from meta.phases',
+  'phase-unlisted': 'Add the phase to meta.phases, or correct the title that the script gives',
   'global-undefined': Object.freeze({
     meta: 'Copy the values the body needs into a constant of another name',
     arguments: 'Read it only inside a function that is not an arrow function',
@@ -83,7 +92,19 @@ export const FIXES = Object.freeze({
  * @returns {Finding}
  */
 export function createFinding(rule, message, file, text, offset, name = null) {
-  const { line, column } = findPosition(text, offset);
+  return createPlacedFinding(rule, message, file, findPosition(text, offset), name);
+}
+
+/**
+ * Gives a finding as createFinding does, at a place that is already counted.
+ * @param {string} rule
+ * @param {string} message
+ * @param {string} file Kept as it is, since a program reads it as a path.
+ * @param {{ line: number, column: number }} place 1-based.
+ * @param {string | null} [name] The name the finding reports, for a rule whose fix depends on it.
+ * @returns {Finding}
+ */
+export function createPlacedFinding(rule, message, file, { line, column }, name = null) {
   return { rule, message: formatHiddenCharacters(message), fix: readFix(rule, name), file, line, column };
 }
 
