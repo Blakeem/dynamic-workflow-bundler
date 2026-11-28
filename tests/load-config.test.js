@@ -48,7 +48,7 @@ const CONFIG_ERROR_FIXTURES = Object.freeze({
   'unknown-key': /has an unknown key watch$/,
   'workflows-not-list': /has no workflows list$/,
   'workflows-empty': /lists no workflow$/,
-  'workflow-not-object': /^Workflow 2 of the config file .* is not an object of the form \{ entry, out, banner, validate, scenarios, map \}$/,
+  'workflow-not-object': /^Workflow 2 of the config file .* is not an object of the form \{ entry, out, banner, validate, scenarios, map, snapshot, promptBudgets \}$/,
   'workflow-unknown-key': /^Workflow 1 of the config file .* has an unknown key output$/,
   'entry-missing': /^Workflow 1 of the config file .* needs entry, the path of an entry file$/,
   'out-not-string': /^Workflow 1 of the config file .* needs out, the path of the built script$/,
@@ -69,8 +69,8 @@ describe('loadConfig', () => {
 
     assert.deepEqual(config, {
       workflows: [
-        { entry: join(folder, 'workflows', 'review', 'entry.js'), out: join(folder, 'dist', 'review.js'), banner: true, validate: true, scenarios: null, map: null },
-        { entry: join(folder, 'workflows', 'summary', 'entry.js'), out: join(folder, 'dist', 'summary.js'), banner: false, validate: true, scenarios: null, map: null },
+        { entry: join(folder, 'workflows', 'review', 'entry.js'), out: join(folder, 'dist', 'review.js'), banner: true, validate: true, scenarios: null, map: null, snapshot: null, promptBudgets: null },
+        { entry: join(folder, 'workflows', 'summary', 'entry.js'), out: join(folder, 'dist', 'summary.js'), banner: false, validate: true, scenarios: null, map: null, snapshot: null, promptBudgets: null },
       ],
     });
   });

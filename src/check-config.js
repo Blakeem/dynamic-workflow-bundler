@@ -1,17 +1,20 @@
 import { dirname, resolve } from 'node:path';
 import { isFolderPath } from './display-path.js';
 import { isObject } from './is-object.js';
+import { checkPromptBudgets } from './prompt-budget.js';
 import { UsageError } from './usage-error.js';
 
 const CONFIG_KEYS = new Set(['workflows']);
-const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios', 'map']);
-// The words each message gives a path field of a workflow, in the order a map path is compared with them.
-const MAP_CONFLICT_FIELDS = Object.freeze([
+const WORKFLOW_KEYS = new Set(['entry', 'out', 'banner', 'validate', 'scenarios', 'map', 'snapshot', 'promptBudgets']);
+// The words each message gives a path field of a workflow, in the order a map or snapshot path is compared with them.
+const DOCUMENT_CONFLICT_FIELDS = Object.freeze([
   ['entry', 'entry'],
   ['out', 'out file'],
   ['scenarios', 'scenarios file'],
   ['map', 'map'],
+  ['snapshot', 'snapshot'],
 ]);
+const DOCUMENT_FIELDS = Object.freeze(['map', 'snapshot']);
 
 /**
  * @typedef {object} ConfigWorkflow
@@ -21,10 +24,14 @@ const MAP_CONFLICT_FIELDS = Object.freeze([
  * @property {boolean} validate Whether the build, and `dwfb validate` with no script, check the built script
  *   against the contract. Defaults to true.
  * @property {string | null} scenarios The absolute path of the scenarios file that `dwfb simulate`,
- *   `dwfb inspect` and `dwfb map` run `out` against, or null for a workflow that `dwfb simulate` with no script
- *   skips.
+ *   `dwfb inspect`, `dwfb map` and `dwfb snapshot` run `out` against, or null for a workflow that
+ *   `dwfb simulate` with no script skips.
  * @property {string | null} map The absolute path of the flow map that `dwfb map` writes for `out`, or null for
  *   a workflow that `dwfb map` with no script skips.
+ * @property {string | null} snapshot The absolute path of the prompt snapshot that `dwfb snapshot` writes for
+ *   `out`, or null for a workflow that `dwfb snapshot` with no script skips.
+ * @property {Record<string, number> | null} promptBudgets By role, the prompt budget that `dwfb snapshot` holds
+ *   the largest prompt of the role to, or null for none.
  */
 
 /**
@@ -35,11 +42,12 @@ const MAP_CONFLICT_FIELDS = Object.freeze([
 /**
  * Checks the default export of a config file and resolves each path against the config file's folder.
  * Throws a UsageError for a value of another shape, an unknown key, an empty workflows list, a workflow with
- * a missing or wrong-typed field, an entry, out, scenarios or map that ends in a path separator or a `.` or `..`
- * segment, a map with no scenarios, two workflows whose out paths resolve to one path or differ only in letter
- * case, an out path that names the scenarios file of any workflow by either of those rules, a map that
- * names an entry, out, scenarios or other map of any workflow by either of those rules, and an out or map that
- * names the config file by either of those rules.
+ * a missing or wrong-typed field, an entry, out, scenarios, map or snapshot that ends in a path separator or a
+ * `.` or `..` segment, a map or snapshot with no scenarios, promptBudgets with no snapshot, two workflows whose
+ * out paths resolve to one path or differ only in letter case, an out path that names the scenarios file of any
+ * workflow by either of those rules, a map or snapshot that names an entry, out, scenarios, another map or another
+ * snapshot of any workflow, its own included, by either of those rules, and an out, map or snapshot that names the
+ * config file by either of those rules.
  * @param {unknown} value The default export.
  * @param {string} configFile The config file's absolute path.
  * @param {string} configPath The config file's path as the caller gave it, which each message names.
@@ -63,7 +71,7 @@ export function checkConfig(value, configFile, configPath) {
   }
   checkOutFiles(workflows, value.workflows, configPath);
   checkScenariosFiles(workflows, value.workflows, configPath);
-  checkMapFiles(workflows, value.workflows, configPath);
+  checkDocumentFiles(workflows, value.workflows, configPath);
   checkConfigFileTargets(workflows, value.workflows, configFile, configPath);
 
   return { workflows };
@@ -76,10 +84,10 @@ export function checkConfig(value, configFile, configPath) {
  * @returns {ConfigWorkflow}
  */
 function checkWorkflow(row, rowLabel, configFolder) {
-  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate, scenarios, map }`);
+  if (!isObject(row)) throw new UsageError(`${rowLabel} is not an object of the form { entry, out, banner, validate, scenarios, map, snapshot, promptBudgets }`);
   const unknownKey = Object.keys(row).find((key) => !WORKFLOW_KEYS.has(key));
   if (unknownKey !== undefined) throw new UsageError(`${rowLabel} has an unknown key ${unknownKey}`);
-  const { entry, out, banner = true, validate = true, scenarios, map } = row;
+  const { entry, out, banner = true, validate = true, scenarios, map, snapshot, promptBudgets } = row;
   if (typeof entry !== 'string' || entry === '') throw new UsageError(`${rowLabel} needs entry, the path of an entry file`);
   if (typeof out !== 'string' || out === '') throw new UsageError(`${rowLabel} needs out, the path of the built script`);
   if (typeof banner !== 'boolean') throw new UsageError(`${rowLabel} takes banner as a boolean`);
@@ -91,6 +99,11 @@ function checkWorkflow(row, rowLabel, configFolder) {
   if (map !== undefined && (typeof map !== 'string' || map === '')) throw new UsageError(`${rowLabel} takes map as the path of a flow map file`);
   if (map !== undefined && isFolderPath(map)) throw new UsageError(`${rowLabel} gives the map ${map}, which names a folder`);
   if (map !== undefined && scenarios === undefined) throw new UsageError(`${rowLabel} gives map and no scenarios, so name the scenarios file that the flow map is drawn from`);
+  if (snapshot !== undefined && (typeof snapshot !== 'string' || snapshot === '')) throw new UsageError(`${rowLabel} takes snapshot as the path of a prompt snapshot file`);
+  if (snapshot !== undefined && isFolderPath(snapshot)) throw new UsageError(`${rowLabel} gives the snapshot ${snapshot}, which names a folder`);
+  if (snapshot !== undefined && scenarios === undefined) throw new UsageError(`${rowLabel} gives snapshot and no scenarios, so name the scenarios file that the prompt snapshot is drawn from`);
+  if (promptBudgets !== undefined) checkPromptBudgets(promptBudgets, rowLabel);
+  if (promptBudgets !== undefined && snapshot === undefined) throw new UsageError(`${rowLabel} gives promptBudgets and no snapshot, so name the prompt snapshot file that the prompt budgets are checked in`);
 
   return {
     entry: resolve(configFolder, entry),
@@ -99,6 +112,9 @@ function checkWorkflow(row, rowLabel, configFolder) {
     validate,
     scenarios: scenarios === undefined ? null : resolve(configFolder, scenarios),
     map: map === undefined ? null : resolve(configFolder, map),
+    snapshot: snapshot === undefined ? null : resolve(configFolder, snapshot),
+    // A copy, so a change the config module makes after the check reaches no command.
+    promptBudgets: promptBudgets === undefined ? null : Object.fromEntries(Object.entries(promptBudgets)),
   };
 }
 
@@ -147,31 +163,35 @@ function checkScenariosFiles(workflows, rows, configPath) {
 }
 
 /**
- * `dwfb map` would replace a source, a built script, a scenarios file or another flow map with a flow map.
+ * `dwfb map` and `dwfb snapshot` would replace a source, a built script, a scenarios file, a flow map or another
+ * prompt snapshot with the document they write.
  * @param {ConfigWorkflow[]} workflows
  * @param {Record<string, string>[]} rows The workflows as the config file gives them.
  * @param {string} configPath
  */
-function checkMapFiles(workflows, rows, configPath) {
+function checkDocumentFiles(workflows, rows, configPath) {
   workflows.forEach((workflow, index) => {
-    if (workflow.map === null) return;
-    const mapFile = workflow.map;
-    const candidates = workflows.flatMap((other, otherIndex) =>
-      MAP_CONFLICT_FIELDS.filter(([field]) => other[field] !== null && !(otherIndex === index && field === 'map')).map(([field, word]) => ({ file: other[field], field, word, otherIndex })),
-    );
-    // The user wrote both paths, and Windows and macOS file names ignore letter case by default.
-    const sameCandidate = candidates.find((candidate) => candidate.file === mapFile);
-    const conflict = sameCandidate ?? candidates.find((candidate) => candidate.file.toLowerCase() === mapFile.toLowerCase());
-    if (conflict === undefined) return;
+    for (const documentField of DOCUMENT_FIELDS) {
+      const documentFile = workflow[documentField];
+      if (documentFile === null) continue;
+      const candidates = workflows.flatMap((other, otherIndex) =>
+        DOCUMENT_CONFLICT_FIELDS.filter(([field]) => other[field] !== null && !(otherIndex === index && field === documentField)).map(([field, word]) => ({ file: other[field], field, word, otherIndex })),
+      );
+      // The user wrote both paths, and Windows and macOS file names ignore letter case by default.
+      const sameCandidate = candidates.find((candidate) => candidate.file === documentFile);
+      const conflict = sameCandidate ?? candidates.find((candidate) => candidate.file.toLowerCase() === documentFile.toLowerCase());
+      if (conflict === undefined) continue;
 
-    const message = `Workflow ${index + 1} of the config file ${configPath} writes the map ${rows[index].map}, which names the ${conflict.word} ${rows[conflict.otherIndex][conflict.field]} of workflow ${conflict.otherIndex + 1}`;
-    if (sameCandidate !== undefined) throw new UsageError(message);
-    throw new UsageError(`${message} where file names ignore letter case`);
+      const message = `Workflow ${index + 1} of the config file ${configPath} writes the ${documentField} ${rows[index][documentField]}, which names the ${conflict.word} ${rows[conflict.otherIndex][conflict.field]} of workflow ${conflict.otherIndex + 1}`;
+      if (sameCandidate !== undefined) throw new UsageError(message);
+      throw new UsageError(`${message} where file names ignore letter case`);
+    }
   });
 }
 
 /**
- * `dwfb build` would replace the config file with a built script, and `dwfb map` with a flow map.
+ * `dwfb build` would replace the config file with a built script, `dwfb map` with a flow map and `dwfb snapshot`
+ * with a prompt snapshot.
  * @param {ConfigWorkflow[]} workflows
  * @param {Record<string, string>[]} rows The workflows as the config file gives them.
  * @param {string} configFile The config file's absolute path.
@@ -183,11 +203,12 @@ function checkConfigFileTargets(workflows, rows, configFile, configPath) {
   workflows.forEach((workflow, index) => {
     const targets = [
       { file: workflow.out, text: rows[index].out },
-      { file: workflow.map, text: `the map ${rows[index].map}` },
+      ...DOCUMENT_FIELDS.map((field) => ({ file: workflow[field], text: `the ${field} ${rows[index][field]}` })),
     ].filter(({ file }) => file !== null);
-    // The user wrote the out and the map, and named the config file with --config or the working directory lookup
-    // found it. Windows and macOS file names ignore letter case by default. checkMapFiles refuses an out and a map
-    // of one workflow that name one file, so at most one of them names the config file.
+    // The user wrote the out, the map and the snapshot, and named the config file with --config or the working
+    // directory lookup found it. Windows and macOS file names ignore letter case by default. checkDocumentFiles
+    // refuses an out, a map and a snapshot of one workflow that name one file, so at most one of them names the
+    // config file.
     const target = targets.find(({ file }) => file.toLowerCase() === configKey);
     if (target === undefined) return;
 

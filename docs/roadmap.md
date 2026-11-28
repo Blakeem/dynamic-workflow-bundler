@@ -23,7 +23,7 @@ Status is one of `planned`, `building` or `done`.
 | Version | Item | Command | Scope | Status |
 |---|---|---|---|---|
 | 0.0.2 | Flow map | `dwfb map` | Draw a Mermaid graph of every path the scenarios reach, with loops and end states. | done |
-| 0.0.3 | Prompt snapshot | `dwfb snapshot` | Keep one copy of each distinct prompt per role, so a diff shows which prompts an edit reached. Hold a size budget per role. | planned |
+| 0.0.3 | Prompt snapshot | `dwfb snapshot` | Keep one copy of each distinct prompt per role, so a diff shows which prompts an edit reached. Hold a prompt budget per role. | building |
 | 0.0.4 | Coverage | `dwfb coverage` | List each role, throw and end state that no scenario reaches, and each phase title that differs from `meta`. | planned |
 
 ## Version 0.0.5 to 0.0.8: new tools

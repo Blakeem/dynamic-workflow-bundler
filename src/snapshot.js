@@ -1,9 +1,9 @@
 import { buildPromptSnapshot } from './build-prompt-snapshot.js';
 import { CONTRACT_RUNTIME_VERSION } from './contract.js';
-import { formatHiddenCharacters } from './format-hidden-characters.js';
 import { isObject } from './is-object.js';
 import { loadScenarios } from './load-scenarios.js';
 import { PARSE_OPTIONS, parseSource } from './parse-source.js';
+import { checkPromptBudgets } from './prompt-budget.js';
 import { readRoles } from './read-roles.js';
 import { simulateFileScenario } from './simulate-file-scenario.js';
 import { UsageError } from './usage-error.js';
@@ -80,10 +80,6 @@ function readOptions(options) {
  * @returns {Record<string, number>} A copy, so a change the caller makes during the simulations reaches no result.
  */
 function readPromptBudgets(promptBudgets) {
-  if (!isObject(promptBudgets)) throw new UsageError('snapshot() takes promptBudgets as an object that gives a role a whole number of 1 or more');
-  const entries = Object.entries(promptBudgets);
-  const refused = entries.find(([, promptBudget]) => !Number.isInteger(promptBudget) || /** @type {number} */ (promptBudget) < 1);
-
-  if (refused !== undefined) throw new UsageError(`snapshot() takes the prompt budget of the role "${formatHiddenCharacters(refused[0])}" as a whole number of 1 or more`);
-  return Object.fromEntries(/** @type {[string, number][]} */ (entries));
+  checkPromptBudgets(promptBudgets, 'snapshot()');
+  return Object.fromEntries(Object.entries(promptBudgets));
 }

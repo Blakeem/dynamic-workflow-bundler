@@ -58,6 +58,7 @@ One word per concept, in code, commands, messages and docs. Never use a second w
 | prompt snapshot | The document that holds one copy of each variant of one script. A diff of it shows which prompts an edit reached. |
 | variant | One distinct prompt of a role. Two prompts of one role are one variant when they have one schema and are equal once the item, each UUID, each lowercase hex word of 8 or more characters and each number are masked. |
 | prompt budget | The most characters that the largest prompt of one role may hold. It is never shortened to `budget`, which names the numbers a script reads from the runtime. |
+| document | A flow map or a prompt snapshot, which a command writes for one script from its scenarios. Its kind says which of the two it is, and its document file is the file that holds it. |
 | prompt digest | One hash of the label, the prompt and the schema of every call of every scenario. Two scripts have one digest only when their calls, in scenario file order and then in call order, have the same labels, prompts and schemas. |
 | scripted return | The value a scenario gives one call. `null` stands for an agent that died. |
 | stop | The end of a simulation that cannot go on: at a call that gets no usable scripted return, at the call after the runtime's cap on `agent()` calls, when the script waits on a promise that nothing settles, or before a script that reads a name the running Node lacks. |
@@ -72,7 +73,7 @@ Add a row before a new concept gets a name in code.
   `dwfb.config.mjs`. A command that needs the config file stops when both exist.
 - **No Anthropic mark in a name.** Never put "Claude", "Claude Code" or "Anthropic" in a package, command,
   file, export or option name. Say "Claude Code" only in plain descriptive text.
-- **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`, `map`. A new command takes
+- **Commands are one plain verb:** `build`, `validate`, `locate`, `simulate`, `inspect`, `map`, `snapshot`. A new command takes
   a verb that no existing command could be mistaken for.
 - **The library exports each command's verb** as a function, such as `build()` and `locate()`.
 - **Options are full words in kebab-case:** `--out`, `--check`, `--json`. A one-letter alias exists only for

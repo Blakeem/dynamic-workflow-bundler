@@ -20,17 +20,18 @@ function assertUsageError(value, message) {
 }
 
 describe('checkConfig', () => {
-  it('resolves each path against the config file folder, defaults banner and validate to true and scenarios and map to null', () => {
+  it('resolves each path against the config file folder, defaults banner and validate to true and scenarios, map, snapshot and promptBudgets to null', () => {
+    const promptBudgets = { review: 4000, 'verify r': 1 };
     const config = check({
       workflows: [
         { entry: 'a/entry.js', out: '../dist/a.js' },
-        { entry: 'b.js', out: 'b.out.js', banner: false, validate: false, scenarios: '../b/scenarios.js', map: 'docs/b.flow-map.md' },
+        { entry: 'b.js', out: 'b.out.js', banner: false, validate: false, scenarios: '../b/scenarios.js', map: 'docs/b.flow-map.md', snapshot: 'docs/b.prompts.md', promptBudgets },
       ],
     });
 
     assert.deepEqual(config, {
       workflows: [
-        { entry: join(PROJECT_FOLDER, 'a', 'entry.js'), out: resolve(PROJECT_FOLDER, '..', 'dist', 'a.js'), banner: true, validate: true, scenarios: null, map: null },
+        { entry: join(PROJECT_FOLDER, 'a', 'entry.js'), out: resolve(PROJECT_FOLDER, '..', 'dist', 'a.js'), banner: true, validate: true, scenarios: null, map: null, snapshot: null, promptBudgets: null },
         {
           entry: join(PROJECT_FOLDER, 'b.js'),
           out: join(PROJECT_FOLDER, 'b.out.js'),
@@ -38,9 +39,54 @@ describe('checkConfig', () => {
           validate: false,
           scenarios: resolve(PROJECT_FOLDER, '..', 'b', 'scenarios.js'),
           map: join(PROJECT_FOLDER, 'docs', 'b.flow-map.md'),
+          snapshot: join(PROJECT_FOLDER, 'docs', 'b.prompts.md'),
+          promptBudgets: { review: 4000, 'verify r': 1 },
         },
       ],
     });
+    promptBudgets.review = 1;
+    assert.equal(config.workflows[1].promptBudgets?.review, 4000);
+  });
+
+  it('names a snapshot of the wrong type, a snapshot that names a folder and a snapshot with no scenarios', () => {
+    const label = 'Workflow 1 of the config file dwfb.config.js';
+    const row = { entry: 'a.js', out: 'a.out.js', scenarios: 's.js' };
+
+    for (const snapshot of ['', 5, null]) assertUsageError({ workflows: [{ ...row, snapshot }] }, `${label} takes snapshot as the path of a prompt snapshot file`);
+    assertUsageError({ workflows: [{ ...row, snapshot: 'docs/' }] }, `${label} gives the snapshot docs/, which names a folder`);
+    assertUsageError({ workflows: [{ ...row, snapshot: 'docs/..' }] }, `${label} gives the snapshot docs/.., which names a folder`);
+    assertUsageError({ workflows: [{ entry: 'a.js', out: 'a.out.js', snapshot: 'a.md' }] }, `${label} gives snapshot and no scenarios, so name the scenarios file that the prompt snapshot is drawn from`);
+  });
+
+  it('names promptBudgets of another shape, the role of a prompt budget of another shape and promptBudgets with no snapshot', () => {
+    const label = 'Workflow 1 of the config file dwfb.config.js';
+    const row = { entry: 'a.js', out: 'a.out.js', scenarios: 's.js', snapshot: 'a.md' };
+    const refusedShapes = [null, 5, 'review', [4000]];
+    const refusedPromptBudgets = [0, 1.5, '4000', Number.NaN, Number.POSITIVE_INFINITY, -1];
+
+    for (const promptBudgets of refusedShapes) assertUsageError({ workflows: [{ ...row, promptBudgets }] }, `${label} takes promptBudgets as an object that gives a role a whole number of 1 or more`);
+    for (const promptBudget of refusedPromptBudgets) {
+      assertUsageError({ workflows: [{ ...row, promptBudgets: { check: 9, 'review\n': promptBudget } }] }, `${label} takes the prompt budget of the role "review\\u{000A}" as a whole number of 1 or more`);
+    }
+    assertUsageError({ workflows: [{ entry: 'a.js', out: 'a.out.js', scenarios: 's.js', promptBudgets: { review: 1 } }] }, `${label} gives promptBudgets and no snapshot, so name the prompt snapshot file that the prompt budgets are checked in`);
+    assert.deepEqual(check({ workflows: [{ ...row, promptBudgets: {} }] }).workflows[0].promptBudgets, {});
+  });
+
+  it('names a snapshot that names the entry, out, scenarios, map or snapshot of its own or another workflow, and a map that names a snapshot, by any spelling or letter case', () => {
+    const first = { entry: 'a.js', out: 'a.out.js', scenarios: 'a.scenarios.js', snapshot: 'a.prompts.md' };
+    const cases = [
+      [[{ ...first, snapshot: 'a.js' }], 'Workflow 1 of the config file dwfb.config.js writes the snapshot a.js, which names the entry a.js of workflow 1'],
+      [[{ ...first, snapshot: './a.out.js' }], 'Workflow 1 of the config file dwfb.config.js writes the snapshot ./a.out.js, which names the out file a.out.js of workflow 1'],
+      [[{ ...first, snapshot: 'x/../a.scenarios.js' }], 'Workflow 1 of the config file dwfb.config.js writes the snapshot x/../a.scenarios.js, which names the scenarios file a.scenarios.js of workflow 1'],
+      [[{ ...first, map: 'a.md', snapshot: 'a.md' }], 'Workflow 1 of the config file dwfb.config.js writes the map a.md, which names the snapshot a.md of workflow 1'],
+      [[{ ...first, map: 'a.md', snapshot: 'A.md' }], 'Workflow 1 of the config file dwfb.config.js writes the map a.md, which names the snapshot A.md of workflow 1 where file names ignore letter case'],
+      [[first, { entry: 'b.js', out: 'b.out.js', scenarios: 'b.scenarios.js', snapshot: 'a.prompts.md' }], 'Workflow 1 of the config file dwfb.config.js writes the snapshot a.prompts.md, which names the snapshot a.prompts.md of workflow 2'],
+      [[first, { entry: 'b.js', out: 'b.out.js', scenarios: 'b.scenarios.js', map: './A.prompts.md' }], 'Workflow 1 of the config file dwfb.config.js writes the snapshot a.prompts.md, which names the map ./A.prompts.md of workflow 2 where file names ignore letter case'],
+      [[{ entry: 'b.js', out: 'b.out.js', scenarios: 'b.scenarios.js', map: 'a.prompts.md' }, first], 'Workflow 1 of the config file dwfb.config.js writes the map a.prompts.md, which names the snapshot a.prompts.md of workflow 2'],
+      [[first, { entry: 'B.js', out: 'b.out.js' }, { entry: 'c.js', out: 'c.out.js', scenarios: 'c.scenarios.js', snapshot: 'b.js' }], 'Workflow 3 of the config file dwfb.config.js writes the snapshot b.js, which names the entry B.js of workflow 2 where file names ignore letter case'],
+    ];
+
+    for (const [workflows, message] of cases) assertUsageError({ workflows }, message);
   });
 
   it('names a map of the wrong type, a map that names a folder and a map with no scenarios', () => {
@@ -68,13 +114,15 @@ describe('checkConfig', () => {
     for (const [workflows, message] of cases) assertUsageError({ workflows }, message);
   });
 
-  it('names an out or a map that names the config file, by any spelling or letter case', () => {
+  it('names an out, a map or a snapshot that names the config file, by any spelling or letter case', () => {
     const row = { entry: 'a.js', out: 'a.out.js', scenarios: 'a.scenarios.js' };
     const cases = [
       [{ ...row, out: 'dwfb.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes dwfb.config.js, which names the config file'],
       [{ ...row, out: 'x/../DWFB.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes x/../DWFB.config.js, which names the config file where file names ignore letter case'],
       [{ ...row, map: './dwfb.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the map ./dwfb.config.js, which names the config file'],
       [{ ...row, map: 'Dwfb.Config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the map Dwfb.Config.js, which names the config file where file names ignore letter case'],
+      [{ ...row, snapshot: './dwfb.config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the snapshot ./dwfb.config.js, which names the config file'],
+      [{ ...row, snapshot: 'x/../DWFB.Config.js' }, 'Workflow 1 of the config file dwfb.config.js writes the snapshot x/../DWFB.Config.js, which names the config file where file names ignore letter case'],
     ];
 
     for (const [workflow, message] of cases) assertUsageError({ workflows: [workflow] }, message);
@@ -98,8 +146,8 @@ describe('checkConfig', () => {
     const label = 'Workflow 2 of the config file dwfb.config.js';
     const first = { entry: 'a.js', out: 'a.out.js' };
 
-    assertUsageError({ workflows: [first, 'b.js'] }, `${label} is not an object of the form { entry, out, banner, validate, scenarios, map }`);
-    assertUsageError({ workflows: [first, , first] }, `${label} is not an object of the form { entry, out, banner, validate, scenarios, map }`);
+    assertUsageError({ workflows: [first, 'b.js'] }, `${label} is not an object of the form { entry, out, banner, validate, scenarios, map, snapshot, promptBudgets }`);
+    assertUsageError({ workflows: [first, , first] }, `${label} is not an object of the form { entry, out, banner, validate, scenarios, map, snapshot, promptBudgets }`);
     assertUsageError({ workflows: [first, { entry: 'b.js', output: 'b.out.js' }] }, `${label} has an unknown key output`);
     assertUsageError({ workflows: [first, { out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);
     assertUsageError({ workflows: [first, { entry: '', out: 'b.out.js' }] }, `${label} needs entry, the path of an entry file`);

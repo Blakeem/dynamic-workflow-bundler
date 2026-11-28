@@ -6,6 +6,7 @@ import { runInspect } from './run-inspect.js';
 import { runLocate } from './run-locate.js';
 import { runMap } from './run-map.js';
 import { runSimulate } from './run-simulate.js';
+import { runSnapshot } from './run-snapshot.js';
 import { runValidate } from './run-validate.js';
 
 const MAIN_USAGE = `Usage: dwfb <command> [options]
@@ -24,6 +25,9 @@ Commands:
   simulate [<script>] [--scenarios <file>]
                                    Run a workflow script against each scenario of a scenarios file, with
                                    no model call, and print how each simulation ended.
+  snapshot [<script>] [--scenarios <file>] [--out <file>]
+                                   Run a workflow script against each scenario of a scenarios file, with
+                                   no model call, and write one copy of each distinct prompt per role.
   validate [<script>...]           Report each rule of the runtime's contract that a workflow script
                                    breaks.
 
@@ -50,6 +54,7 @@ async function runCommand(args) {
   if (command === 'locate') return runLocate(commandArgs);
   if (command === 'map') return runMap(commandArgs);
   if (command === 'simulate') return runSimulate(commandArgs);
+  if (command === 'snapshot') return runSnapshot(commandArgs);
   if (command === 'validate') return runValidate(commandArgs);
   if (isMainOption && commandArgs.length > 0) return printUsageError('dwfb', `The option ${command} takes no other argument, and ${JSON.stringify(commandArgs[0])} follows it.\n\n${MAIN_USAGE}`);
   if (command === '--version') return printResult(`${readVersion()}\n`);

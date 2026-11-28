@@ -7,9 +7,11 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CONTRACT_RUNTIME_VERSION } from '../src/contract.js';
 import { formatFlowMap } from '../src/format-flow-map.js';
+import { formatPromptSnapshot } from '../src/format-prompt-snapshot.js';
 import { map as mapLibrary } from '../src/map.js';
 import { READ_BYTE_LIMIT } from '../src/read-byte-limit.js';
 import { listMissingGlobalNames } from '../src/run-simulation.js';
+import { snapshot as snapshotLibrary } from '../src/snapshot.js';
 import { sliceMarkdownSection } from './support/slice-markdown-section.js';
 import { writeSizedFile } from './support/write-sized-file.js';
 
@@ -17,6 +19,7 @@ const COMMAND = fileURLToPath(new URL('../bin/dwfb.js', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const MODULES_ENTRY = join(FIXTURES, 'modules', 'entry.js');
 const CONFIG_FIXTURES = join(FIXTURES, 'config');
+const PROMPT_SNAPSHOT_FIXTURES = join(FIXTURES, 'prompt-snapshot');
 const PACKAGE = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const README_SIMULATE_HEADING = '\n## dwfb simulate\n';
 const README_FILE_PATTERN = /^`(?<path>[^`\n]+)`:\n\n```js\n(?<code>[^]*?)```$/gm;
@@ -1850,6 +1853,360 @@ describe('dwfb map', () => {
     assert.match(stdout, /^Usage: dwfb map \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[options\]\n[^]*\n {2}--out <file> {9}Write the flow map to this file\.\n/);
     assert.match(stdout, /\n\nA scenario is mapped only when its script follows these rules\. Each agent\(\) call has a label\.[^]*the first \$\{\.\.\.\} of a label string[^]*one item of a pipeline\(\)\.\n\nOptions:\n/);
     assert.match(runCommand(['--help']).stdout, /\n {2}map \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
+  });
+});
+
+describe('dwfb snapshot', () => {
+  const FLOW_SCRIPT = "export const meta = { name: 'flow', description: 'd' };\nawait agent('Work.', { label: 'work' });\nreturn { status: 'done' };\n";
+  const FLOW_SCENARIOS = "export default [{ name: 'works', respond: { work: 'ok' } }];\n";
+  const CONFIG = [
+    'export default { workflows: [\n',
+    "  { entry: 'review.entry.js', out: 'review.js', scenarios: 'review.scenarios.js', snapshot: 'prompts/review.prompts.md' },\n",
+    "  { entry: 'plain.entry.js', out: 'plain.js', scenarios: 'review.scenarios.js' },\n",
+    "  { entry: 'flow.entry.js', out: 'flow.js', scenarios: 'flow.scenarios.js', map: 'maps/flow.flow-map.md', snapshot: 'prompts/flow.prompts.md' },\n",
+    '] };\n',
+  ].join('');
+  const ROLE_LINES = '  review: 108 characters\n  verify: 84 characters\n  summary: 55 characters\n';
+  const FLOW_ROLE_LINE = '  work: 5 characters\n';
+  const REVIEW_SCENARIOS_ARGS = ['--scenarios', 'review.scenarios.js'];
+  const CLOCK_SCRIPT = "export const meta = { name: 'clock', description: 'd' };\nreturn Date.now();\n";
+  const README_SECTION_HEADING = '\n## dwfb snapshot\n';
+  const README_RUN_PATTERN = /^\$ dwfb (?<args>snapshot [^\n]*)\n(?<output>[^]*?)```$/m;
+  const README_SNAPSHOT_FILE_PATTERN = /^`(?<path>[^`\n]+)`, which starts:\n\n````markdown\n(?<text>[^]*?)````$/m;
+
+  /**
+   * @returns {Promise<string>} A new folder of an ES module package that holds the oracle script and scenarios
+   *   file, flow.js with its scenarios file, and the config file of these tests.
+   */
+  async function writeSnapshotFolder() {
+    const folder = await makeTemporaryFolder();
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG);
+    await cp(join(PROMPT_SNAPSHOT_FIXTURES, 'review.js'), join(folder, 'review.js'));
+    await cp(join(PROMPT_SNAPSHOT_FIXTURES, 'review.js'), join(folder, 'plain.js'));
+    await cp(join(PROMPT_SNAPSHOT_FIXTURES, 'review.scenarios.js'), join(folder, 'review.scenarios.js'));
+    await writeFile(join(folder, 'flow.js'), FLOW_SCRIPT);
+    await writeFile(join(folder, 'flow.scenarios.js'), FLOW_SCENARIOS);
+    return folder;
+  }
+
+  /** @returns {Promise<string>} The bytes of the oracle prompt snapshot of review.js. */
+  async function readOracleDocument() {
+    return readFile(join(PROMPT_SNAPSHOT_FIXTURES, 'review.prompts.md'), 'utf8');
+  }
+
+  /**
+   * @param {string} folder
+   * @returns {Promise<string>} The prompt snapshot that the library gives for flow.js and its scenarios file.
+   */
+  async function formatExpectedFlowSnapshot(folder) {
+    const { variants } = await snapshotLibrary({ script: join(folder, 'flow.js'), scenarios: join(folder, 'flow.scenarios.js') });
+    return formatPromptSnapshot('flow', /** @type {import('../src/snapshot.js').PromptVariant[]} */ (variants));
+  }
+
+  it('prints the prompt snapshot of a script and the scenarios file --scenarios names, and writes no file', async () => {
+    const folder = await writeSnapshotFolder();
+    const oracle = await readOracleDocument();
+
+    assert.deepEqual(runCommand(['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS], folder), { status: 0, stdout: oracle, stderr: '' });
+    assert.deepEqual(runCommand(['snapshot', 'plain.js'], folder), { status: 0, stdout: oracle, stderr: '' });
+    assert.equal((await readdir(folder)).includes('prompts'), false);
+  });
+
+  it('writes the file --out names, creating its folder, and then leaves the file unchanged when its bytes would not change', async () => {
+    const folder = await writeSnapshotFolder();
+    const file = join(folder, 'docs', 'deep', 'review.md');
+    const oldTime = new Date('2001-01-01T00:00:00Z');
+    const args = ['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'docs/deep/review.md'];
+
+    assert.deepEqual(runCommand(args, folder), { status: 0, stdout: `Wrote docs/deep/review.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), await readOracleDocument());
+    await utimes(file, oldTime, oldTime);
+    assert.deepEqual(runCommand(args, folder), { status: 0, stdout: `Unchanged docs/deep/review.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal((await stat(file)).mtimeMs, oldTime.getTime());
+    await writeFile(file, 'old');
+    assert.deepEqual(runCommand(args, folder), { status: 0, stdout: `Wrote docs/deep/review.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), await readOracleDocument());
+  });
+
+  it('writes the snapshot of the config workflow whose out is the script, and with no script the snapshot of each workflow that has one', async () => {
+    const folder = await writeSnapshotFolder();
+
+    assert.deepEqual(runCommand(['snapshot', 'review.js'], folder), { status: 0, stdout: `Wrote prompts/review.prompts.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal(await readFile(join(folder, 'prompts', 'review.prompts.md'), 'utf8'), await readOracleDocument());
+    assert.deepEqual(runCommand(['snapshot'], folder), { status: 0, stdout: `Unchanged prompts/review.prompts.md.\n${ROLE_LINES}Wrote prompts/flow.prompts.md.\n${FLOW_ROLE_LINE}`, stderr: '' });
+    assert.equal(await readFile(join(folder, 'prompts', 'flow.prompts.md'), 'utf8'), await formatExpectedFlowSnapshot(folder));
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['flow.prompts.md', 'review.prompts.md']);
+  });
+
+  it('reports each file as fresh, stale or missing with --check, writes nothing, and exits 1 for a stale or missing file', async () => {
+    const folder = await writeSnapshotFolder();
+    const file = join(folder, 'prompts', 'review.prompts.md');
+
+    assert.deepEqual(runCommand(['snapshot', 'review.js', '--check'], folder), { status: 1, stdout: `Stale prompts/review.prompts.md: the file is missing.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal((await readdir(folder)).includes('prompts'), false);
+    await mkdir(join(folder, 'prompts'));
+    await writeFile(file, 'old');
+    assert.deepEqual(runCommand(['snapshot', 'review.js', '--check'], folder), { status: 1, stdout: `Stale prompts/review.prompts.md: the file differs from the prompt snapshot of review.js.\n${ROLE_LINES}`, stderr: '' });
+    assert.equal(await readFile(file, 'utf8'), 'old');
+    await writeFile(file, await readOracleDocument());
+    assert.deepEqual(runCommand(['snapshot', 'review.js', '--check'], folder), { status: 0, stdout: `Fresh prompts/review.prompts.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.deepEqual(runCommand(['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'prompts/review.prompts.md', '--check'], folder), { status: 0, stdout: `Fresh prompts/review.prompts.md.\n${ROLE_LINES}`, stderr: '' });
+    assert.deepEqual(runCommand(['snapshot', '--check'], folder), { status: 1, stdout: `Fresh prompts/review.prompts.md.\n${ROLE_LINES}Stale prompts/flow.prompts.md: the file is missing.\n${FLOW_ROLE_LINE}`, stderr: '' });
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['review.prompts.md']);
+  });
+
+  it('prints one JSON object with the result of snapshot() for each script, writes no file, and gives each the check of its file with --check', async () => {
+    const folder = await writeSnapshotFolder();
+    const file = join(folder, 'prompts', 'review.prompts.md');
+    const reviewResult = await snapshotLibrary({ script: join(folder, 'review.js'), scenarios: join(folder, 'review.scenarios.js') });
+    /** @param {string[]} args */
+    const runCheck = (args) => {
+      const { status, stdout, stderr } = runCommand(args, folder);
+      const { ok, snapshots } = JSON.parse(stdout);
+      return { status, stderr, ok, checks: snapshots.map(({ script, file: snapshotFile, check }) => ({ script, file: snapshotFile, check })) };
+    };
+    const scriptRun = runCommand(['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--json'], folder);
+
+    assert.deepEqual({ status: scriptRun.status, stderr: scriptRun.stderr }, { status: 0, stderr: '' });
+    assert.deepEqual(JSON.parse(scriptRun.stdout), { ok: true, runtime: CONTRACT_RUNTIME_VERSION, snapshots: [{ file: null, check: null, ...reviewResult, script: 'review.js', findings: [] }] });
+    assert.deepEqual(runCheck(['snapshot', '--json']), {
+      status: 0,
+      stderr: '',
+      ok: true,
+      checks: [{ script: 'review.js', file: 'prompts/review.prompts.md', check: null }, { script: 'flow.js', file: 'prompts/flow.prompts.md', check: null }],
+    });
+    assert.deepEqual(runCheck(['snapshot', 'review.js', '--check', '--json']), { status: 1, stderr: '', ok: false, checks: [{ script: 'review.js', file: 'prompts/review.prompts.md', check: 'missing' }] });
+    assert.equal((await readdir(folder)).includes('prompts'), false);
+    await mkdir(join(folder, 'prompts'));
+    await writeFile(file, 'old');
+    assert.deepEqual(runCheck(['snapshot', 'review.js', '--check', '--json']), { status: 1, stderr: '', ok: false, checks: [{ script: 'review.js', file: 'prompts/review.prompts.md', check: 'stale' }] });
+    assert.equal(await readFile(file, 'utf8'), 'old');
+    await writeFile(file, await readOracleDocument());
+    assert.deepEqual(runCheck(['snapshot', 'review.js', '--check', '--json']), { status: 0, stderr: '', ok: true, checks: [{ script: 'review.js', file: 'prompts/review.prompts.md', check: 'fresh' }] });
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['review.prompts.md']);
+  });
+
+  it('prints a line per prompt budget problem after the role lines, still writes the file, and exits 1', async () => {
+    const folder = await writeSnapshotFolder();
+    const promptBudgets = "promptBudgets: { review: 100, verify: 84, 'gh\\tost': 5 }";
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG.replace("snapshot: 'prompts/review.prompts.md' }", `snapshot: 'prompts/review.prompts.md', ${promptBudgets} }`));
+    const stdout = [
+      'Wrote prompts/review.prompts.md.',
+      '  review: 108 characters, prompt budget 100',
+      '  verify: 84 characters, prompt budget 84',
+      '  summary: 55 characters',
+      'review.js review: the largest prompt has 108 characters, 8 over its prompt budget of 100.',
+      'review.js summary: the largest prompt has 55 characters and the role has no prompt budget, so give it one in promptBudgets.',
+      'review.js gh\\u{0009}ost: promptBudgets names this role, and no scenario makes a call of it.',
+      '',
+    ].join('\n');
+    const jsonRun = runCommand(['snapshot', 'review.js', '--json'], folder);
+
+    assert.deepEqual(runCommand(['snapshot', 'review.js'], folder), { status: 1, stdout, stderr: '' });
+    assert.equal(await readFile(join(folder, 'prompts', 'review.prompts.md'), 'utf8'), await readOracleDocument());
+    assert.deepEqual(runCommand(['snapshot', 'review.js', '--check'], folder), { status: 1, stdout: stdout.replace('Wrote', 'Fresh'), stderr: '' });
+    assert.deepEqual({ status: jsonRun.status, stderr: jsonRun.stderr }, { status: 1, stderr: '' });
+    assert.deepEqual(JSON.parse(jsonRun.stdout).snapshots[0].promptBudgetProblems, [
+      { role: 'review', kind: 'over', characters: 108, promptBudget: 100 },
+      { role: 'summary', kind: 'missing', characters: 55, promptBudget: null },
+      { role: 'gh\tost', kind: 'unused', characters: null, promptBudget: 5 },
+    ]);
+    // A named scenarios file reads no config file, so the script has no prompt budgets.
+    assert.deepEqual(runCommand(['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'prompts/review.prompts.md'], folder), { status: 0, stdout: `Unchanged prompts/review.prompts.md.\n${ROLE_LINES}`, stderr: '' });
+  });
+
+  it('prints one line per unread scenario, writes no file for its script, still writes the other workflows and exits 1', async () => {
+    const folder = await writeSnapshotFolder();
+    await writeFile(join(folder, 'flow.scenarios.js'), "export default [{ name: 'no\\treturn', respond: {} }, { name: 'works', respond: { work: 'ok' } }];\n");
+    const { unread } = await snapshotLibrary({ script: join(folder, 'flow.js'), scenarios: join(folder, 'flow.scenarios.js') });
+    const unreadLine = `flow.js no\\u{0009}return: not read, since ${unread[0].reason}.\n`;
+
+    assert.match(unread[0].reason, /^stopped at /);
+    assert.deepEqual(runCommand(['snapshot'], folder), { status: 1, stdout: `Wrote prompts/review.prompts.md.\n${ROLE_LINES}${unreadLine}`, stderr: '' });
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['review.prompts.md']);
+    assert.deepEqual(runCommand(['snapshot', 'flow.js', '--scenarios', 'flow.scenarios.js'], folder), { status: 1, stdout: unreadLine, stderr: '' });
+  });
+
+  it('prints the findings of a refused script before its unread scenarios, and the line of a script with no call, and writes no file', async () => {
+    const folder = await writeSnapshotFolder();
+    await writeFile(join(folder, 'clock.js'), CLOCK_SCRIPT);
+    await writeFile(join(folder, 'idle.js'), "export const meta = { name: 'idle', description: 'd' };\nreturn { status: 'done' };\n");
+    const clockRun = runCommand(['snapshot', 'clock.js', '--scenarios', 'flow.scenarios.js', '--json'], folder);
+
+    assert.deepEqual(runCommand(['snapshot', 'clock.js', '--scenarios', 'flow.scenarios.js', '--out', 'clock.md'], folder), {
+      status: 1,
+      stdout: [
+        'clock.js:2:8 clock-unavailable The script uses Date.now, which throws in the runtime when called. Pass the time through args, or stamp the result after the workflow returns.\n',
+        'clock.js works: not read, since refused.\n',
+      ].join(''),
+      stderr: '',
+    });
+    assert.deepEqual(runCommand(['snapshot', 'idle.js', '--scenarios', 'flow.scenarios.js', '--out', 'idle.md'], folder), { status: 1, stdout: 'idle.js: no prompt snapshot, since no scenario makes an agent() call.\n', stderr: '' });
+    assert.deepEqual(runCommand(['snapshot', 'idle.js', '--scenarios', 'flow.scenarios.js'], folder), { status: 1, stdout: 'idle.js: no prompt snapshot, since no scenario makes an agent() call.\n', stderr: '' });
+    assert.equal(clockRun.status, 1);
+    assert.deepEqual(JSON.parse(clockRun.stdout).snapshots[0].findings.map(({ rule, line, column }) => ({ rule, line, column })), [{ rule: 'clock-unavailable', line: 2, column: 8 }]);
+    assert.deepEqual((await readdir(folder)).filter((name) => name.endsWith('.md')), []);
+  });
+
+  it('prints each usage error to stderr and exits 2', async () => {
+    const folder = await writeSnapshotFolder();
+    const emptyFolder = await makeTemporaryFolder();
+    const promptBudgetFolder = await makeTemporaryFolder();
+    await writeFile(join(emptyFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(emptyFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.out.js' }] };\n");
+    await writeFile(join(promptBudgetFolder, 'package.json'), '{ "type": "module" }\n');
+    await writeFile(join(promptBudgetFolder, 'dwfb.config.js'), "export default { workflows: [{ entry: 'a.js', out: 'a.out.js', scenarios: 's.js', snapshot: 'a.md', promptBudgets: { review: 0 } }] };\n");
+    const cases = [
+      [folder, ['snapshot', 'review.js', 'flow.js'], /^dwfb snapshot: Name one workflow script\.\n\nUsage: dwfb snapshot /],
+      [folder, ['snapshot', ''], /^dwfb snapshot: Name one workflow script\.\n/],
+      [folder, ['snapshot', 'review.js', '--scenarios', ''], /^dwfb snapshot: Name the scenarios file with --scenarios <file>\.\n/],
+      [folder, ['snapshot', 'review.js', '--out', ''], /^dwfb snapshot: Name the prompt snapshot file with --out <file>\.\n/],
+      [folder, ['snapshot', 'review.js', '--config', ''], /^dwfb snapshot: Name the config file with --config <path>\.\n/],
+      [folder, ['snapshot', 'review.js', '--out', 'prompts/'], /^dwfb snapshot: The out path prompts\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['snapshot', 'review.js', '--out', 'prompts/', '--json'], /^dwfb snapshot: The out path prompts\/ names a folder, so name a file with --out <file>\.\n/],
+      [folder, ['snapshot', ...REVIEW_SCENARIOS_ARGS], /^dwfb snapshot: Name the script that --scenarios snapshots\.\n/],
+      [folder, ['snapshot', '--out', 'x.md'], /^dwfb snapshot: Name the script whose prompt snapshot --out writes\.\n/],
+      [folder, ['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--config', 'dwfb.config.js'], /^dwfb snapshot: Name --scenarios or --config, not both, since a named scenarios file needs no config file\.\n/],
+      [folder, ['snapshot', 'review.js', '--verbose'], /^dwfb snapshot: Unknown option '--verbose'/],
+      [folder, ['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--check'], /^dwfb snapshot: Name the prompt snapshot file that --check compares with --out <file>, since a named scenarios file reads no config file\.\n$/],
+      [folder, ['snapshot', 'plain.js', '--check'], /^dwfb snapshot: Name the prompt snapshot file that --check compares with --out <file>, since no snapshot of the config file names one\.\n$/],
+      [folder, ['snapshot', 'review.js', '--scenarios', 'missing.js'], /^dwfb snapshot: The scenarios file missing\.js does not exist/],
+      [folder, ['snapshot', 'missing.js', ...REVIEW_SCENARIOS_ARGS], /^dwfb snapshot: The script file missing\.js does not exist\.\n$/],
+      [emptyFolder, ['snapshot'], /^dwfb snapshot: The config file dwfb\.config\.js has no workflow with snapshot, so give a workflow snapshot, or name a script\.\n$/],
+      [promptBudgetFolder, ['snapshot'], /^dwfb snapshot: Workflow 1 of the config file dwfb\.config\.js takes the prompt budget of the role "review" as a whole number of 1 or more\.\n$/],
+      [await makeTemporaryFolder(), ['snapshot'], /^dwfb snapshot: No config file dwfb\.config\.js or dwfb\.config\.mjs exists here, so name a script, or name a config file with --config <path>\.\n$/],
+    ];
+
+    for (const [cwd, args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, cwd);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+    assert.equal((await readdir(folder)).includes('prompts'), false);
+  });
+
+  it('refuses a prompt snapshot file that names a script, a scenarios file, a source, the config file, a flow map file or the prompt snapshot file of another workflow, and keeps its bytes', async () => {
+    const folder = await writeSnapshotFolder();
+    await writeFile(join(folder, 'flow.entry.js'), "export const meta = { name: 'flow', description: 'd' };\nimport { prompt } from './prompt.js';\nawait agent(prompt, { label: 'work' });\n");
+    await writeFile(join(folder, 'prompt.js'), "export const prompt = 'Work.';\n");
+    await mkdir(join(folder, 'maps'));
+    await mkdir(join(folder, 'prompts'));
+    await writeFile(join(folder, 'maps', 'flow.flow-map.md'), 'map\n');
+    await writeFile(join(folder, 'prompts', 'flow.prompts.md'), 'snapshot\n');
+    const keptFiles = ['review.js', 'review.scenarios.js', 'prompt.js', 'dwfb.config.js', join('maps', 'flow.flow-map.md'), join('prompts', 'flow.prompts.md')];
+    const keptBytes = await Promise.all(keptFiles.map((name) => readFile(join(folder, name), 'utf8')));
+    const cases = [
+      [['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', './review.js'], /^dwfb snapshot: The prompt snapshot file \.\/review\.js names the script review\.js, which the prompt snapshot would replace\.\n$/],
+      // The real path of REVIEW.js keeps that spelling where file names keep letter case, and is review.js on Windows.
+      [['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'REVIEW.js'], /^dwfb snapshot: The prompt snapshot file REVIEW\.js names the script review\.js( where file names ignore letter case)?, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'review.scenarios.js'], /^dwfb snapshot: The prompt snapshot file review\.scenarios\.js names the scenarios file review\.scenarios\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'flow.js', '--out', 'prompt.js'], /^dwfb snapshot: The prompt snapshot file prompt\.js names the source prompt\.js of the entry flow\.entry\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', '--out', 'review.entry.js'], /^dwfb snapshot: The prompt snapshot file review\.entry\.js names the entry review\.entry\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', '--out', 'dwfb.config.js'], /^dwfb snapshot: The prompt snapshot file dwfb\.config\.js names the config file dwfb\.config\.js, which the write would replace\.\n$/],
+      [['snapshot', 'review.js', '--out', 'dwfb.config.js', '--check', '--json'], /^dwfb snapshot: The prompt snapshot file dwfb\.config\.js names the config file dwfb\.config\.js, which the write would replace\.\n$/],
+      [['snapshot', 'flow.js', '--out', 'maps/flow.flow-map.md'], /^dwfb snapshot: The prompt snapshot file maps\/flow\.flow-map\.md names the flow map file maps\/flow\.flow-map\.md of the script flow\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', '--out', 'maps/flow.flow-map.md'], /^dwfb snapshot: The prompt snapshot file maps\/flow\.flow-map\.md names the flow map file maps\/flow\.flow-map\.md of the script flow\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', '--out', 'prompts/flow.prompts.md'], /^dwfb snapshot: The prompt snapshot file prompts\/flow\.prompts\.md names the prompt snapshot file prompts\/flow\.prompts\.md of the script flow\.js, which the prompt snapshot would replace\.\n$/],
+      [['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'review.scenarios.js/deeper/review.md'], /^dwfb snapshot: The prompt snapshot path review\.scenarios\.js\/deeper\/review\.md is inside a file\.\n$/],
+      [['snapshot', 'review.js', ...REVIEW_SCENARIOS_ARGS, '--out', 'prompts'], /^dwfb snapshot: The prompt snapshot path prompts is not a file\.\n$/],
+    ];
+
+    for (const [args, message] of cases) {
+      const { status, stdout, stderr } = runCommand(args, folder);
+      assert.deepEqual({ status, stdout }, { status: 2, stdout: '' }, args.join(' '));
+      assert.match(stderr, message, args.join(' '));
+    }
+    assert.deepEqual(await Promise.all(keptFiles.map((name) => readFile(join(folder, name), 'utf8'))), keptBytes);
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['flow.prompts.md']);
+  });
+
+  it('refuses a config snapshot path that names a folder before it writes any prompt snapshot', async () => {
+    const folder = await writeSnapshotFolder();
+    await mkdir(join(folder, 'prompts', 'flow.prompts.md'), { recursive: true });
+
+    for (const args of [['snapshot'], ['snapshot', '--check'], ['snapshot', '--check', '--json']]) {
+      assert.deepEqual(runCommand(args, folder), { status: 2, stdout: '', stderr: 'dwfb snapshot: The prompt snapshot path prompts/flow.prompts.md is not a file.\n' }, args.join(' '));
+    }
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['flow.prompts.md']);
+  });
+
+  it('makes dwfb map refuse a flow map file that names the prompt snapshot file of a config workflow, and keeps its bytes', async () => {
+    const folder = await writeSnapshotFolder();
+    await mkdir(join(folder, 'prompts'));
+    await writeFile(join(folder, 'prompts', 'flow.prompts.md'), 'keep\n');
+    const cases = [
+      [['map', 'flow.js', '--out', 'prompts/flow.prompts.md'], 'dwfb map: The flow map file prompts/flow.prompts.md names the prompt snapshot file prompts/flow.prompts.md of the script flow.js, which the flow map would replace.\n'],
+      [['map', 'flow.js', '--out', 'prompts/review.prompts.md'], 'dwfb map: The flow map file prompts/review.prompts.md names the prompt snapshot file prompts/review.prompts.md of the script review.js, which the flow map would replace.\n'],
+    ];
+
+    for (const [args, stderr] of cases) assert.deepEqual(runCommand(args, folder), { status: 2, stdout: '', stderr }, args.join(' '));
+    assert.equal(await readFile(join(folder, 'prompts', 'flow.prompts.md'), 'utf8'), 'keep\n');
+    assert.deepEqual(await readdir(join(folder, 'prompts')), ['flow.prompts.md']);
+  });
+
+  it('names each prompt snapshot written before a failed write, and exits 2', async (context) => {
+    if (process.getuid?.() === 0) return context.skip('root writes every folder');
+    const folder = await writeSnapshotFolder();
+    await writeFile(join(folder, 'dwfb.config.js'), CONFIG.replace('prompts/flow.prompts.md', 'locked/flow.prompts.md'));
+    await mkdir(join(folder, 'locked'));
+    await writeFile(join(folder, 'locked', 'flow.prompts.md'), 'old\n');
+    // Windows refuses a rename over a read-only file, and POSIX refuses to create a file in a folder with no write permission.
+    const lockedPath = process.platform === 'win32' ? join(folder, 'locked', 'flow.prompts.md') : join(folder, 'locked');
+    const cause = process.platform === 'win32' ? '(rename EPERM)' : '(open EACCES)';
+    await chmod(lockedPath, process.platform === 'win32' ? 0o444 : 0o555);
+
+    try {
+      assert.deepEqual(runCommand(['snapshot'], folder), {
+        status: 2,
+        stdout: `Wrote prompts/review.prompts.md.\n${ROLE_LINES}`,
+        stderr: `dwfb snapshot: Could not read or write locked/flow.prompts.md ${cause}. Wrote prompts/review.prompts.md before the failure.\n`,
+      });
+      assert.equal(await readFile(join(folder, 'locked', 'flow.prompts.md'), 'utf8'), 'old\n');
+    } finally {
+      await chmod(lockedPath, process.platform === 'win32' ? 0o644 : 0o755);
+    }
+  });
+
+  it('names the workflow of a scenarios file that does not load, and writes nothing before a later workflow fails', async () => {
+    const folder = await writeSnapshotFolder();
+    await writeFile(join(folder, 'flow.scenarios.js'), 'export default [{ name: 1 }];\n');
+    const { status, stdout, stderr } = runCommand(['snapshot'], folder);
+
+    assert.deepEqual({ status, stdout }, { status: 2, stdout: '' });
+    assert.match(stderr, /^dwfb snapshot: The scenarios of the workflow whose entry is flow\.entry\.js cannot load\. /);
+    assert.equal((await readdir(folder)).includes('prompts'), false);
+  });
+
+  it('prints what the README section on dwfb snapshot shows, for the fixture script and scenarios file', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+    const section = sliceMarkdownSection(readme, README_SECTION_HEADING);
+    const exampleFiles = [...section.matchAll(README_FILE_PATTERN)].map((match) => match.groups);
+    const run = README_RUN_PATTERN.exec(section)?.groups;
+    const snapshotFile = README_SNAPSHOT_FILE_PATTERN.exec(section)?.groups;
+    const folder = await makeTemporaryFolder();
+
+    assert.deepEqual(exampleFiles.map(({ path }) => path), ['.claude/workflows/review.js', 'workflows/review/scenarios.js']);
+    assert.equal(exampleFiles[0].code, await readFile(join(PROMPT_SNAPSHOT_FIXTURES, 'review.js'), 'utf8'));
+    assert.equal(exampleFiles[1].code, await readFile(join(PROMPT_SNAPSHOT_FIXTURES, 'review.scenarios.js'), 'utf8'));
+    assert.ok(run !== undefined, 'The README section on dwfb snapshot shows no $ dwfb snapshot command');
+    assert.ok(snapshotFile !== undefined, 'The README section on dwfb snapshot shows no prompt snapshot file');
+    await writeFile(join(folder, 'package.json'), '{ "type": "module" }\n');
+    for (const { path, code } of exampleFiles) {
+      await mkdir(join(folder, dirname(path)), { recursive: true });
+      await writeFile(join(folder, path), code);
+    }
+    assert.deepEqual(runCommand(run.args.split(' '), folder), { status: 0, stdout: run.output, stderr: '' });
+    assert.ok((await readFile(join(folder, snapshotFile.path), 'utf8')).startsWith(snapshotFile.text), 'The README shows a start that the prompt snapshot file does not have');
+  });
+
+  it('prints its usage for snapshot --help with the three masks, and the main usage lists it', () => {
+    const { status, stdout } = runCommand(['snapshot', '--help']);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /^Usage: dwfb snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\] \[--check\] \[--config <path>\] \[--json\] \[--help\]\n[^]*\n {2}--out <file> {9}Write the prompt snapshot to this file\.\n/);
+    assert.match(stdout, /the item of the call's label becomes <item> where no\nletter or digit touches it, unless the later masks turn the item into one N, each UUID and each lowercase hex\nword of 8 or more characters becomes N, and each run of digits becomes N\./);
+    assert.match(runCommand(['--help']).stdout, /\n {2}snapshot \[<script>\] \[--scenarios <file>\] \[--out <file>\]\n {35}Run a workflow script against each scenario/);
   });
 });
 

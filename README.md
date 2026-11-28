@@ -17,6 +17,7 @@ is one long script, and two workflows cannot share code. This tool removes that 
 | `dwfb simulate` | Run a script against scripted agent returns, with no model call. | available |
 | `dwfb inspect` | Show what each agent of a simulation received and returned. | available |
 | `dwfb map` | Draw a Mermaid graph of every path that the scenarios of a script reach, with its loops and end states. | available |
+| `dwfb snapshot` | Write one copy of each distinct prompt that a script sends per role, so a diff shows which prompts an edit reached, and hold the largest prompt of each role to a prompt budget. | available |
 
 ## dwfb build
 
@@ -116,11 +117,15 @@ export default {
 
 `dwfb build` with no entry builds every workflow in order, and `dwfb build <entry>` builds each workflow whose entry is that file. A workflow with a finding does not stop the workflows after it. `banner: false` leaves out the banner line of one workflow, and `--no-banner` leaves it out of every workflow. `validate: false` skips the contract check in the build of one workflow, and `--no-validate` skips it for every workflow. `--config <path>` names another config file. `dwfb build <entry> --out <file>` reads no config file. A config file that does not load, has an unknown key, lists no workflow, gives a field of the wrong type or gives two workflows one `out` stops the command before it writes anything. Two `out` paths that differ only in letter case count as one `out`. Two `out` paths that name one file through a link count as one `out` among the workflows the command builds. A missing entry, or an `out` that the build refuses, such as a folder or a source file of a workflow the command builds, stops the command before it writes anything too.
 
-`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate), [`dwfb inspect`](#dwfb-inspect) and [`dwfb map`](#dwfb-map) run the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
+`scenarios` names the scenarios file that [`dwfb simulate`](#dwfb-simulate), [`dwfb inspect`](#dwfb-inspect), [`dwfb map`](#dwfb-map) and [`dwfb snapshot`](#dwfb-snapshot) run the workflow's `out` against, as in `{ entry: 'workflows/review/entry.js', out: '.claude/workflows/review.js', scenarios: 'workflows/review/scenarios.js' }`. An `out` that names the scenarios file of any workflow, in any letter case, or the scenarios file of a workflow the command builds through a link, stops the command before it writes anything.
 
-`map` names the flow map file that [`dwfb map`](#dwfb-map) writes for the workflow's `out`, as in `map: 'docs/review.flow-map.md'`. A workflow with `map` needs `scenarios`. A `map` that names an entry, an `out`, a scenarios file or another `map` of any workflow, in any letter case, stops every command that reads the config file.
+`map` names the flow map file that [`dwfb map`](#dwfb-map) writes for the workflow's `out`, as in `map: 'docs/review.flow-map.md'`. A workflow with `map` needs `scenarios`.
 
-An `out` or a `map` that names the config file, in any letter case, stops every command that reads the config file. One that names it through a link stops `dwfb build` and `dwfb map` before they write anything. So does a `--out` of `dwfb map` that names the config file the command read.
+`snapshot` names the prompt snapshot file that [`dwfb snapshot`](#dwfb-snapshot) writes for the workflow's `out`, as in `snapshot: 'docs/review.prompts.md'`. A workflow with `snapshot` needs `scenarios`. `promptBudgets` gives each role a [prompt budget](#prompt-budgets) of 1 or more characters, as in `promptBudgets: { review: 4000, verify: 2000 }`. A workflow with `promptBudgets` needs `snapshot`.
+
+A `map` or a `snapshot` that names an entry, an `out`, a scenarios file, another `map` or another `snapshot` of any workflow, its own workflow included, in any letter case, stops every command that reads the config file.
+
+An `out`, a `map` or a `snapshot` that names the config file, in any letter case, stops every command that reads the config file. One that names it through a link stops `dwfb build`, `dwfb map` and `dwfb snapshot` before they write anything. So does a `--out` of `dwfb map` or `dwfb snapshot` that names the config file the command read.
 
 ### Check
 
@@ -374,6 +379,136 @@ A group started inside a lane is drawn inside that lane, between the calls the l
 A script that returns an object whose `status` is a string of 1 or more characters ends in the end state of that status. A script that returns no status ends in the scenario's `endState`. Each run of digits in an end state is replaced by `N`, so `done (2 blocks)` and `done (3 blocks)` are one end state. A scenario whose `endState` differs from the status is unmapped. A script that throws ends at the `throw new <Name>(...)` statement at the newest place on the error's stack, which is where the error was created. An error created anywhere else leaves its scenario unmapped, such as a `TypeError` of a script bug or an error that one statement creates and another throws. So does a thrown value whose stack names no place in the script, such as an object of a class that does not extend `Error`, or an error whose `stack` the script read before it threw the error, such as in a catch block that logs `error.stack` and throws the error again. An error that a `throw new <Name>(...)` statement raises while it creates its error also ends at that statement, such as the error of a `<Name>` that is no constructor.
 
 A scenario whose simulation stops is unmapped too. For a script with an unmapped scenario, the command writes no file and prints one line per unmapped scenario. A script that breaks a rule of [`dwfb validate`](#dwfb-validate) is refused, and the command prints its findings before those lines. With a script and no `--scenarios`, the command finds the scenarios file as `dwfb simulate` does. With no `--out`, it writes the `map` of the config file's workflow whose `out` is the script, and it prints the flow map when `--scenarios` is given or no such `map` exists. With no script, it writes the `map` of each workflow of the config file that has one. `--config <path>` names another config file. The command writes no file whose bytes would not change, and it prints `Wrote <file>.` or `Unchanged <file>.` for each file. `--check` writes nothing and prints `Fresh` or `Stale` for each file. This way a commit hook can stop a flow map that no longer matches its script. `--json` prints the result as one JSON object, with the graph of each script and the findings of a refused script, and writes no file. With `--check`, the `check` key of each script is `fresh`, `stale` or `missing`. It is `null` with no `--check` and for a script with an unmapped scenario. This way a CI job can read the result of a check. The command exits 0 when every flow map is written, unchanged, printed or fresh, 1 for an unmapped scenario or a stale file and 2 for a usage error.
+
+## dwfb snapshot
+
+`dwfb snapshot` runs a workflow script against each scenario of a scenarios file, with no model call, and writes its prompt snapshot. A prompt snapshot is a Markdown document that holds one copy of each distinct prompt of each role. So a diff of it shows which prompts an edit reached.
+
+`.claude/workflows/review.js`:
+
+```js
+export const meta = {
+  name: 'review',
+  description: 'Reviews each unit, verifies the findings in rounds, then writes a summary.',
+};
+
+const FINDINGS_SCHEMA = { type: 'object', properties: { findings: { type: 'array' } }, required: ['findings'] };
+const VERDICT_SCHEMA = { type: 'object', properties: { pass: { type: 'boolean' } }, required: ['pass'] };
+const RETRY_SCHEMA = { type: 'object', properties: { pass: { type: 'boolean' }, reason: { type: 'string' } }, required: ['pass'] };
+
+const units = args?.units ?? ['core', 'tools'];
+const summaryLabel = args?.summaryLabel ?? 'summary';
+
+function hashText(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+await parallel(units.map((unit) => () =>
+  agent(`Review the unit ${unit}, whose id is ${hashText(unit)}. Report at most 3 findings.${args?.strict ? '\nReport each finding, also a low one.' : ''}`, { label: `review:${unit}`, schema: FINDINGS_SCHEMA })));
+
+let round = 1;
+let verdict = null;
+do {
+  const retryNote = round > 1 ? `\nRound ${round - 1} failed. Check each finding again.` : '';
+  verdict = await agent(`Verify the findings of ${units.length} units in round ${round}.${retryNote}`, { label: `verify r${round}`, schema: round > 1 ? RETRY_SCHEMA : VERDICT_SCHEMA });
+  round += 1;
+} while (verdict?.pass !== true && round <= 3);
+
+await agent('Write the summary between the fences.\n~~~~\nsummary\n~~~~', { label: summaryLabel });
+return { status: verdict?.pass === true ? 'done' : 'failed' };
+```
+
+`workflows/review/scenarios.js`:
+
+```js
+export default [
+  { name: 'passes at once', respond: { review: { findings: [] }, verify: { pass: true }, '': 'written' } },
+  { name: 'passes in round 2', respond: { review: { findings: [] }, verify: (call) => ({ pass: /r2$/.test(call.label) }), '': 'written' } },
+  { name: 'fails every round', respond: { review: { findings: [] }, verify: { pass: false }, '': 'written' } },
+  { name: 'strict review of three units', args: { strict: true, units: ['core', 'tools', 'docs'] }, respond: { review: { findings: [] }, verify: { pass: true }, '': 'written' } },
+];
+```
+
+```
+$ dwfb snapshot .claude/workflows/review.js --scenarios workflows/review/scenarios.js --out docs/review.prompts.md
+Wrote docs/review.prompts.md.
+  review: 108 characters
+  verify: 84 characters
+  summary: 55 characters
+```
+
+`docs/review.prompts.md`, which starts:
+
+````markdown
+# review prompt snapshot
+
+Generated by `dwfb snapshot`. Do not edit this file by hand.
+Each entry below is one distinct prompt that a role receives, with the scenario that first sent it.
+
+| Role | Variant | Schema | Characters | First scenario |
+|---|---|---|---|---|
+| review | 1 | 1 | 70 | passes at once |
+| verify | 1 | 1 | 42 | passes at once |
+| summary | 1 | 1 | 55 | passes at once |
+| verify | 2 | 2 | 84 | passes in round 2 |
+| review | 2 | 1 | 107 | strict review of three units |
+
+## review, variant 1, schema 1
+
+`review:core` in the scenario "passes at once"
+
+~~~~text
+Review the unit core, whose id is dd5e607e. Report at most 3 findings.
+~~~~
+
+~~~~json
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "findings"
+  ]
+}
+~~~~
+````
+
+The 20 calls of the four scenarios hold five variants. A variant is one distinct prompt of a role. Two prompts of one role are one variant when they have the same schema and are equal after three masks, applied in this order:
+
+1. The item of the label becomes `<item>` where no letter or digit touches it, such as `core` in `review:core`. Only a call whose role is a role of the script has an item. An item that the next two masks turn into one `N`, such as `2` in `fix:2`, is left to those masks, so the `2` of `round 2` becomes `N` in each call.
+2. Each UUID and each lowercase hex word of 8 or more characters becomes `N`, such as the id `dd5e607e`.
+3. Each run of digits becomes `N`, such as the `1` of `round 1`.
+
+So the reviews of `core` and `tools` are one variant, and the strict review is a second. The role of a call is the longest [role](#script-rules) of the script that its label starts with. A label that starts with no role of the script is its own role, and a call with no label has the role `(no label)`. The table lists each variant in the order its first call was made. Each section holds the label, the prompt and the schema of that first call. A schema number counts the distinct schemas of a role.
+
+A count of characters is the `length` of the prompt, which counts UTF-16 code units. After the file line, the command prints one line per role with the characters of its largest prompt among every call of the role.
+
+### Prompt budgets
+
+A prompt budget is the most characters that the largest prompt of a role may hold. The `promptBudgets` of a [config file](#config-file) workflow give each role its prompt budget. Each role line then ends with `, prompt budget <prompt budget>`, and the command prints one line per problem after the role lines:
+
+- `<script> <role>: the largest prompt has <characters> characters, <difference> over its prompt budget of <prompt budget>.`
+- `<script> <role>: the largest prompt has <characters> characters and the role has no prompt budget, so give it one in promptBudgets.`
+- `<script> <role>: promptBudgets names this role, and no scenario makes a call of it.`
+
+A script with a problem still writes its file. A named scenarios file reads no config file, so its script has no prompt budgets.
+
+### Output
+
+The command finds the scenarios file and the prompt snapshot file as `dwfb map` finds the scenarios file and the flow map file, with the workflow key `snapshot` in place of `map`. It writes no file whose bytes would not change, and it prints `Wrote <file>.` or `Unchanged <file>.` for each file. `--check` writes nothing and prints `Fresh <file>.` or `Stale <file>: <reason>.` for each file. A prompt snapshot that goes to stdout is the entire output for its script, with no role line.
+
+A scenario whose simulation stops is unread, and so is each scenario of a script that breaks a rule of [`dwfb validate`](#dwfb-validate). For each unread scenario, the command prints `<script> <scenario>: not read, since <reason>.` after the findings of a refused script. A script whose scenarios make no `agent()` call gets the line `<script>: no prompt snapshot, since no scenario makes an agent() call.` In both cases the command writes no file for that script.
+
+A prompt snapshot file that names a script, a scenarios file, a source, the config file, a flow map file or the prompt snapshot file of another workflow stops the command before it writes anything, as `dwfb map` stops for a flow map file.
+
+The command exits 0 when every prompt snapshot is written, unchanged, printed or fresh and no script has a prompt budget problem. It exits 1 for an unread scenario, a script with no call, a stale or missing file with `--check` and a prompt budget problem, and 2 for a usage error.
+
+`--json` prints `{ ok, runtime, snapshots }` and writes no file. Each element of `snapshots` holds `script`, `file` and `check` as `dwfb map --json` gives them, then `ok`, `runtime`, `variants`, `roles`, `callCount`, `digest`, `promptBudgetProblems`, `unread` and the `findings` of a refused script. `digest` is the SHA-256 of the label, the prompt and the schema of every call, in scenario file order and then in call order. Two builds of one script have one digest only when every call gets the same prompt and schema. This way a CI job can confirm that a refactor of a script changed no prompt.
 
 ## License
 

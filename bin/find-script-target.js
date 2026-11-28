@@ -15,12 +15,15 @@ const SCENARIOS_FILE_RECOVERY = 'so name the scenarios file with --scenarios <fi
  *   a scenarios file that `--scenarios` names.
  * @property {string | null} map The map of that config workflow, or null for a workflow with no map and for a
  *   scenarios file that `--scenarios` names.
+ * @property {string | null} snapshot The snapshot of that config workflow, or null as for `map`.
+ * @property {Record<string, number> | null} promptBudgets The promptBudgets of that config workflow, or null as
+ *   for `map`.
  */
 
 /**
- * Finds the scenarios file of a script that `dwfb simulate`, `dwfb inspect` or `dwfb map` names: the file
- * `--scenarios` names, else the scenarios of the first workflow of the config file whose out is the script, as
- * locate() takes the first.
+ * Finds the scenarios file of a script that `dwfb simulate`, `dwfb inspect`, `dwfb map` or `dwfb snapshot`
+ * names: the file `--scenarios` names, else the scenarios of the first workflow of the config file whose out is
+ * the script, as locate() takes the first.
  * @param {string} script
  * @param {string | undefined} scenariosFile The path `--scenarios` names.
  * @param {string | undefined} configPath The path `--config` names.
@@ -30,7 +33,7 @@ export async function findScriptTarget(script, scenariosFile, configPath) {
   let commandConfig = null;
   let scriptWorkflow;
 
-  if (scenariosFile !== undefined) return { script, scenariosFile, entry: null, map: null };
+  if (scenariosFile !== undefined) return { script, scenariosFile, entry: null, map: null, snapshot: null, promptBudgets: null };
   commandConfig = await loadCommandConfig(configPath);
   if (commandConfig === null) throw new UsageError(`No config file ${CONFIG_FILES_TEXT} exists here, ${SCENARIOS_FILE_RECOVERY}`);
   [scriptWorkflow] = await findConfigWorkflows(commandConfig.config.workflows, 'out', script);
@@ -51,5 +54,7 @@ export function formatConfigTarget(workflow) {
     scenariosFile: formatDisplayPath(/** @type {string} */ (workflow.scenarios)),
     entry: formatDisplayPath(workflow.entry),
     map: workflow.map === null ? null : formatDisplayPath(workflow.map),
+    snapshot: workflow.snapshot === null ? null : formatDisplayPath(workflow.snapshot),
+    promptBudgets: workflow.promptBudgets,
   };
 }

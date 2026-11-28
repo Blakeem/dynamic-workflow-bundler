@@ -10,7 +10,7 @@ import { UsageError } from './usage-error.js';
  * @param {string} pathLabel The path as the user gave it, after a noun, such as `The out path dist/a.js`.
  */
 export async function checkOutPath(outFile, pathLabel) {
-  // The user wrote the path, as the out of a build or a flow map file of dwfb map. These stat checks hold on every platform.
+  // The user wrote the path, as the out of a build or the document file of dwfb map or dwfb snapshot. These stat checks hold on every platform.
   let folder = dirname(outFile);
   const outStats = await statIfExists(outFile);
   let folderStats = null;
