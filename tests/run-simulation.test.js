@@ -25,6 +25,8 @@ const LEFT_OUT_KEYS = [
 const MAXIMUM_LEFT_OUT_KEYS = 16;
 // The names this project's context defines, apart from the ones a Node context already has.
 const STAND_IN_NAMES = ['__wRg$loop', '__wRg$resolve', 'agent', 'args', 'budget', 'clearTimeout', 'console', 'log', 'parallel', 'phase', 'pipeline', 'setTimeout', 'then', 'workflow'];
+// A short limit ends a sync loop fast and gives the code before the first await room under the load of the full suite.
+const SHORT_TIME_LIMIT_MS = 50;
 
 /**
  * @param {string} name
@@ -479,9 +481,9 @@ describe('time', () => {
 
 describe('the time limit', () => {
   it(`stops code before the first await past the limit, with the runtime's message for ${SCRIPT_TIME_LIMIT_MS} ms, and no code after it`, async () => {
-    const limit = 5;
-    const stopped = await simulateBody('while (true) {}', {}, limit);
-    const awaited = await simulateBody('await null\nlet total = 0\nfor (let index = 0; index < 1e8; index += 1) total += index\nreturn total > 0', {}, limit);
+    const stopped = await simulateBody('while (true) {}', {}, SHORT_TIME_LIMIT_MS);
+    // The loop takes about 350 ms, so it runs past the limit and shows that code after the first await is not stopped.
+    const awaited = await simulateBody('await null\nlet total = 0\nfor (let index = 0; index < 5e8; index += 1) total += index\nreturn total > 0', {}, SHORT_TIME_LIMIT_MS);
 
     assert.deepEqual(stopped.end, { kind: 'threw', name: 'Error', message: `Script execution timed out after ${SCRIPT_TIME_LIMIT_MS}ms`, frames: [] });
     assert.deepEqual(awaited.end, { kind: 'returned', value: true });
@@ -644,7 +646,7 @@ describe('a stop', () => {
   });
 
   it('ends the simulation as stopped when code after the stop runs past the time limit', async () => {
-    const { end } = await simulateBody("agent('a')\nwhile (true) {}", { answerCall: () => { throw new SimulationStop(); } }, 5);
+    const { end } = await simulateBody("agent('a')\nwhile (true) {}", { answerCall: () => { throw new SimulationStop(); } }, SHORT_TIME_LIMIT_MS);
 
     assert.deepEqual(end, { kind: 'stopped' });
   });
